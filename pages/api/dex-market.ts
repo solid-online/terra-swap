@@ -17,7 +17,10 @@ import { kv as vercelKv } from '@vercel/kv'
 import { DEX_FACTORY, marketPrices } from 'lib/dex'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
-const KEY = `atrium:dex:market:v1:${DEX_FACTORY}`
+// v2 (2026-09-09): v1 holds prices computed before usdPrices learned to prefer
+// the deepest route, so its ROAR is 91% low. Bumping the key retires those
+// values outright rather than waiting for them to age out.
+const KEY = `atrium:dex:market:v2:${DEX_FACTORY}`
 const FRESH_MS = 300_000
 
 export interface MarketResponse { px: Record<string, number>; at: number }
