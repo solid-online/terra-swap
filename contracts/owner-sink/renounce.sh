@@ -19,7 +19,7 @@ CHAIN=phoenix-1
 FACTORY=terra1gx7n4yrfc2req7tdt9vpj66kr0cssnqkjsr80xmfacjpdlw6mzlqvlp3xd
 EXPECTED_OWNER=terra1ef4g5xlfzts7a9c0p22q7wuc6mwjzzekd6afsv
 WASM=${WASM:-$(dirname "$0")/artifacts/owner_sink.wasm}
-# The owner key lives in the encrypted `file` keyring (that is how the factory was instantiated).
+# The owner key is expected in the encrypted `file` keyring (override with KEYRING=os|test).
 KEYRING=${KEYRING:-file}
 KR=(--keyring-backend "$KEYRING")
 # `auto` for the big steps; the admin-clearing steps set a fixed number (the

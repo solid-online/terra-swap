@@ -32,11 +32,10 @@ cat artifacts/checksums.txt
 
 ## One-shot alternative: `renounce.sh`
 
-On the validator server (terrad + the `atrium-admin` key in the `file`
-keyring, which is the key that instantiated the factory):
+On a machine with terrad and the factory owner's key in its `file` keyring:
 
 ```bash
-cd /root/terra-swap-renounce && ./renounce.sh atrium-admin
+./renounce.sh <owner-key-name>
 ```
 
 It asks for the keyring passphrase once, uses the local node, and runs
