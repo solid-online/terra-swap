@@ -24,8 +24,10 @@ repository is one way to look at them.
 - **Non-custodial.** The wallet signs, the chain executes. Nothing is held.
 - **Terra Predict** (`/predict`) is a parimutuel YES/NO market settled by a
   time-weighted price read from an Astroport pair, by whoever shows up to read
-  it. Contract source: `contracts/` in the sibling repository; the interface
-  shows "not live yet" until a contract address is configured.
+  it. Contract source, tests and reproducible build: `contracts/predict`.
+  The interface shows "not live yet" until a contract address is configured.
+- **`contracts/owner-sink`** is the 60-line contract the factory's ownership
+  was handed to, with the script and the read-only verifier used to do it.
 
 ## Run it
 

@@ -1,0 +1,1 @@
+b62e749bd03846cf6abf48ebc7bd33413a0647e5ee557a65de9abef2661a6ab1  owner_sink.wasm
