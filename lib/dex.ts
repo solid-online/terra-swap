@@ -220,6 +220,8 @@ export interface PoolView extends PairInfo {
   marketPrice?: number
   /** pool price / market price. 4 = token[1] is 4× too cheap here. */
   deviation?: number
+  /** USD standing on each side, at the market reference. */
+  sideUsd?: [number, number]
 }
 
 /**
@@ -262,6 +264,28 @@ export async function marketPrices(): Promise<Record<string, number>> {
     marketCache = { at: Date.now(), px }
     return px
   } catch { return marketCache?.px ?? {} }
+}
+
+/**
+ * Value both sides of every pool at the market reference, and let that
+ * reference set TVL as well.
+ *
+ * The number the API ships is derived from our own pools alone, which means it
+ * hangs off our SOLID/USDC pool — roughly $2 deep — and reads about 15% high.
+ * Astroport's pools are thousands of times deeper, so once they arrive they
+ * win. Pools with a side we cannot price keep whatever the API said.
+ */
+export function annotateValues(pools: PoolView[], px: Record<string, number>): PoolView[] {
+  for (const p of pools) {
+    const [a, b] = p.tokens
+    const pa = px[assetId(a.info)], pb = px[assetId(b.info)]
+    if (!(pa > 0) || !(pb > 0)) continue
+    const va = (Number(p.reserves[0]) / 10 ** a.decimals) * pa
+    const vb = (Number(p.reserves[1]) / 10 ** b.decimals) * pb
+    p.sideUsd = [va, vb]
+    if (!p.empty) p.tvlUsd = va + vb
+  }
+  return pools
 }
 
 /** Fill marketPrice + deviation on our pools from the market map. */

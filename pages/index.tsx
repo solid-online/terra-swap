@@ -18,7 +18,7 @@ import { SPACE, RADIUS, TEXT } from 'components/tokens'
 import { isCrystalHolder } from 'lib/holders'
 import {
   KNOWN_TOKENS, assetId, sameAsset, tokenFor, toMicro, fromMicro,
-  simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket,
+  simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
 } from 'lib/dex'
 import { arbPlans, fmtAmount, fmtUsd, totalUsd, type ArbPlan } from 'lib/arb'
@@ -1544,7 +1544,22 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
                 return <span title='price impact of a $100 swap, from the reserves'> · <span style={{ color: c }}>$100 moves it ~{imp.toFixed(imp >= 10 ? 0 : 1)}%</span></span>
               })()}
               {p.tvlUsd != null && ' · '}
-              {fromMicro(p.reserves[0], t0.decimals)} {t0.label} · {fromMicro(p.reserves[1], t1.decimals)} {t1.label}
+              {/* Dollars and share per side read at a glance; the token counts
+                  are still there on hover for anyone who wants them. A pool at
+                  market sits near 50/50, so a skew is the imbalance itself. */}
+              {p.sideUsd
+                ? (() => {
+                    const [va, vb] = p.sideUsd
+                    const tot = va + vb
+                    const pct = (v: number) => (tot > 0 ? Math.round((v / tot) * 100) : 50)
+                    const usd = (v: number) => (v >= 10 ? `$${Math.round(v).toLocaleString('en-US')}` : `$${v.toFixed(v >= 1 ? 1 : 2)}`)
+                    return (
+                      <span title={`${fromMicro(p.reserves[0], t0.decimals)} ${t0.label} · ${fromMicro(p.reserves[1], t1.decimals)} ${t1.label}`}>
+                        {pct(va)}% {usd(va)} {t0.label} · {pct(vb)}% {usd(vb)} {t1.label}
+                      </span>
+                    )
+                  })()
+                : <>{fromMicro(p.reserves[0], t0.decimals)} {t0.label} · {fromMicro(p.reserves[1], t1.decimals)} {t1.label}</>}
             </span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: SPACE['2'] }}>
           <button type='button' style={{ ...ghostBtn, color: mode === 'add' ? C.goldLit : C.textSecondary, borderColor: mode === 'add' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'add' ? 'none' : 'add')}>Add</button>
@@ -2485,7 +2500,7 @@ function SwapPageInner() {
       if (!alive || !j?.px || Object.keys(j.px).length < 2) return
       marketRef.current = j.px
       setMarketPx(j.px)
-      setData(d => d ? { ...d, pools: annotateMarket(d.pools.map(p => ({ ...p })), j.px!) } : d)
+      setData(d => d ? { ...d, pools: annotateValues(annotateMarket(d.pools.map(p => ({ ...p })), j.px!), j.px!) } : d)
     }).catch(() => {})
     pull(); const iv = setInterval(pull, 300_000)
     return () => { alive = false; clearInterval(iv) }
@@ -2495,6 +2510,14 @@ function SwapPageInner() {
      these — the gaps are worth a few dollars, which is under the cost of
      running a bot and squarely in reach of a person who is already looking. */
   const arbs = useMemo(() => (data?.live ? arbPlans(data.pools, marketPx) : []), [data, marketPx])
+
+  /* SOLID pairs first, then deepest first. That is the book people came for,
+     and depth is the only thing that decides whether a trade is worth making.
+     Empty pools sink to the bottom without being asked to. */
+  const sortedPools = useMemo(() => {
+    const solidFirst = (p: PoolView) => (p.tokens.some(t => t.key === 'SOLID') ? 0 : 1)
+    return [...(data?.pools ?? [])].sort((a, b) => solidFirst(a) - solidFirst(b) || (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))
+  }, [data])
   /** "Take it" hands the swap panel a pair and the size that closes the gap. */
   const [preset, setPreset] = useState<SwapPreset | null>(null)
   const takeArb = useCallback((plan: ArbPlan) => {
@@ -2514,7 +2537,7 @@ function SwapPageInner() {
         fetch('/api/dex', { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
         fetch('/api/dex-leaderboard', { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
       ])
-      if (d) { if (marketRef.current) annotateMarket(d.pools, marketRef.current); setData(d) }
+      if (d) { if (marketRef.current) { annotateMarket(d.pools, marketRef.current); annotateValues(d.pools, marketRef.current) } setData(d) }
       if (b) setBoard(b)
       setSyncedAt(Date.now())
     } finally {
@@ -2662,7 +2685,7 @@ function SwapPageInner() {
               {tab === 'pools' && (
                 data.pools.length === 0
                   ? <Empty title='No pools yet' body='Open the first one. One signature, gas only. Your name goes to the top of the board and everyone sees it was you.' />
-                  : <div style={{ display: 'grid', gap: SPACE['3'] }}>{data.pools.map(p => <div key={p.contract_addr} id={`pool-${p.contract_addr}`}><PoolRow p={p} onDone={refresh} onParty={setParty} act={board?.poolActivity?.[p.contract_addr]} height={data.height} firstHand={board?.firstHands?.[p.contract_addr]} crystal={crystal} badge={(() => {
+                  : <div style={{ display: 'grid', gap: SPACE['3'] }}>{sortedPools.map(p => <div key={p.contract_addr} id={`pool-${p.contract_addr}`}><PoolRow p={p} onDone={refresh} onParty={setParty} act={board?.poolActivity?.[p.contract_addr]} height={data.height} firstHand={board?.firstHands?.[p.contract_addr]} crystal={crystal} badge={(() => {
                     const deepest = data.pools.reduce((b, q) => ((q.tvlUsd ?? 0) > (b?.tvlUsd ?? 0) ? q : b), null as PoolView | null)
                     const counts = board?.poolActivity ?? {}
                     const hottest = data.pools.reduce((b, q) => ((counts[q.contract_addr]?.count ?? 0) > (b ? (counts[b.contract_addr]?.count ?? 0) : 0) ? q : b), null as PoolView | null)
