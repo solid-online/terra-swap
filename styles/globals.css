@@ -1,0 +1,20 @@
+:root {
+  color-scheme: dark;
+  --text-secondary: #d6cfbd;
+  --gradient-brand: linear-gradient(135deg, #caa022 0%, #ffd83d 100%);
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #05070f;
+  color: #f4f1e8;
+  font-family: 'Montserrat', 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+a { color: inherit; }
+button, input, select { font-family: inherit; }
+input[type='number'] { -moz-appearance: textfield; appearance: textfield; }
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }

@@ -1,0 +1,42 @@
+{
+  "name": "terra-swap",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Terra Swap — an open interface for permissionless Astroport pools on Terra, plus Terra Predict. No fee, no keys, host it anywhere.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@chain-registry/types": "0.17.1",
+    "@cosmjs/cosmwasm-stargate": "0.36.2",
+    "@cosmjs/encoding": "0.36.2",
+    "@cosmjs/proto-signing": "0.36.2",
+    "@cosmjs/stargate": "0.36.2",
+    "@cosmos-kit/core": "^2.9.2",
+    "@cosmos-kit/keplr-extension": "^2.14.0",
+    "@cosmos-kit/keplr-mobile": "^2.14.1",
+    "@cosmos-kit/leap-extension": "^2.14.1",
+    "@cosmos-kit/react": "2.10.9",
+    "@interchain-ui/react": "^1.26.3",
+    "@vercel/kv": "^3.0.0",
+    "axios": "^1.20.0",
+    "chain-registry": "1.59.4",
+    "cosmjs-types": "0.10.1",
+    "next": "13.5.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-query": "^3.39.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "eslint": "^8.51.0",
+    "eslint-config-next": "^13.5.4",
+    "typescript": "^5.2.2"
+  }
+}
