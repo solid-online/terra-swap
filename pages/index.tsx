@@ -21,6 +21,7 @@ import {
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket,
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
 } from 'lib/dex'
+import { arbPlans, fmtAmount, fmtUsd, totalUsd, type ArbPlan } from 'lib/arb'
 import type { DexResponse } from 'pages/api/dex'
 import type { BoardResponse, PoolActivity } from 'pages/api/dex-leaderboard'
 import type { PricesResponse } from 'pages/api/dex-prices'
@@ -1071,8 +1072,12 @@ function PriceChart({ pool, from, to, compact }: { pool: PoolView; from: KnownTo
 
 // ─── Swap tab ───────────────────────────────────────────────────
 
-function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone }: {
+/** A pair and a size handed to the swap panel from somewhere else on the page. */
+export interface SwapPreset { fromId: string; toId: string; amount: string; n: number }
+
+function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, onTakeArb }: {
   pools: PoolView[]; crystal: boolean; feeBps: number; poolFeeBps: number; onDone: () => void
+  arbs?: ArbPlan[]; preset?: SwapPreset | null; onTakeArb?: (p: ArbPlan) => void
 }) {
   const me = useMyAddress()
   const swap = useSwap()
@@ -1120,6 +1125,21 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone }: {
   useEffect(() => {
     if (!toOptions.find(t => assetId(t.info) === toId)) setToId(toOptions[0] ? assetId(toOptions[0].info) : '')
   }, [toOptions, toId])
+
+  /* A preset arrives as a pair plus a size. The pay side and the amount land
+     immediately; the receive side has to wait one pass for `toOptions` to be
+     rebuilt around the new pay side, so it is parked here until it fits. */
+  const presetSeen = useRef(0)
+  const [wantTo, setWantTo] = useState('')
+  useEffect(() => {
+    if (!preset || preset.n === presetSeen.current) return
+    presetSeen.current = preset.n
+    setFromId(preset.fromId); setAmount(preset.amount); setWantTo(preset.toId)
+  }, [preset])
+  useEffect(() => {
+    if (wantTo && toOptions.some(t => assetId(t.info) === wantTo)) { setToId(wantTo); setWantTo('') }
+  }, [wantTo, toOptions])
+
   const to = toOptions.find(t => assetId(t.info) === toId) ?? null
   const pool = useMemo(() =>
     from && to ? tradable.find(p =>
@@ -1219,13 +1239,39 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone }: {
     <Card>
       <div className='terra-panel-head' style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACE['3'] }}>
         <span className='terra-panel-title'><Section title='Swap' /></span>
-        <span style={{
-          fontSize: TEXT.xs.size, padding: '3px 9px', borderRadius: 999,
-          color: crystal ? C.success : C.textMuted,
-          border: `1px solid ${crystal ? C.success : C.divider}`,
-        }}>
-          {feeBps === 0 ? `No protocol fee · pool fee ${poolFeeBps / 100}% to LPs` : crystal ? '✦ Crystal · 0 protocol fee' : `Protocol fee ${feeBps / 100}% · Crystal holders 0`}
-        </span>
+        {/* The fee line is the resting state. When a pool has drifted off the
+            reference, that is the more useful thing to say in the same space. */}
+        {(() => {
+          const best = arbs?.[0]
+          if (!best) return (
+            <span style={{
+              fontSize: TEXT.xs.size, padding: '3px 9px', borderRadius: 999,
+              color: crystal ? C.success : C.textMuted,
+              border: `1px solid ${crystal ? C.success : C.divider}`,
+            }}>
+              {feeBps === 0 ? `No protocol fee · pool fee ${poolFeeBps / 100}% to LPs` : crystal ? '✦ Crystal · 0 protocol fee' : `Protocol fee ${feeBps / 100}% · Crystal holders 0`}
+            </span>
+          )
+          const total = totalUsd(arbs!)
+          return (
+            <button
+              type='button'
+              className='terra-arb-pill'
+              onClick={() => onTakeArb?.(best)}
+              title={`${best.pool.label} prices ${best.outToken.label} ${best.off.toFixed(2)}× away from the Astroport reference. ${fmtAmount(best.inAmount)} ${best.inToken.label} in is the size that closes it. Anyone can take it, and it moves on every trade.`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+                fontSize: TEXT.xs.size, padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
+                fontFamily: 'inherit', fontWeight: 700, color: C.goldLit,
+                background: C.goldSoft, border: `1px solid ${C.goldCore}`,
+              }}
+            >
+              <span className='terra-pulse' />
+              {fmtUsd(total)} on the table{' '}
+              <span style={{ color: C.textMuted, fontWeight: 500 }}>· {best.pool.label} {best.off.toFixed(1)}× off →</span>
+            </button>
+          )
+        })()}
       </div>
 
       {pool && from && to && <PriceChart pool={pool} from={from} to={to} compact />}
@@ -1389,7 +1435,7 @@ function Spark({ pair }: { pair: string }) {
   )
 }
 
-function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, spark }: { p: PoolView; onDone: () => void; onParty: (x: Party) => void; act?: PoolActivity; height?: number; firstHand?: { address: string; height: number; txhash?: string }; crystal: boolean; badge?: 'deepest' | 'hottest'; spark?: boolean }) {
+function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, spark, arb, onTake }: { p: PoolView; onDone: () => void; onParty: (x: Party) => void; act?: PoolActivity; height?: number; firstHand?: { address: string; height: number; txhash?: string }; crystal: boolean; badge?: 'deepest' | 'hottest'; spark?: boolean; arb?: ArbPlan; onTake?: (a: ArbPlan) => void }) {
   const me = useMyAddress()
   const provide = useProvideLiquidity()
   const withdraw = useWithdrawLiquidity()
@@ -1505,6 +1551,28 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
           {Number(lp) > 0 && <button type='button' style={{ ...ghostBtn, color: mode === 'remove' ? C.goldLit : C.textSecondary, borderColor: mode === 'remove' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'remove' ? 'none' : 'remove')}>Remove</button>}
         </div>
       </div>
+      {/* The gap, sized. Without the number, "1.9× off market" is a warning
+          nobody can act on; with it, it is a trade with a known size. */}
+      {arb && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: SPACE['2'], flexWrap: 'wrap',
+          margin: `${SPACE['2']}px 0 0`, padding: '7px 10px', borderRadius: 10,
+          background: C.goldSoft, border: `1px solid ${C.dividerStrong}`,
+          fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.5,
+        }}>
+          <span style={{ flex: 1, minWidth: 190 }}>
+            <b style={{ color: C.goldLit }}>{fmtAmount(arb.inAmount)} {arb.inToken.label}</b>
+            <span style={{ color: C.textWhisper }}> ({fmtUsd(arb.inUsd)})</span> closes the gap and returns{' '}
+            <b style={{ color: C.goldLit }}>{fmtAmount(arb.outAmount)} {arb.outToken.label}</b>
+            <span style={{ color: C.textWhisper }}> — about </span>
+            <b style={{ color: C.success }}>{fmtUsd(arb.profitUsd)}</b>
+            <span style={{ color: C.textWhisper }}> more than you put in, at reference prices. First come.</span>
+          </span>
+          <button type='button' style={{ ...ghostBtn, color: C.goldLit, borderColor: C.goldCore, flex: 'none' }} onClick={() => onTake?.(arb)}>
+            Take it
+          </button>
+        </div>
+      )}
       {spark && <Spark pair={p.contract_addr} />}
       {firstHand && (
         <div style={{ ...rowStyle, marginTop: 4 }}>
@@ -2410,15 +2478,34 @@ function SwapPageInner() {
 
   // Market reference arrives on the side; the page never waits for it.
   const marketRef = useRef<Record<string, number> | null>(null)
+  const [marketPx, setMarketPx] = useState<Record<string, number> | null>(null)
   useEffect(() => {
     let alive = true
     const pull = () => fetch('/api/dex-market').then(r => r.ok ? r.json() : null).then((j: { px?: Record<string, number> } | null) => {
       if (!alive || !j?.px || Object.keys(j.px).length < 2) return
       marketRef.current = j.px
+      setMarketPx(j.px)
       setData(d => d ? { ...d, pools: annotateMarket(d.pools.map(p => ({ ...p })), j.px!) } : d)
     }).catch(() => {})
     pull(); const iv = setInterval(pull, 300_000)
     return () => { alive = false; clearInterval(iv) }
+  }, [])
+
+  /* Pools that have drifted off the reference, sized and priced. Bots skip
+     these — the gaps are worth a few dollars, which is under the cost of
+     running a bot and squarely in reach of a person who is already looking. */
+  const arbs = useMemo(() => (data?.live ? arbPlans(data.pools, marketPx) : []), [data, marketPx])
+  /** "Take it" hands the swap panel a pair and the size that closes the gap. */
+  const [preset, setPreset] = useState<SwapPreset | null>(null)
+  const takeArb = useCallback((plan: ArbPlan) => {
+    setPreset({
+      fromId: assetId(plan.inToken.info),
+      toId: assetId(plan.outToken.info),
+      amount: fromMicro(plan.inMicro, plan.inToken.decimals, 6).replace(/,/g, ''),
+      n: Date.now(),
+    })
+    setTab('swap')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
   const load = useCallback(async () => {
     setSyncing(true)
@@ -2571,7 +2658,7 @@ function SwapPageInner() {
                 {/* Terra Predict lives next door, same domain. */}
                 <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, marginLeft: 'auto', whiteSpace: 'nowrap' }}>Predict ↗</Link>
               </div>
-              {tab === 'swap' && <SwapPanel pools={data.pools} crystal={crystal} feeBps={data.feeBps} poolFeeBps={data.poolFeeBps} onDone={refresh} />}
+              {tab === 'swap' && <SwapPanel pools={data.pools} crystal={crystal} feeBps={data.feeBps} poolFeeBps={data.poolFeeBps} onDone={refresh} arbs={arbs} preset={preset} onTakeArb={takeArb} />}
               {tab === 'pools' && (
                 data.pools.length === 0
                   ? <Empty title='No pools yet' body='Open the first one. One signature, gas only. Your name goes to the top of the board and everyone sees it was you.' />
@@ -2580,7 +2667,7 @@ function SwapPageInner() {
                     const counts = board?.poolActivity ?? {}
                     const hottest = data.pools.reduce((b, q) => ((counts[q.contract_addr]?.count ?? 0) > (b ? (counts[b.contract_addr]?.count ?? 0) : 0) ? q : b), null as PoolView | null)
                     return deepest?.contract_addr === p.contract_addr && (p.tvlUsd ?? 0) > 0 ? 'deepest' : hottest?.contract_addr === p.contract_addr && (counts[p.contract_addr]?.count ?? 0) >= 3 ? 'hottest' : undefined
-                  })()} spark={data.pools.filter(q => (q.tvlUsd ?? 0) > 0).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0)).slice(0, 4).some(q => q.contract_addr === p.contract_addr)} /></div>)}</div>
+                  })()} spark={data.pools.filter(q => (q.tvlUsd ?? 0) > 0).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0)).slice(0, 4).some(q => q.contract_addr === p.contract_addr)} arb={arbs.find(a => a.pool.contract_addr === p.contract_addr)} onTake={takeArb} /></div>)}</div>
               )}
               {tab === 'create' && <CreatePanel pools={data.pools} onDone={refresh} onCreated={() => setTab('pools')} onParty={setParty} />}
               {tab === 'board' && <Leaderboard board={board} me={me} onGoSwap={() => setTab('swap')} height={data.height} crystal={crystal} spotlight={spotlight} />}
@@ -2885,6 +2972,8 @@ function SwapPageInner() {
         /* ── Small screens: the swap must fit without scrolling. Every rule here removes something that is not the swap. ── */
         @media (max-width: 640px) {
           .terra-chainpill, .terra-strike, .terra-kbd { display: none !important; }
+          /* The pill keeps the money and the pulse; the pair name is in the row below anyway. */
+          .terra-arb-pill span:last-child { display: none; }
           .terra-article { padding-top: 0.7rem !important; }
           .terra-hero { margin-top: 0 !important; gap: 8px !important; }
           /* Small enough that the wordmark and the wallet pill share one line on a 375px phone. */
