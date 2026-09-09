@@ -253,7 +253,12 @@ export async function marketPrices(): Promise<Record<string, number>> {
       const cur = deepest.get(key)
       if (!cur || Number(v.reserves[0]) > Number(cur.reserves[0])) deepest.set(key, v)
     }
-    const px = usdPrices(Array.from(deepest.values()))
+    // A $250 floor on any single hop. Astroport keeps abandoned pools alive
+    // forever, and one of them held $0.0008 of SOLID against 5,594 ROAR. Until
+    // 2026-09-09 that pool set the reference price for ROAR, 91% below the real
+    // ROAR/LUNA market, which in turn made a perfectly healthy pool of ours read
+    // "1.9× off market". Depth decides the route now, and dust cannot quote.
+    const px = usdPrices(Array.from(deepest.values()), 250)
     marketCache = { at: Date.now(), px }
     return px
   } catch { return marketCache?.px ?? {} }
@@ -299,20 +304,34 @@ export function toPoolView(pair: PairInfo, pool: PoolState | null): PoolView {
  * gets a price via CAPA/LUNA once LUNA is known). Tokens that can't be reached
  * from USDC stay unpriced, and their pools simply show no TVL.
  */
-export function usdPrices(pools: PoolView[]): Record<string, number> {
+export function usdPrices(pools: PoolView[], minHopUsd = 0): Record<string, number> {
   const px: Record<string, number> = { [NOBLE_USDC]: 1 }
-  // Up to 3 passes lets a price hop USDC → LUNA → CAPA.
-  for (let pass = 0; pass < 3; pass++) {
+  // Four passes reaches anything hanging off USDC → LUNA → …
+  for (let pass = 0; pass < 4; pass++) {
+    // Gather every route to a still-unpriced token, then take the deepest one.
+    // Iteration order used to decide this, which let an abandoned pool set a
+    // price: see the note on the $250 floor in marketPrices.
+    const best = new Map<string, { depth: number; price: number }>()
     for (const p of pools) {
       if (p.empty) continue
       const [a, b] = p.tokens
       // display units, so decimals never skew the hop
       const ra = Number(p.reserves[0]) / 10 ** a.decimals, rb = Number(p.reserves[1]) / 10 ** b.decimals
       const ida = assetId(a.info), idb = assetId(b.info)
-      // price of X = (reserveKnown / reserveX) * priceKnown
-      if (px[ida] != null && px[idb] == null && rb > 0) px[idb] = (ra / rb) * px[ida]
-      else if (px[idb] != null && px[ida] == null && ra > 0) px[ida] = (rb / ra) * px[idb]
+      const hop = (known: string, unknown: string, rKnown: number, rUnknown: number) => {
+        if (px[known] == null || px[unknown] != null) return
+        if (!(rKnown > 0) || !(rUnknown > 0)) return
+        const depth = rKnown * px[known]   // dollars standing behind this quote
+        if (depth < minHopUsd) return
+        const cur = best.get(unknown)
+        // price of X = (reserveKnown / reserveX) * priceKnown
+        if (!cur || depth > cur.depth) best.set(unknown, { depth, price: (rKnown / rUnknown) * px[known] })
+      }
+      hop(ida, idb, ra, rb)
+      hop(idb, ida, rb, ra)
     }
+    if (best.size === 0) break
+    best.forEach((v, id) => { px[id] = v.price })
   }
   return px
 }
