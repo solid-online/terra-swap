@@ -11,8 +11,8 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { kv as vercelKv } from '@vercel/kv'
 import { isDexLive, queryPairs, DEX_FACTORY } from 'lib/dex'
 import {
-  scanContract, mergeLedger, getLedger, computeLeaderboard,
-  BADGES, POINTS, FIRST_HAND_POINTS, CRYSTAL_MULTIPLIER, EARLY_CUTOFF_HEIGHT, type LeaderRow, type DexEvent,
+  scanContract, mergeLedger, getLedger, computeLeaderboard, computeFlows,
+  BADGES, POINTS, FIRST_HAND_POINTS, CRYSTAL_MULTIPLIER, EARLY_CUTOFF_HEIGHT, type LeaderRow, type DexEvent, type LpFlow,
 } from 'lib/dex-ledger'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
@@ -37,19 +37,21 @@ export interface BoardResponse {
   firstHands: Record<string, { address: string; height: number; txhash: string }>
   /** most moves in the last ~24h of blocks */
   lotd: { address: string; moves: number } | null
+  /** net liquidity per wallet per pool, keyed `${address}|${contract}` */
+  flows: Record<string, LpFlow>
 }
 
-type Snap = { at: number; rows: LeaderRow[]; total: number; recent: DexEvent[]; poolActivity: Record<string, PoolActivity>; firstHands: Record<string, { address: string; height: number; txhash: string }>; lotd: { address: string; moves: number } | null }
+type Snap = { at: number; rows: LeaderRow[]; total: number; recent: DexEvent[]; poolActivity: Record<string, PoolActivity>; firstHands: Record<string, { address: string; height: number; txhash: string }>; lotd: { address: string; moves: number } | null; flows: Record<string, LpFlow> }
 let memCache: Snap | null = null
 
 export default async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>) {
   res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120')
   const rules = { points: POINTS, firstHand: FIRST_HAND_POINTS, crystalMultiplier: CRYSTAL_MULTIPLIER, badges: BADGES, cutoffHeight: EARLY_CUTOFF_HEIGHT }
-  if (!isDexLive()) return res.status(200).json({ live: false, rows: [], totalEvents: 0, scannedAt: 0, rules, recent: [], poolActivity: {}, firstHands: {}, lotd: null })
+  if (!isDexLive()) return res.status(200).json({ live: false, rows: [], totalEvents: 0, scannedAt: 0, rules, recent: [], poolActivity: {}, firstHands: {}, lotd: null, flows: {} })
 
   const cached = HAS_KV ? await vercelKv.get<Snap>(CACHE_KEY) : memCache
   if (cached && Date.now() - cached.at < SCAN_EVERY_MS) {
-    return res.status(200).json({ live: true, rows: cached.rows, totalEvents: cached.total, scannedAt: cached.at, rules, recent: cached.recent ?? [], poolActivity: cached.poolActivity ?? {}, firstHands: cached.firstHands ?? {}, lotd: cached.lotd ?? null })
+    return res.status(200).json({ live: true, rows: cached.rows, totalEvents: cached.total, scannedAt: cached.at, rules, recent: cached.recent ?? [], poolActivity: cached.poolActivity ?? {}, firstHands: cached.firstHands ?? {}, lotd: cached.lotd ?? null, flows: cached.flows ?? {} })
   }
 
   const pairs = await queryPairs()
@@ -57,8 +59,8 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
   // stale board is fine; merging an empty allowlist would delete the ledger.
   if (pairs.length === 0) {
     const last = cached ?? memCache
-    if (last) return res.status(200).json({ live: true, rows: last.rows, totalEvents: last.total, scannedAt: last.at, rules, recent: last.recent ?? [], poolActivity: last.poolActivity ?? {}, firstHands: last.firstHands ?? {}, lotd: last.lotd ?? null })
-    return res.status(200).json({ live: true, rows: [], totalEvents: 0, scannedAt: 0, rules, recent: [], poolActivity: {}, firstHands: {}, lotd: null })
+    if (last) return res.status(200).json({ live: true, rows: last.rows, totalEvents: last.total, scannedAt: last.at, rules, recent: last.recent ?? [], poolActivity: last.poolActivity ?? {}, firstHands: last.firstHands ?? {}, lotd: last.lotd ?? null, flows: last.flows ?? {} })
+    return res.status(200).json({ live: true, rows: [], totalEvents: 0, scannedAt: 0, rules, recent: [], poolActivity: {}, firstHands: {}, lotd: null, flows: {} })
   }
 
   // Scanning is capped because every pool costs a query. The allowlist is not:
@@ -95,8 +97,9 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
   for (const e of events) if (e.height >= top - 14_400) per.set(e.address, (per.get(e.address) ?? 0) + 1)
   const lotdEntry = Array.from(per.entries()).sort((a, b) => b[1] - a[1])[0]
   const lotd = lotdEntry ? { address: lotdEntry[0], moves: lotdEntry[1] } : null
-  const snap: Snap = { at: Date.now(), rows, total, recent, poolActivity, firstHands, lotd }
+  const flows = computeFlows(ledger)
+  const snap: Snap = { at: Date.now(), rows, total, recent, poolActivity, firstHands, lotd, flows }
   if (HAS_KV) await vercelKv.set(CACHE_KEY, snap, { ex: 300 }); else memCache = snap
 
-  return res.status(200).json({ live: true, rows, totalEvents: total, scannedAt: snap.at, rules, recent, poolActivity, firstHands, lotd })
+  return res.status(200).json({ live: true, rows, totalEvents: total, scannedAt: snap.at, rules, recent, poolActivity, firstHands, lotd, flows })
 }

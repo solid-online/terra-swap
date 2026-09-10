@@ -31,6 +31,29 @@ export interface DexEvent {
   contract: string
   height: number
   txhash: string
+  /**
+   * Liquidity moved by this event, smallest units, keyed by asset id — the
+   * same key `assetId()` produces, so a denom for natives and the contract
+   * address for cw20s. Present on provide_liquidity and withdraw_liquidity.
+   * Added 2026-09-10; events stored before then have none and are upgraded
+   * in place the next time the scan sees them.
+   */
+  assets?: Record<string, string>
+  /** LP minted (provide) or burned (withdraw), smallest units. */
+  share?: string
+}
+
+/**
+ * Astroport writes moved liquidity as `"173501000000terra1lxx…, 1000000ibc/0EF5…"`
+ * — amount glued to denom, comma separated. Split it back apart.
+ */
+export function parseAssets(raw: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const part of raw.split(',')) {
+    const m = /^\s*(\d+)(\S+)\s*$/.exec(part)
+    if (m) out[m[2]] = m[1]
+  }
+  return out
 }
 
 export interface DexLedger {
@@ -120,6 +143,41 @@ export async function getLedger(): Promise<DexLedger> {
  * scrubbed from what is already stored, so a stray scan can never seed the
  * board with another DEX's history again.
  */
+/** What a wallet has actually put into a pool: provides minus withdraws. */
+export interface LpFlow {
+  /** asset id → net smallest units, signed, as a string */
+  net: Record<string, string>
+  provides: number
+  withdraws: number
+}
+
+/**
+ * Net liquidity per wallet per pool, keyed `${address}|${contract}`.
+ *
+ * Deliberately kept in tokens rather than dollars. Converting a deposit made
+ * last Tuesday into USD needs last Tuesday's price, which we do not have, and
+ * inventing one would turn an honest number into a flattering one. Tokens in
+ * versus tokens now is the comparison that shows impermanent loss for what it
+ * is anyway.
+ */
+export function computeFlows(ledger: DexLedger): Record<string, LpFlow> {
+  const out: Record<string, LpFlow> = {}
+  for (const e of Object.values(ledger.events)) {
+    if (!e.assets) continue
+    if (e.action !== 'provide_liquidity' && e.action !== 'withdraw_liquidity') continue
+    const key = `${e.address}|${e.contract}`
+    const f = out[key] ?? (out[key] = { net: {}, provides: 0, withdraws: 0 })
+    const add = e.action === 'provide_liquidity'
+    if (add) f.provides++; else f.withdraws++
+    for (const id of Object.keys(e.assets)) {
+      const cur = BigInt(f.net[id] ?? '0')
+      const amt = BigInt(e.assets[id])
+      f.net[id] = (add ? cur + amt : cur - amt).toString()
+    }
+  }
+  return out
+}
+
 export async function mergeLedger(incoming: DexEvent[], allowed: Set<string>): Promise<{ ledger: DexLedger; added: number; removed: number }> {
   const ledger = await getLedger()
   let added = 0, removed = 0
@@ -134,7 +192,11 @@ export async function mergeLedger(incoming: DexEvent[], allowed: Set<string>): P
   }
   for (const e of incoming) {
     if (!allowed.has(e.contract)) continue
-    if (!ledger.events[e.id]) { ledger.events[e.id] = e; added++ }
+    const cur = ledger.events[e.id]
+    if (!cur) { ledger.events[e.id] = e; added++ }
+    // Backfill: events recorded before amounts were captured get upgraded the
+    // next time the scan reads the same transaction. No key bump, no data lost.
+    else if (!cur.assets && e.assets) { ledger.events[e.id] = e; added++ }
   }
   if (added > 0 || removed > 0) { ledger.updatedAt = Date.now(); await kvSet(LEDGER_KEY, ledger) }
   return { ledger, added, removed }
@@ -173,12 +235,24 @@ export async function scanContract(contract: string): Promise<DexEvent[]> {
       if (ev.type !== 'wasm') continue
       const addrs = ev.attributes.filter(a => a.key === '_contract_address').map(a => a.value)
       if (!addrs.includes(contract)) continue
+      // First value wins: one wasm event carries one contract's action plus
+      // the attributes describing it.
+      const at: Record<string, string> = {}
+      for (const a of ev.attributes) if (!(a.key in at)) at[a.key] = a.value
       for (const a of ev.attributes) {
         if (a.key !== 'action') continue
         const act = a.value as DexAction
         if (!(act in POINTS) || seen.has(act)) continue
         seen.add(act)
-        out.push({ id: `${r.txhash}#${act}`, address: sender, action: act, contract, height: Number(r.height), txhash: r.txhash })
+        const e: DexEvent = { id: `${r.txhash}#${act}`, address: sender, action: act, contract, height: Number(r.height), txhash: r.txhash }
+        // provide: `assets` + `share`. withdraw: `refund_assets` + `withdrawn_share`.
+        const moved = act === 'withdraw_liquidity' ? at.refund_assets : act === 'provide_liquidity' ? at.assets : undefined
+        if (moved) {
+          e.assets = parseAssets(moved)
+          const share = act === 'withdraw_liquidity' ? at.withdrawn_share : at.share
+          if (share) e.share = share
+        }
+        out.push(e)
       }
     }
   }

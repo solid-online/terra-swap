@@ -25,6 +25,7 @@ import {
 import { arbPlans, fmtAmount, fmtUsd, totalUsd, type ArbPlan } from 'lib/arb'
 import type { DexResponse } from 'pages/api/dex'
 import type { BoardResponse, PoolActivity } from 'pages/api/dex-leaderboard'
+import type { LpFlow } from 'lib/dex-ledger'
 import type { PricesResponse } from 'pages/api/dex-prices'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
 import { useSwap, useProvideLiquidity, useWithdrawLiquidity, useCreatePair, useZap } from 'components/transactions/useDex'
@@ -1437,7 +1438,7 @@ function Spark({ pair }: { pair: string }) {
   )
 }
 
-function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, spark, arb, onTake, holders }: { p: PoolView; onDone: () => void; onParty: (x: Party) => void; act?: PoolActivity; height?: number; firstHand?: { address: string; height: number; txhash?: string }; crystal: boolean; badge?: 'deepest' | 'hottest'; spark?: boolean; arb?: ArbPlan; onTake?: (a: ArbPlan) => void; holders?: PoolHolders }) {
+function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, spark, arb, onTake, holders, flow }: { p: PoolView; onDone: () => void; onParty: (x: Party) => void; act?: PoolActivity; height?: number; firstHand?: { address: string; height: number; txhash?: string }; crystal: boolean; badge?: 'deepest' | 'hottest'; spark?: boolean; arb?: ArbPlan; onTake?: (a: ArbPlan) => void; holders?: PoolHolders; flow?: LpFlow }) {
   const me = useMyAddress()
   const provide = useProvideLiquidity()
   const withdraw = useWithdrawLiquidity()
@@ -1625,6 +1626,34 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
             <span>Your LP · <b style={{ color: C.goldLit }}>{pos.sharePct.toFixed(pos.sharePct >= 10 ? 0 : 1)}%</b> of the pool</span>
             <span style={{ color: C.textSecondary }}>
               {fmtAmount(pos.amounts[0])} {t0.label} + {fmtAmount(pos.amounts[1])} {t1.label}{usd ? ` · ${usd}` : ''}
+            </span>
+          </div>
+        )
+      })()}
+
+      {/* What you put in, against what you hold now. In tokens, not dollars:
+          pricing a deposit made last Tuesday needs last Tuesday's price, and
+          inventing one turns an honest number into a flattering one. Two sides
+          moving opposite ways is impermanent loss, shown plainly. */}
+      {(() => {
+        const pos = lpPosition(p, lp)
+        if (!pos || !flow) return null
+        const put = [
+          Number(flow.net[assetId(t0.info)] ?? '0') / 10 ** t0.decimals,
+          Number(flow.net[assetId(t1.info)] ?? '0') / 10 ** t1.decimals,
+        ]
+        if (!(put[0] > 0) && !(put[1] > 0)) return null
+        const delta = (i: 0 | 1) => (put[i] > 0 ? (pos.amounts[i] / put[i] - 1) * 100 : null)
+        const tag = (v: number | null) => v == null ? null : (
+          <span style={{ color: v >= 0 ? C.success : C.korea }}>{v >= 0 ? '+' : ''}{v.toFixed(1)}%</span>
+        )
+        const [d0, d1] = [delta(0), delta(1)]
+        return (
+          <div style={{ ...rowStyle, marginTop: 2 }}>
+            <span>Put in{flow.provides > 1 ? ` · ${flow.provides} deposits` : ''}{flow.withdraws > 0 ? `, ${flow.withdraws} out` : ''}</span>
+            <span style={{ color: C.textSecondary }}>
+              {fmtAmount(put[0])} {t0.label} + {fmtAmount(put[1])} {t1.label}
+              {(d0 != null || d1 != null) && <> · {tag(d0)} / {tag(d1)}</>}
             </span>
           </div>
         )
@@ -2744,7 +2773,7 @@ function SwapPageInner() {
                     const counts = board?.poolActivity ?? {}
                     const hottest = data.pools.reduce((b, q) => ((counts[q.contract_addr]?.count ?? 0) > (b ? (counts[b.contract_addr]?.count ?? 0) : 0) ? q : b), null as PoolView | null)
                     return deepest?.contract_addr === p.contract_addr && (p.tvlUsd ?? 0) > 0 ? 'deepest' : hottest?.contract_addr === p.contract_addr && (counts[p.contract_addr]?.count ?? 0) >= 3 ? 'hottest' : undefined
-                  })()} spark={data.pools.filter(q => (q.tvlUsd ?? 0) > 0).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0)).slice(0, 4).some(q => q.contract_addr === p.contract_addr)} arb={arbs.find(a => a.pool.contract_addr === p.contract_addr)} onTake={takeArb} holders={holders[p.contract_addr]} /></div>)}
+                  })()} spark={data.pools.filter(q => (q.tvlUsd ?? 0) > 0).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0)).slice(0, 4).some(q => q.contract_addr === p.contract_addr)} arb={arbs.find(a => a.pool.contract_addr === p.contract_addr)} onTake={takeArb} holders={holders[p.contract_addr]} flow={me ? board?.flows?.[`${me}|${p.contract_addr}`] : undefined} /></div>)}
                     {dustCount > 0 && (
                       <button type='button' style={{ ...ghostBtn, justifySelf: 'center' }} onClick={() => setShowDust(s => !s)}>
                         {showDust ? 'Hide the empty ones' : `Show ${dustCount} pool${dustCount === 1 ? '' : 's'} under $${DUST_USD}`}
