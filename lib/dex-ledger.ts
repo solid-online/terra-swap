@@ -123,8 +123,14 @@ export async function getLedger(): Promise<DexLedger> {
 export async function mergeLedger(incoming: DexEvent[], allowed: Set<string>): Promise<{ ledger: DexLedger; added: number; removed: number }> {
   const ledger = await getLedger()
   let added = 0, removed = 0
-  for (const id of Object.keys(ledger.events)) {
-    if (!allowed.has(ledger.events[id].contract)) { delete ledger.events[id]; removed++ }
+  // Scrubbing is for events from contracts that are not ours. It is only safe
+  // when the caller genuinely knows every pool: an allowlist holding just the
+  // factory means the pair query failed, and deleting a ledger on the back of
+  // a timeout is not a trade worth making.
+  if (allowed.size > 1) {
+    for (const id of Object.keys(ledger.events)) {
+      if (!allowed.has(ledger.events[id].contract)) { delete ledger.events[id]; removed++ }
+    }
   }
   for (const e of incoming) {
     if (!allowed.has(e.contract)) continue

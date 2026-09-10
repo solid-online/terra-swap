@@ -19,7 +19,7 @@ const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 const CACHE_KEY = `atrium:dex:board:v2:${DEX_FACTORY}`
 const SCAN_EVERY_MS = 60_000
 /** Safety cap so a factory with many pools cannot fan out unboundedly. */
-const MAX_POOLS_SCANNED = 12
+const MAX_POOLS_SCANNED = 40
 
 export interface PoolActivity { last: number; count: number }
 
@@ -52,10 +52,24 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
     return res.status(200).json({ live: true, rows: cached.rows, totalEvents: cached.total, scannedAt: cached.at, rules, recent: cached.recent ?? [], poolActivity: cached.poolActivity ?? {}, firstHands: cached.firstHands ?? {}, lotd: cached.lotd ?? null })
   }
 
-  const pairs = (await queryPairs()).slice(0, MAX_POOLS_SCANNED)
+  const pairs = await queryPairs()
+  // No pools means the query failed, not that the factory is empty. Serving a
+  // stale board is fine; merging an empty allowlist would delete the ledger.
+  if (pairs.length === 0) {
+    const last = cached ?? memCache
+    if (last) return res.status(200).json({ live: true, rows: last.rows, totalEvents: last.total, scannedAt: last.at, rules, recent: last.recent ?? [], poolActivity: last.poolActivity ?? {}, firstHands: last.firstHands ?? {}, lotd: last.lotd ?? null })
+    return res.status(200).json({ live: true, rows: [], totalEvents: 0, scannedAt: 0, rules, recent: [], poolActivity: {}, firstHands: {}, lotd: null })
+  }
+
+  // Scanning is capped because every pool costs a query. The allowlist is not:
+  // it decides which events are allowed to keep existing, so a pool that did
+  // not fit this round's scan budget still owns its history. Until 2026-09-10
+  // these were the same truncated list, which deleted the ledger of every pool
+  // past the twelfth — points on the board fell as new pools were opened.
+  const toScan = pairs.slice(0, MAX_POOLS_SCANNED)
   const scans = await Promise.all([
     scanContract(DEX_FACTORY),
-    ...pairs.map(p => scanContract(p.contract_addr)),
+    ...toScan.map(p => scanContract(p.contract_addr)),
   ])
   const allowed = new Set<string>([DEX_FACTORY, ...pairs.map(p => p.contract_addr)])
   const { ledger } = await mergeLedger(scans.flat(), allowed)

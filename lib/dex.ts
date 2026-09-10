@@ -166,10 +166,28 @@ export interface Simulation {
 }
 
 /** Every pair our factory has created. */
+/**
+ * Every pair the factory knows, paged.
+ *
+ * This used to ask for 30 and stop. Past 30 pools the tail simply vanished,
+ * and because the leaderboard treats "pools I can see" as the list of pools
+ * whose history is allowed to exist, an unseen pool had its events deleted.
+ * Nothing downstream may assume this list is complete unless it is.
+ */
 export async function queryPairs(): Promise<PairInfo[]> {
   if (!isDexLive()) return []
-  const r = await smart<{ pairs: PairInfo[] }>(DEX_FACTORY, { pairs: { limit: 30 } })
-  return r?.pairs ?? []
+  const out: PairInfo[] = []
+  let startAfter: AssetInfo[] | undefined
+  for (let page = 0; page < 20; page++) {
+    const r = await smart<{ pairs: PairInfo[] }>(DEX_FACTORY, {
+      pairs: { limit: 30, ...(startAfter ? { start_after: startAfter } : {}) },
+    })
+    const got = r?.pairs ?? []
+    out.push(...got)
+    if (got.length < 30) break
+    startAfter = got[got.length - 1].asset_infos
+  }
+  return out
 }
 
 export async function queryPool(pair: string): Promise<PoolState | null> {
