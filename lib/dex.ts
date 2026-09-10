@@ -131,7 +131,7 @@ export function fromMicro(micro: string | number, decimals = 6, maxFrac = 4): st
 
 // ─── Queries (LCD, no signer) ───────────────────────────────────
 
-async function smart<T>(contract: string, msg: object): Promise<T | null> {
+export async function smart<T>(contract: string, msg: object): Promise<T | null> {
   try {
     const q = typeof window !== 'undefined'
       ? btoa(JSON.stringify(msg))
@@ -376,6 +376,53 @@ export function usdPrices(pools: PoolView[], minHopUsd = 0): Record<string, numb
     best.forEach((v, id) => { px[id] = v.price })
   }
   return px
+}
+
+/** What an LP balance actually is: a share of the pool, in tokens and dollars. */
+export interface LpPosition {
+  /** 0..100 */
+  sharePct: number
+  /** display units, in pool order */
+  amounts: [number, number]
+  usd: number | null
+}
+
+/**
+ * An LP token balance on its own tells you nothing — "374,165.738" is not an
+ * amount of anything a person holds. It is a claim on a fraction of the pool,
+ * so say which fraction, of what, and what that is worth.
+ */
+export function lpPosition(pool: PoolView, lpMicro: string): LpPosition | null {
+  const total = Number(pool.totalShare), mine = Number(lpMicro)
+  if (!(total > 0) || !(mine > 0)) return null
+  const share = Math.min(1, mine / total)
+  return {
+    sharePct: share * 100,
+    amounts: [
+      (Number(pool.reserves[0]) / 10 ** pool.tokens[0].decimals) * share,
+      (Number(pool.reserves[1]) / 10 ** pool.tokens[1].decimals) * share,
+    ],
+    usd: pool.tvlUsd != null ? pool.tvlUsd * share : null,
+  }
+}
+
+/**
+ * How easily this pool can walk away. `toHalf` is the number of wallets that
+ * together hold more than half the LP: 1 means one signature empties most of
+ * it. Astroport locks a tiny minimum on first deposit, which shows up as a
+ * dust holder and is ignored here.
+ */
+export function lpConcentration(total: string, holders: { address: string; amount: string }[]): {
+  count: number; topPct: number; toHalf: number
+} | null {
+  const t = Number(total)
+  if (!(t > 0) || holders.length === 0) return null
+  const real = holders.filter(h => Number(h.amount) / t > 0.0001)
+  if (real.length === 0) return null
+  const sorted = [...real].sort((a, b) => Number(b.amount) - Number(a.amount))
+  let acc = 0, toHalf = 0
+  for (const h of sorted) { acc += Number(h.amount); toHalf++; if (acc / t > 0.5) break }
+  return { count: real.length, topPct: (Number(sorted[0].amount) / t) * 100, toHalf }
 }
 
 /** Fill tvlUsd on each pool from a price map (both sides must be priceable). */

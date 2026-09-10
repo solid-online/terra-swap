@@ -19,12 +19,14 @@ import { isCrystalHolder } from 'lib/holders'
 import {
   KNOWN_TOKENS, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
+  lpPosition, lpConcentration,
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
 } from 'lib/dex'
 import { arbPlans, fmtAmount, fmtUsd, totalUsd, type ArbPlan } from 'lib/arb'
 import type { DexResponse } from 'pages/api/dex'
 import type { BoardResponse, PoolActivity } from 'pages/api/dex-leaderboard'
 import type { PricesResponse } from 'pages/api/dex-prices'
+import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
 import { useSwap, useProvideLiquidity, useWithdrawLiquidity, useCreatePair, useZap } from 'components/transactions/useDex'
 import { humanizeTxError } from 'lib/errors'
 
@@ -1435,7 +1437,7 @@ function Spark({ pair }: { pair: string }) {
   )
 }
 
-function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, spark, arb, onTake }: { p: PoolView; onDone: () => void; onParty: (x: Party) => void; act?: PoolActivity; height?: number; firstHand?: { address: string; height: number; txhash?: string }; crystal: boolean; badge?: 'deepest' | 'hottest'; spark?: boolean; arb?: ArbPlan; onTake?: (a: ArbPlan) => void }) {
+function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, spark, arb, onTake, holders }: { p: PoolView; onDone: () => void; onParty: (x: Party) => void; act?: PoolActivity; height?: number; firstHand?: { address: string; height: number; txhash?: string }; crystal: boolean; badge?: 'deepest' | 'hottest'; spark?: boolean; arb?: ArbPlan; onTake?: (a: ArbPlan) => void; holders?: PoolHolders }) {
   const me = useMyAddress()
   const provide = useProvideLiquidity()
   const withdraw = useWithdrawLiquidity()
@@ -1595,7 +1597,38 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
           <span style={{ color: C.textSecondary, display: 'inline-flex', gap: 6, alignItems: 'baseline' }}><WalletName address={firstHand.address} head={8} tail={4} /><span style={{ color: C.textWhisper }}>#{firstHand.height.toLocaleString('en-US')}</span></span>
         </div>
       )}
-      {Number(lp) > 0 && <div style={{ ...rowStyle, marginTop: 4 }}><span>Your LP</span><span>{fromMicro(lp, 6)}</span></div>}
+      {/* How easily this pool can walk away. Depth tells you what a trade costs
+          today; this tells you whether the depth will still be here tomorrow. */}
+      {(() => {
+        const c = holders ? lpConcentration(holders.total, holders.holders) : null
+        if (!c) return null
+        const alone = c.toHalf === 1
+        return (
+          <div style={{ ...rowStyle, marginTop: 4 }}>
+            <span>Liquidity held by</span>
+            <span style={{ color: alone ? C.emberLit : C.textSecondary }}>
+              {c.count} {c.count === 1 ? 'wallet' : 'wallets'} · largest {c.topPct.toFixed(0)}%
+              {alone ? ' · one signature empties it' : ` · ${c.toHalf} hold the majority`}
+            </span>
+          </div>
+        )
+      })()}
+
+      {/* An LP balance is a claim on a fraction of the pool. Say which fraction,
+          of what, and what it is worth. The raw token count said none of that. */}
+      {(() => {
+        const pos = lpPosition(p, lp)
+        if (!pos) return null
+        const usd = pos.usd == null ? null : pos.usd >= 10 ? `$${Math.round(pos.usd).toLocaleString('en-US')}` : `$${pos.usd.toFixed(2)}`
+        return (
+          <div style={{ ...rowStyle, marginTop: 2 }}>
+            <span>Your LP · <b style={{ color: C.goldLit }}>{pos.sharePct.toFixed(pos.sharePct >= 10 ? 0 : 1)}%</b> of the pool</span>
+            <span style={{ color: C.textSecondary }}>
+              {fmtAmount(pos.amounts[0])} {t0.label} + {fmtAmount(pos.amounts[1])} {t1.label}{usd ? ` · ${usd}` : ''}
+            </span>
+          </div>
+        )
+      })()}
 
       {mode === 'add' && (
         <div style={{ marginTop: SPACE['3'], display: 'grid', gap: SPACE['2'] }}>
@@ -2518,6 +2551,27 @@ function SwapPageInner() {
     const solidFirst = (p: PoolView) => (p.tokens.some(t => t.key === 'SOLID') ? 0 : 1)
     return [...(data?.pools ?? [])].sort((a, b) => solidFirst(a) - solidFirst(b) || (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))
   }, [data])
+
+  /* Anyone can open a pool, so most of them are empty shells someone made to
+     see what happened. Showing fifteen of those buries the five that matter. */
+  const DUST_USD = 10
+  const [showDust, setShowDust] = useState(false)
+  const visiblePools = useMemo(
+    () => (showDust ? sortedPools : sortedPools.filter(p => (p.tvlUsd ?? 0) >= DUST_USD)),
+    [sortedPools, showDust],
+  )
+  const dustCount = sortedPools.length - sortedPools.filter(p => (p.tvlUsd ?? 0) >= DUST_USD).length
+
+  /** Who holds each pool's LP. Arrives on the side; the page never waits for it. */
+  const [holders, setHolders] = useState<Record<string, PoolHolders>>({})
+  useEffect(() => {
+    let alive = true
+    const pull = () => fetch('/api/dex-holders').then(r => (r.ok ? r.json() : null)).then((j: HoldersResponse | null) => {
+      if (alive && j?.pools) setHolders(j.pools)
+    }).catch(() => {})
+    pull(); const iv = setInterval(pull, 120_000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [])
   /** "Take it" hands the swap panel a pair and the size that closes the gap. */
   const [preset, setPreset] = useState<SwapPreset | null>(null)
   const takeArb = useCallback((plan: ArbPlan) => {
@@ -2685,12 +2739,18 @@ function SwapPageInner() {
               {tab === 'pools' && (
                 data.pools.length === 0
                   ? <Empty title='No pools yet' body='Open the first one. One signature, gas only. Your name goes to the top of the board and everyone sees it was you.' />
-                  : <div style={{ display: 'grid', gap: SPACE['3'] }}>{sortedPools.map(p => <div key={p.contract_addr} id={`pool-${p.contract_addr}`}><PoolRow p={p} onDone={refresh} onParty={setParty} act={board?.poolActivity?.[p.contract_addr]} height={data.height} firstHand={board?.firstHands?.[p.contract_addr]} crystal={crystal} badge={(() => {
+                  : <div style={{ display: 'grid', gap: SPACE['3'] }}>{visiblePools.map(p => <div key={p.contract_addr} id={`pool-${p.contract_addr}`}><PoolRow p={p} onDone={refresh} onParty={setParty} act={board?.poolActivity?.[p.contract_addr]} height={data.height} firstHand={board?.firstHands?.[p.contract_addr]} crystal={crystal} badge={(() => {
                     const deepest = data.pools.reduce((b, q) => ((q.tvlUsd ?? 0) > (b?.tvlUsd ?? 0) ? q : b), null as PoolView | null)
                     const counts = board?.poolActivity ?? {}
                     const hottest = data.pools.reduce((b, q) => ((counts[q.contract_addr]?.count ?? 0) > (b ? (counts[b.contract_addr]?.count ?? 0) : 0) ? q : b), null as PoolView | null)
                     return deepest?.contract_addr === p.contract_addr && (p.tvlUsd ?? 0) > 0 ? 'deepest' : hottest?.contract_addr === p.contract_addr && (counts[p.contract_addr]?.count ?? 0) >= 3 ? 'hottest' : undefined
-                  })()} spark={data.pools.filter(q => (q.tvlUsd ?? 0) > 0).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0)).slice(0, 4).some(q => q.contract_addr === p.contract_addr)} arb={arbs.find(a => a.pool.contract_addr === p.contract_addr)} onTake={takeArb} /></div>)}</div>
+                  })()} spark={data.pools.filter(q => (q.tvlUsd ?? 0) > 0).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0)).slice(0, 4).some(q => q.contract_addr === p.contract_addr)} arb={arbs.find(a => a.pool.contract_addr === p.contract_addr)} onTake={takeArb} holders={holders[p.contract_addr]} /></div>)}
+                    {dustCount > 0 && (
+                      <button type='button' style={{ ...ghostBtn, justifySelf: 'center' }} onClick={() => setShowDust(s => !s)}>
+                        {showDust ? 'Hide the empty ones' : `Show ${dustCount} pool${dustCount === 1 ? '' : 's'} under $${DUST_USD}`}
+                      </button>
+                    )}
+                    </div>
               )}
               {tab === 'create' && <CreatePanel pools={data.pools} onDone={refresh} onCreated={() => setTab('pools')} onParty={setParty} />}
               {tab === 'board' && <Leaderboard board={board} me={me} onGoSwap={() => setTab('swap')} height={data.height} crystal={crystal} spotlight={spotlight} />}
