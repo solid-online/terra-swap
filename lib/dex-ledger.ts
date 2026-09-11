@@ -72,15 +72,20 @@ export const POINTS: Record<DexAction, number> = {
   withdraw_liquidity: 0,
 }
 /**
- * Points per dollar of liquidity you still have in a pool, counted live from
- * LP balances rather than from deposit events.
+ * Points for liquidity you still hold, counted live from LP balances rather
+ * than from deposit events.
  *
  * Depositing used to pay 20 and withdrawing nothing, so a deposit and an
  * immediate withdrawal kept the points forever — the board rewarded liquidity
- * that was not there. Standing is the opposite: it is recomputed every scan,
- * so it arrives when you deposit and is gone the moment you pull out.
+ * that was not there. Standing is the opposite: recomputed every scan, so it
+ * arrives when you deposit and leaves with you when you pull out.
+ *
+ * Square-rooted on purpose. Straight dollars would make this a rich list and
+ * nothing else, and a board only motivates anyone while the top of it is
+ * reachable. Doubling your deposit is worth about 1.4×, not 2×.
  */
-export const LIQUIDITY_POINTS_PER_USD = 5
+export const LIQUIDITY_POINTS_COEFF = 100
+export const liquidityPoints = (usd: number) => (usd > 0 ? Math.round(LIQUIDITY_POINTS_COEFF * Math.sqrt(usd)) : 0)
 /** Earliest provide_liquidity in a pair. Computed, not an action of its own. */
 export const FIRST_HAND_POINTS = 100
 /** Crystal holders: every point counts one and a half times. */
@@ -320,7 +325,7 @@ export async function computeLeaderboard(ledger: DexLedger, liquidityUsd: Record
     const r = rows.get(addr)
     if (!r || !(usd > 0)) continue
     r.liquidityUsd = usd
-    r.points += Math.round(usd * LIQUIDITY_POINTS_PER_USD)
+    r.points += liquidityPoints(usd)
   }
 
   // Only withdrawing earns nothing and does not put you on the board.
