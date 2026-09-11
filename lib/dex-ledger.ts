@@ -41,6 +41,8 @@ export interface DexEvent {
   assets?: Record<string, string>
   /** LP minted (provide) or burned (withdraw), smallest units. */
   share?: string
+  /** On a swap: what went in and what came out, smallest units. */
+  swap?: { offer: string; offerAmount: string; ask: string; returnAmount: string }
 }
 
 /**
@@ -65,10 +67,20 @@ export interface DexLedger {
 
 export const POINTS: Record<DexAction, number> = {
   create_pair: 50,
-  provide_liquidity: 20,
+  provide_liquidity: 10,
   swap: 5,
   withdraw_liquidity: 0,
 }
+/**
+ * Points per dollar of liquidity you still have in a pool, counted live from
+ * LP balances rather than from deposit events.
+ *
+ * Depositing used to pay 20 and withdrawing nothing, so a deposit and an
+ * immediate withdrawal kept the points forever — the board rewarded liquidity
+ * that was not there. Standing is the opposite: it is recomputed every scan,
+ * so it arrives when you deposit and is gone the moment you pull out.
+ */
+export const LIQUIDITY_POINTS_PER_USD = 5
 /** Earliest provide_liquidity in a pair. Computed, not an action of its own. */
 export const FIRST_HAND_POINTS = 100
 /** Crystal holders: every point counts one and a half times. */
@@ -107,6 +119,8 @@ export interface LeaderRow {
   early: boolean
   badges: Badge[]
   firstSeenHeight: number
+  /** USD of liquidity still in pools right now. Drives the standing points. */
+  liquidityUsd?: number
 }
 
 // ─── Storage ────────────────────────────────────────────────────
@@ -196,7 +210,7 @@ export async function mergeLedger(incoming: DexEvent[], allowed: Set<string>): P
     if (!cur) { ledger.events[e.id] = e; added++ }
     // Backfill: events recorded before amounts were captured get upgraded the
     // next time the scan reads the same transaction. No key bump, no data lost.
-    else if (!cur.assets && e.assets) { ledger.events[e.id] = e; added++ }
+    else if ((!cur.assets && e.assets) || (!cur.swap && e.swap)) { ledger.events[e.id] = e; added++ }
   }
   if (added > 0 || removed > 0) { ledger.updatedAt = Date.now(); await kvSet(LEDGER_KEY, ledger) }
   return { ledger, added, removed }
@@ -252,6 +266,9 @@ export async function scanContract(contract: string): Promise<DexEvent[]> {
           const share = act === 'withdraw_liquidity' ? at.withdrawn_share : at.share
           if (share) e.share = share
         }
+        if (act === 'swap' && at.offer_asset && at.ask_asset && at.offer_amount && at.return_amount) {
+          e.swap = { offer: at.offer_asset, offerAmount: at.offer_amount, ask: at.ask_asset, returnAmount: at.return_amount }
+        }
         out.push(e)
       }
     }
@@ -269,7 +286,7 @@ async function crystalFor(addr: string): Promise<boolean> {
   return v
 }
 
-export async function computeLeaderboard(ledger: DexLedger): Promise<LeaderRow[]> {
+export async function computeLeaderboard(ledger: DexLedger, liquidityUsd: Record<string, number> = {}): Promise<LeaderRow[]> {
   const events = Object.values(ledger.events)
 
   // First hand per pair = earliest provide_liquidity by height.
@@ -294,6 +311,16 @@ export async function computeLeaderboard(ledger: DexLedger): Promise<LeaderRow[]
     if (e.action === 'create_pair') r.creates++
     if (firstHandIds.has(e.id)) { r.firstHands++; r.points += FIRST_HAND_POINTS }
     rows.set(e.address, r)
+  }
+
+  // Liquidity standing: what you still have in, valued now. Recomputed every
+  // scan, so pulling out takes the points with it.
+  for (const addr of Object.keys(liquidityUsd)) {
+    const usd = liquidityUsd[addr]
+    const r = rows.get(addr)
+    if (!r || !(usd > 0)) continue
+    r.liquidityUsd = usd
+    r.points += Math.round(usd * LIQUIDITY_POINTS_PER_USD)
   }
 
   // Only withdrawing earns nothing and does not put you on the board.

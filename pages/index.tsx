@@ -1922,6 +1922,10 @@ function Leaderboard({ board, me, onGoSwap, height, crystal, spotlight }: { boar
                   </div>
                   <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginTop: 2 }}>
                     {[r.swaps && `${r.swaps} swap${r.swaps === 1 ? '' : 's'}`, r.provides && `${r.provides} add${r.provides === 1 ? '' : 's'}`, r.creates && `${r.creates} pool${r.creates === 1 ? '' : 's'}`, r.firstHands && `${r.firstHands} first hand${r.firstHands === 1 ? '' : 's'}`].filter(Boolean).join(' · ') || '—'}
+                    {/* Standing, not history: this is liquidity still in the pools right now. */}
+                    {r.liquidityUsd != null && r.liquidityUsd > 0 && (
+                      <span style={{ color: C.goldLit }}> · <b>${r.liquidityUsd >= 10 ? Math.round(r.liquidityUsd).toLocaleString('en-US') : r.liquidityUsd.toFixed(2)} still in</b></span>
+                    )}
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>

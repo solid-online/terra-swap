@@ -10,9 +10,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kv as vercelKv } from '@vercel/kv'
 import { isDexLive, queryPairs, DEX_FACTORY } from 'lib/dex'
+import { readLiquidity, liquidityByAddress } from 'lib/liquidity'
 import {
   scanContract, mergeLedger, getLedger, computeLeaderboard, computeFlows,
-  BADGES, POINTS, FIRST_HAND_POINTS, CRYSTAL_MULTIPLIER, EARLY_CUTOFF_HEIGHT, type LeaderRow, type DexEvent, type LpFlow,
+  BADGES, POINTS, FIRST_HAND_POINTS, CRYSTAL_MULTIPLIER, EARLY_CUTOFF_HEIGHT, LIQUIDITY_POINTS_PER_USD, type LeaderRow, type DexEvent, type LpFlow,
 } from 'lib/dex-ledger'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
@@ -32,7 +33,7 @@ export interface BoardResponse {
   recent: DexEvent[]
   /** per contract: latest height + total moves, for the pool vibe tags */
   poolActivity: Record<string, PoolActivity>
-  rules: { points: typeof POINTS; firstHand: number; crystalMultiplier: number; badges: typeof BADGES; cutoffHeight: number }
+  rules: { points: typeof POINTS; firstHand: number; crystalMultiplier: number; badges: typeof BADGES; cutoffHeight: number; liquidityPerUsd: number }
   /** who seeded each pool first — the promise, made visible per pool */
   firstHands: Record<string, { address: string; height: number; txhash: string }>
   /** most moves in the last ~24h of blocks */
@@ -46,7 +47,7 @@ let memCache: Snap | null = null
 
 export default async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>) {
   res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120')
-  const rules = { points: POINTS, firstHand: FIRST_HAND_POINTS, crystalMultiplier: CRYSTAL_MULTIPLIER, badges: BADGES, cutoffHeight: EARLY_CUTOFF_HEIGHT }
+  const rules = { points: POINTS, firstHand: FIRST_HAND_POINTS, crystalMultiplier: CRYSTAL_MULTIPLIER, badges: BADGES, cutoffHeight: EARLY_CUTOFF_HEIGHT, liquidityPerUsd: LIQUIDITY_POINTS_PER_USD }
   if (!isDexLive()) return res.status(200).json({ live: false, rows: [], totalEvents: 0, scannedAt: 0, rules, recent: [], poolActivity: {}, firstHands: {}, lotd: null, flows: {} })
 
   const cached = HAS_KV ? await vercelKv.get<Snap>(CACHE_KEY) : memCache
@@ -75,7 +76,9 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
   ])
   const allowed = new Set<string>([DEX_FACTORY, ...pairs.map(p => p.contract_addr)])
   const { ledger } = await mergeLedger(scans.flat(), allowed)
-  const rows = await computeLeaderboard(ledger)
+  // Live LP balances, so points follow liquidity that is still there.
+  const standing = liquidityByAddress(await readLiquidity())
+  const rows = await computeLeaderboard(ledger, standing)
   const events = Object.values(ledger.events)
   const total = events.length
   const recent = [...events].sort((a, b) => b.height - a.height).slice(0, 14)
