@@ -72,6 +72,19 @@ export const ROAR_CW20 = 'terra1lxx40s29qvkrcj8fsa3yzyehy7w50umdvvnls2r830rys6lu
 export const PAXG_ATOM_DENOM = 'ibc/0EF5630576C66968EF0787868CF09FD866FAD131BC148D24A148358A85F0EB62'
 export const WBTC_ATOM_DENOM = 'ibc/88386AC48152D48B34B082648DF836F975506F0B57DBBFC10A54213B1BF484CB'
 export const AXL_WBTC_DENOM = 'ibc/05D299885B07905B6886F554B39346EA6761246076A1120B1950049B92B922DD'
+/**
+ * USDC.inj: Circle's USDC as issued on Injective (erc20:0xa00C59fF…235a),
+ * arriving over Injective's channel-255. 6 decimals, and registered in the
+ * factory's coin registry, so a pool with it can actually be opened.
+ *
+ * Listed 2026-09-13 after a liquidity provider bridged funds in to seed a pool
+ * with it. On 2026-09-10 its supply here was zero; three days later 609.89.
+ * Always labelled USDC.inj, never plain "USDC": Noble USDC stays the only
+ * dollar the price maths anchors to, and this one is priced through its pools
+ * like any other token. Two things called USDC in one picker is how people
+ * send the wrong one.
+ */
+export const USDC_INJ_DENOM = 'ibc/E8481AD838C31D4FC12A504B10F9B4E2F830F8818D2735C2FFC707579B5FA60B'
 
 /** SOLID first, deliberately — it is the pair the experiment is about. */
 export const KNOWN_TOKENS: KnownToken[] = [
@@ -82,6 +95,7 @@ export const KNOWN_TOKENS: KnownToken[] = [
   { key: 'ROAR', label: 'ROAR', info: { token: { contract_addr: ROAR_CW20 } }, decimals: 6, cw20: true },
   { key: 'wBTC.atom', label: 'wBTC.atom', info: { native_token: { denom: WBTC_ATOM_DENOM } }, decimals: 8, cw20: false },
   { key: 'PAXG', label: 'PAXG', info: { native_token: { denom: PAXG_ATOM_DENOM } }, decimals: 18, cw20: false },
+  { key: 'USDC.inj', label: 'USDC.inj', info: { native_token: { denom: USDC_INJ_DENOM } }, decimals: 6, cw20: false },
   // wBTC.axl (AXL_WBTC_DENOM) deliberately not listed: 0.23 BTC on-chain vs
   // 6.55 for the Eureka one. Two wBTCs in a picker is a footgun, not a feature.
   // ampCAPA is deliberately absent: Astroport rejects its TokenFactory denom

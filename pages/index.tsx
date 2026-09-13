@@ -27,6 +27,8 @@ import type { DexResponse } from 'pages/api/dex'
 import type { BoardResponse, PoolActivity } from 'pages/api/dex-leaderboard'
 import type { LpFlow } from 'lib/dex-ledger'
 import type { PricesResponse } from 'pages/api/dex-prices'
+import type { TradesResponse } from 'pages/api/dex-trades'
+import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
 import { useSwap, useProvideLiquidity, useWithdrawLiquidity, useCreatePair, useZap } from 'components/transactions/useDex'
 import { humanizeTxError } from 'lib/errors'
@@ -118,6 +120,8 @@ const select: React.CSSProperties = { ...field, cursor: 'pointer', fontSize: TEX
 const TOKEN_ICONS: Record<string, string> = {
   LUNA: '/img/tokens/luna.svg', USDC: '/img/tokens/usdc.svg', SOLID: '/img/tokens/solid.svg', CAPA: '/img/tokens/capa.svg',
   ROAR: '/img/tokens/roar.png', 'wBTC.atom': '/img/tokens/wbtc.svg', PAXG: '/img/tokens/paxg.svg',
+  // Same issuer, same mark. The label is what tells it apart from Noble USDC.
+  'USDC.inj': '/img/tokens/usdc.svg',
 }
 
 function TokenIcon({ label, size = 20, style }: { label: string; size?: number; style?: React.CSSProperties }) {
@@ -1061,8 +1065,9 @@ function PriceChart({ pool, from, to, compact }: { pool: PoolView; from: KnownTo
                 color: C.textMuted, fontVariantNumeric: 'tabular-nums', padding: '2px 0',
               }}>
                 <span style={{ color: buy ? C.success : C.alert, fontWeight: 700, width: 14 }}>{buy ? '▲' : '▼'}</span>
-                <span style={{ color: C.textSecondary }}>{buy ? 'bought' : 'sold'} {r.base.toLocaleString('en-US', { maximumFractionDigits: 2 })} {bt.label}</span>
-                <span>for {r.quote.toLocaleString('en-US', { maximumFractionDigits: 2 })} {qt.label}</span>
+                {/* fmtAmount, not two decimals: a PAXG or wBTC leg is usually well under 0.01 and printed as "0". */}
+                <span style={{ color: C.textSecondary }}>{buy ? 'bought' : 'sold'} {fmtAmount(r.base)} {bt.label}</span>
+                <span>for {fmtAmount(r.quote)} {qt.label}</span>
                 <span style={{ marginLeft: 'auto', color: C.textWhisper }}>#{r.h.toLocaleString('en-US')}</span>
               </a>
             )
@@ -1442,7 +1447,7 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
   const me = useMyAddress()
   const provide = useProvideLiquidity()
   const withdraw = useWithdrawLiquidity()
-  const [mode, setMode] = useState<'none' | 'add' | 'remove'>('none')
+  const [mode, setMode] = useState<'none' | 'add' | 'remove' | 'trades'>('none')
   const [a0, setA0] = useState(''); const [a1, setA1] = useState('')
   const [lp, setLp] = useState('0'); const [lpAmt, setLpAmt] = useState('')
   const [err, setErr] = useState<string | null>(null)
@@ -1451,11 +1456,52 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
 
   useEffect(() => { if (me) queryCw20Balance(p.liquidity_token, me).then(setLp) }, [me, p.liquidity_token, ok])
 
-  // Non-empty pool: the second amount follows the first at the pool ratio, so
-  // a provider can't accidentally deposit at a wrong price and get arbed.
+  // Both sides' wallet balances, read while the add form is open. Asked for in
+  // the community chat 2026-09-12: "how much of either side is in your wallet
+  // and how much of the other side you need to get". Until now the only way to
+  // find out was to try, or to zap and pay 10% on a thin pool.
+  const [bal, setBal] = useState<[string, string]>(['0', '0'])
+  useEffect(() => {
+    if (!me || mode !== 'add') return
+    let alive = true
+    Promise.all([queryBalance(me, t0.info), queryBalance(me, t1.info)]).then(b => { if (alive) setBal([b[0], b[1]]) })
+    return () => { alive = false }
+  }, [me, mode, t0, t1, ok])
+
+  // Either amount drives the other at the pool ratio, so a provider can't
+  // deposit at a wrong price and get arbed. An empty pool leaves both free.
+  const dp = (t: KnownToken) => (t.decimals >= 8 ? 8 : 6)
+  const plain = (n: number, places: number) => (Number.isFinite(n) && n > 0 ? n.toFixed(places).replace(/\.?0+$/, '') : '')
   const onA0 = (v: string) => {
     setA0(v)
-    if (!p.empty) { const n = Number(v); setA1(Number.isFinite(n) ? String(Number((n * p.price).toFixed(6))) : '') }
+    if (!p.empty) setA1(v ? plain(Number(v) * p.price, dp(t1)) : '')
+  }
+  const onA1 = (v: string) => {
+    setA1(v)
+    if (!p.empty && p.price > 0) setA0(v ? plain(Number(v) / p.price, dp(t0)) : '')
+  }
+  const human = (micro: string, t: KnownToken) => Number(micro) / 10 ** t.decimals
+  // Gas is paid in LUNA, so a LUNA side keeps a little back.
+  const spendable = (i: 0 | 1) => Math.max(0, human(bal[i], p.tokens[i]) - (assetId(p.tokens[i].info) === 'uluna' ? 0.5 : 0))
+  /** The largest both-sides deposit this wallet can fund at the pool ratio. */
+  const fillMax = () => {
+    if (p.empty || !(p.price > 0)) return
+    const x = Math.min(spendable(0), spendable(1) / p.price) * 0.999
+    if (x > 0) onA0(plain(x, dp(t0)))
+  }
+  const short: [number, number] = [
+    Math.max(0, (Number(a0) || 0) - human(bal[0], t0)),
+    Math.max(0, (Number(a1) || 0) - human(bal[1], t1)),
+  ]
+  /** USD per whole token on side i, at the market reference. */
+  const unitUsd = (i: 0 | 1) => {
+    const r = human(p.reserves[i], p.tokens[i])
+    return p.sideUsd && r > 0 ? p.sideUsd[i] / r : null
+  }
+  /** xyk: taking y out of a side holding Y moves the price about y / (Y − y). */
+  const impactFor = (i: 0 | 1, y: number) => {
+    const Y = human(p.reserves[i], p.tokens[i])
+    return y >= Y ? Infinity : (y / (Y - y)) * 100
   }
   const m0 = toMicro(a0, t0.decimals), m1 = toMicro(a1, t1.decimals)
   const canAdd = !!me && !!m0 && !!m1 && m0 !== '0' && m1 !== '0' && !provide.isLoading
@@ -1565,6 +1611,7 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
                 : <>{fromMicro(p.reserves[0], t0.decimals)} {t0.label} · {fromMicro(p.reserves[1], t1.decimals)} {t1.label}</>}
             </span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: SPACE['2'] }}>
+          {!p.empty && <button type='button' style={{ ...ghostBtn, color: mode === 'trades' ? C.goldLit : C.textSecondary, borderColor: mode === 'trades' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'trades' ? 'none' : 'trades')} title='chart, tape and the wallets behind it'>Trades</button>}
           <button type='button' style={{ ...ghostBtn, color: mode === 'add' ? C.goldLit : C.textSecondary, borderColor: mode === 'add' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'add' ? 'none' : 'add')}>Add</button>
           {Number(lp) > 0 && <button type='button' style={{ ...ghostBtn, color: mode === 'remove' ? C.goldLit : C.textSecondary, borderColor: mode === 'remove' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'remove' ? 'none' : 'remove')}>Remove</button>}
         </div>
@@ -1680,8 +1727,37 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
             <>
               <div style={{ display: 'flex', gap: SPACE['2'] }}>
                 <input style={field} type='number' min='0' step='any' placeholder={`0.0 ${t0.label}`} value={a0} onChange={e => onA0(e.target.value)} />
-                <input style={field} type='number' min='0' step='any' placeholder={`0.0 ${t1.label}`} value={a1} onChange={e => setA1(e.target.value)} disabled={!p.empty} />
+                <input style={field} type='number' min='0' step='any' placeholder={`0.0 ${t1.label}`} value={a1} onChange={e => onA1(e.target.value)} />
               </div>
+              {me && (
+                <div style={{ ...rowStyle, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span>In wallet · {fromMicro(bal[0], t0.decimals)} {t0.label} · {fromMicro(bal[1], t1.decimals)} {t1.label}</span>
+                  {!p.empty && spendable(0) > 0 && spendable(1) > 0 && (
+                    <button type='button' style={{ ...ghostBtn, padding: '2px 8px' }} onClick={fillMax} title='the most this wallet can add at the pool ratio'>max both</button>
+                  )}
+                </div>
+              )}
+              {/* What is missing, sized, and what fetching it here would cost.
+                  A thin pool makes buying the other side in-pool expensive;
+                  the number says when to go get it somewhere deeper first. */}
+              {me && !p.empty && (short[0] > 0 || short[1] > 0) && (() => {
+                const gaps = ([0, 1] as const).filter(i => short[i] > 0)
+                const one = gaps.length === 1 ? gaps[0] : null
+                const imp = one == null ? null : impactFor(one, short[one])
+                return (
+                  <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6, padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${C.dividerWarm}` }}>
+                    You need {gaps.map((i, k) => {
+                      const usd = unitUsd(i)
+                      return (
+                        <span key={i}>{k > 0 ? ' and ' : ''}<b style={{ color: C.goldLit }}>{fmtAmount(short[i])} {p.tokens[i].label}</b>{usd ? <span style={{ color: C.textWhisper }}> ({fmtUsd(short[i] * usd)})</span> : null}</span>
+                      )
+                    })} more for this deposit.
+                    {one != null && imp != null && (Number.isFinite(imp)
+                      ? <> Buying it in this pool would move the price about <b style={{ color: imp > 3 ? C.alert : C.textPrimary }}>{imp.toFixed(imp >= 10 ? 0 : 1)}%</b>{imp > 3 ? ', so getting it from a deeper market first is cheaper.' : '.'}</>
+                      : <> That is more than this pool holds, so it has to come from somewhere else.</>)}
+                  </div>
+                )
+              })()}
               {me
                 ? <button type='button' style={{ ...primaryBtn, opacity: canAdd ? 1 : 0.5 }} disabled={!canAdd} onClick={add}>
                     {provide.isLoading ? 'Confirm in wallet…' : 'Add liquidity'}
@@ -1738,9 +1814,146 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
           </button>
         </div>
       )}
+      {mode === 'trades' && <PoolTrades p={p} />}
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginTop: SPACE['2'] }}>{err}</div>}
       {ok && <div style={{ fontSize: TEXT.xs.size, color: C.success, marginTop: SPACE['2'] }}>✓ {ok}</div>}
     </Card>
+  )
+}
+
+// ─── Trades: who trades a pool, and how ─────────────────────────
+
+const tradePanel: React.CSSProperties = {
+  padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${C.divider}`,
+}
+const linkBtn: React.CSSProperties = {
+  background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit',
+  color: C.emberLit, textDecoration: 'underline dotted', textUnderlineOffset: 3,
+}
+/** Blocks → rough wall time at ~6s a block. */
+function gapLabel(blocks: number): string {
+  const s = blocks * 6
+  if (s < 90) return `${Math.round(s)}s`
+  if (s < 5400) return `${Math.round(s / 60)} min`
+  if (s < 129_600) return `${Math.round(s / 3600)} h`
+  return `${Math.round(s / 86_400)} d`
+}
+
+function WalletLine({ s, base, quote }: { s: WalletStats; base: string; quote: string }) {
+  return (
+    <div style={{ display: 'grid', gap: 3, marginTop: 6, fontSize: TEXT.xs.size, color: C.textSecondary, fontVariantNumeric: 'tabular-nums', lineHeight: 1.5 }}>
+      <div>
+        {s.trades} trade{s.trades === 1 ? '' : 's'} here · <span style={{ color: C.success }}>{s.buys} bought</span> {fmtAmount(s.baseBought)} {base} · <span style={{ color: C.alert }}>{s.sells} sold</span> {fmtAmount(s.baseSold)} {base}
+      </div>
+      <div>
+        Average buy {s.avgBuy == null ? '—' : fmtPrice(s.avgBuy)} · average sell {s.avgSell == null ? '—' : fmtPrice(s.avgSell)} {quote} per {base}
+        {s.spreadPct != null && <> · spread <b style={{ color: s.spreadPct >= 0 ? C.success : C.alert }}>{s.spreadPct >= 0 ? '+' : ''}{s.spreadPct.toFixed(1)}%</b></>}
+      </div>
+      {s.medianGapBlocks != null && (
+        <div style={{ color: C.textMuted }}>
+          Trades about every {gapLabel(s.medianGapBlocks)} (median) · first #{s.firstH.toLocaleString('en-US')} · last #{s.lastH.toLocaleString('en-US')}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A pool opened up: its chart, its tape, and the wallets behind the tape.
+ * Asked for in the community chat 2026-09-12, after Coinhall went: "click on
+ * that address and see how that wallet behaves. Was really easy to identify
+ * bots." Click a wallet and everything narrows to it: what it bought and sold
+ * here, at what average prices, how often it trades, and where else it trades.
+ * Nobody gets labelled a bot; a wallet trading both ways every few blocks at a
+ * thin spread reads as what it is.
+ */
+function PoolTrades({ p }: { p: PoolView }) {
+  const [t0, t1] = p.tokens
+  const [who, setWho] = useState<string | null>(null)
+  const [data, setData] = useState<TradesResponse | null>(null)
+  const [across, setAcross] = useState<TradesResponse | null>(null)
+  useEffect(() => {
+    let alive = true
+    setData(null)
+    fetch(`/api/dex-trades?pair=${p.contract_addr}${who ? `&address=${who}` : ''}`)
+      .then(r => (r.ok ? r.json() : null)).then(j => { if (alive) setData(j) }).catch(() => {})
+    return () => { alive = false }
+  }, [p.contract_addr, who])
+  useEffect(() => {
+    let alive = true
+    setAcross(null)
+    if (!who) return
+    fetch(`/api/dex-trades?address=${who}`)
+      .then(r => (r.ok ? r.json() : null)).then(j => { if (alive) setAcross(j) }).catch(() => {})
+    return () => { alive = false }
+  }, [who])
+
+  const elsewhere = (across?.byPool ?? []).filter(b => b.pair !== p.contract_addr)
+  return (
+    <div style={{ marginTop: SPACE['3'], display: 'grid', gap: SPACE['2'] }}>
+      <PriceChart pool={p} from={t0} to={t1} />
+      {!data ? (
+        <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>Reading the ledger…</div>
+      ) : (
+        <>
+          {who ? (
+            <div style={tradePanel}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], flexWrap: 'wrap' }}>
+                <span style={{ fontSize: TEXT.sm.size, color: C.textPrimary, fontWeight: 700 }}><Nick address={who} head={10} tail={6} /></span>
+                <a href={`https://terrasco.pe/mainnet/address/${who}`} target='_blank' rel='noreferrer' style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>explorer ↗</a>
+                <button type='button' style={{ ...ghostBtn, padding: '2px 8px', marginLeft: 'auto' }} onClick={() => setWho(null)}>all wallets</button>
+              </div>
+              {data.wallets[0] && data.wallets[0].trades > 0
+                ? <WalletLine s={data.wallets[0]} base={t0.label} quote={t1.label} />
+                : <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginTop: 6 }}>No trades in this pool.</div>}
+              {elsewhere.length > 0 && (
+                <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginTop: 6 }}>
+                  Also trades {elsewhere.map(b => `${b.label} ×${b.stats.trades}`).join(' · ')}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={tradePanel}>
+              <div style={{ ...rowStyle, padding: '0 0 4px', flexWrap: 'wrap' }}>
+                <span>
+                  {data.total} trade{data.total === 1 ? '' : 's'} · <span style={{ color: C.success }}>{data.buys} buys</span> · <span style={{ color: C.alert }}>{data.sells} sells</span>
+                </span>
+                <span style={{ color: C.textWhisper }}>a buy takes {t0.label} out</span>
+              </div>
+              {data.wallets.map(s => (
+                <div key={s.address} style={{ display: 'flex', gap: SPACE['2'], alignItems: 'baseline', flexWrap: 'wrap', fontSize: TEXT.xs.size, color: C.textMuted, padding: '3px 0', fontVariantNumeric: 'tabular-nums' }}>
+                  <button type='button' style={linkBtn} onClick={() => setWho(s.address)} title='show only this wallet'><Nick address={s.address} head={8} tail={4} /></button>
+                  <span>{s.trades} · <span style={{ color: C.success }}>{s.buys}▲</span> <span style={{ color: C.alert }}>{s.sells}▼</span></span>
+                  {s.spreadPct != null && <span>spread {s.spreadPct >= 0 ? '+' : ''}{s.spreadPct.toFixed(1)}%</span>}
+                  {s.medianGapBlocks != null && <span style={{ marginLeft: 'auto', color: C.textWhisper }}>every ~{gapLabel(s.medianGapBlocks)}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={tradePanel}>
+            <div style={{ fontSize: TEXT.caption.size, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.textWhisper, marginBottom: 4 }}>
+              {who ? 'Their trades here' : 'Every trade'} · newest first
+            </div>
+            {data.tape.length === 0 && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>No trades yet.</div>}
+            {data.tape.map(t => (
+              <div key={t.tx} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', fontSize: TEXT.xs.size, color: C.textMuted, fontVariantNumeric: 'tabular-nums', padding: '3px 0', borderTop: `1px solid ${C.divider}` }}>
+                <span style={{ color: t.side === 'buy' ? C.success : C.alert, fontWeight: 700, minWidth: 30 }}>{t.side === 'buy' ? 'BUY' : 'SELL'}</span>
+                <span style={{ color: C.textSecondary }}>{fmtAmount(t.base)} {t0.label}</span>
+                <span>for {fmtAmount(t.quote)} {t1.label}</span>
+                <span style={{ color: C.textWhisper }}>@ {fmtPrice(t.price)}</span>
+                {!who && <button type='button' style={linkBtn} onClick={() => setWho(t.address)} title='show only this wallet'><Nick address={t.address} head={6} tail={4} /></button>}
+                <a href={finderTx(t.tx)} target='_blank' rel='noreferrer' style={{ marginLeft: 'auto', color: C.textWhisper, textDecoration: 'none' }}>#{t.h.toLocaleString('en-US')} ↗</a>
+              </div>
+            ))}
+            {data.unpriced > 0 && (
+              <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>
+                {data.unpriced} older swap{data.unpriced === 1 ? '' : 's'} recorded before amounts were kept, counted but not shown.
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -2751,7 +2964,8 @@ function SwapPageInner() {
         {[0, 1, 2, 3, 4, 5].map(k => <span key={k} className={`terra-lantern terra-lantern-${k}`} />)}
       </div>
       <main style={{ minHeight: '100vh', background: 'transparent', paddingBottom: '4rem', position: 'relative', zIndex: 2 }}>
-        <article className='terra-article' style={{ maxWidth: 640, margin: '0 auto', padding: '1.4rem 1.2rem 2rem' }}>
+        {/* Width and scale live in the stylesheet (.terra-article) so desktop can grow without touching phones. */}
+        <article className='terra-article' style={{ margin: '0 auto', padding: '1.4rem 1.2rem 2rem' }}>
           {/* No "back to Atrium" row: the wallet sits on the wordmark's line instead, which buys
               a whole row above the fold. The struck-through Atrium in the h1 still tells the story. */}
           <Hero poolFeeBps={data?.poolFeeBps ?? 30} onReplay={() => setIntro(true)} onToast={m => setToast({ msg: m })} me={me || undefined}
@@ -3085,6 +3299,12 @@ function SwapPageInner() {
         html.terra-cwal .kwon-pose-walk .kwon-leg-l, html.terra-cwal .kwon-pose-walk .kwon-leg-r, html.terra-cwal .kwon-pose-walk .kwon-arm-f, html.terra-cwal .kwon-pose-walk .kwon-arm-b { animation-duration: 0.18s !important; }
         html.terra-cwal .kwon-man { transition-duration: 900ms !important; }
         @media (max-width: 900px) { .terra-minimap { display: none; } }
+        /* ── Desktop: 640px of 11px text in a 1500px window left most of the screen empty and the
+              numbers hard to read (community feedback 2026-09-12). Wider column, and the whole
+              column scaled up so every inline size grows together. Phones are untouched. ── */
+        .terra-article { max-width: 640px; }
+        @media (min-width: 1100px) { .terra-article { max-width: 760px; zoom: 1.15; } }
+        @media (min-width: 1600px) { .terra-article { max-width: 780px; zoom: 1.3; } }
         /* ── Small screens: the swap must fit without scrolling. Every rule here removes something that is not the swap. ── */
         @media (max-width: 640px) {
           .terra-chainpill, .terra-strike, .terra-kbd { display: none !important; }
