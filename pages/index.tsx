@@ -1945,7 +1945,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
             <b style={{ color: C.goldLit }}>{fmtAmount(arb.inAmount)} {arb.inToken.label}</b>
             <span style={{ color: C.textWhisper }}> ({fmtUsd(arb.inUsd)})</span> closes the gap and returns{' '}
             <b style={{ color: C.goldLit }}>{fmtAmount(arb.outAmount)} {arb.outToken.label}</b>
-            <span style={{ color: C.textWhisper }}> — about </span>
+            <span style={{ color: C.textWhisper }}>, about </span>
             <b style={{ color: C.success }}>{fmtUsd(arb.profitUsd)}</b>
             <span style={{ color: C.textWhisper }}> more than you put in, at reference prices. First come.</span>
           </span>
@@ -2352,7 +2352,7 @@ function CreatePanel({ pools, marketPx, onDone, onCreated, onParty }: { pools: P
         initParams: pcl && priceScale ? { ...PCL_DEFAULTS, price_scale: priceScale } : undefined,
       })
       setOk(true); onDone()
-      if (!LITE) onParty({ emoji: '🏗️', title: 'BUILDER', sub: 'You opened a pool. 50 points, the stamp is yours, and it is empty — go be its first hand too.' })
+      if (!LITE) onParty({ emoji: '🏗️', title: 'BUILDER', sub: 'You opened a pool. 50 points, the stamp is yours, and it is empty. Go be its first hand too.' })
       // The pool exists now but is empty; take them straight to Pools where
       // they (or anyone) can be the first hand in it.
       setTimeout(onCreated, 3400)
@@ -2388,7 +2388,7 @@ function CreatePanel({ pools, marketPx, onDone, onCreated, onParty }: { pools: P
         </div>
       )}
       {registered === false && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>Astroport&apos;s coin registry does not know one of these tokens, so its factory would refuse the pool.</div>}
-      {exists && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginBottom: SPACE['2'] }}>That pool already exists — add liquidity to it instead.{!LITE && <> <span style={{ color: C.goldLit }}>You must construct additional pylons.</span></>}</div>}
+      {exists && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginBottom: SPACE['2'] }}>That pool already exists. Add liquidity to it instead.{!LITE && <> <span style={{ color: C.goldLit }}>You must construct additional pylons.</span></>}</div>}
       {a === b && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>Pick two different tokens.</div>}
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
       {ok && <div style={{ fontSize: TEXT.xs.size, color: C.success, marginBottom: SPACE['2'] }}>✓ Pool created. It will show in Pools once the block lands.</div>}
@@ -2503,7 +2503,7 @@ function Leaderboard({ board, me, onGoSwap, height, crystal, spotlight }: { boar
         {board.rows.length >= 2 && <Podium rows={board.rows} />}
         {board.rows.length === 0 ? (
           <p style={{ fontSize: TEXT.sm.size, color: C.textMuted, margin: `${SPACE['2']}px 0 0`, lineHeight: 1.6 }}>
-            Nobody yet. The first swap, the first pool, the first liquidity — whoever does it goes straight to the top, and stays written down.
+            Nobody yet. The first swap, the first pool, the first liquidity: whoever does it goes straight to the top, and stays written down.
           </p>
         ) : (
           <div style={{ display: 'grid', gap: 2, marginTop: SPACE['2'] }}>
@@ -2575,7 +2575,7 @@ function Leaderboard({ board, me, onGoSwap, height, crystal, spotlight }: { boar
           {Object.values(rules.badges).map(b => <BadgeChip key={b.name} b={b} />)}
         </div>
         <p style={{ fontSize: TEXT.xs.size, color: C.textWhisper, margin: `${SPACE['3']}px 0 0`, lineHeight: 1.5 }}>
-          Points are a game and buy nothing. Read straight off the chain, so they can&apos;t be edited — only earned.
+          Points are a game and buy nothing. Read straight off the chain, so they can&apos;t be edited, only earned.
         </p>
       </Card>
     </div>
