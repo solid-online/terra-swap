@@ -9,7 +9,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kv as vercelKv } from '@vercel/kv'
-import { isDexLive, queryPairs, DEX_FACTORY } from 'lib/dex'
+import { isDexLive, queryPairs, DEX_FACTORY, IS_ASTRO } from 'lib/dex'
 import { readLiquidity, liquidityByAddress } from 'lib/liquidity'
 import {
   scanContract, mergeLedger, getLedger, computeLeaderboard, computeFlows,
@@ -48,7 +48,8 @@ let memCache: Snap | null = null
 export default async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>) {
   res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120')
   const rules = { points: POINTS, firstHand: FIRST_HAND_POINTS, crystalMultiplier: CRYSTAL_MULTIPLIER, badges: BADGES, cutoffHeight: EARLY_CUTOFF_HEIGHT, liquidityCoeff: LIQUIDITY_POINTS_COEFF }
-  if (!isDexLive()) return res.status(200).json({ live: false, rows: [], totalEvents: 0, scannedAt: 0, rules, recent: [], poolActivity: {}, firstHands: {}, lotd: null, flows: {} })
+  // Astroport mode has no board: their history is not ours to score, and the scan would fan out over ~850 pools.
+  if (!isDexLive() || IS_ASTRO) return res.status(200).json({ live: false, rows: [], totalEvents: 0, scannedAt: 0, rules, recent: [], poolActivity: {}, firstHands: {}, lotd: null, flows: {} })
 
   const cached = HAS_KV ? await vercelKv.get<Snap>(CACHE_KEY) : memCache
   if (cached && Date.now() - cached.at < SCAN_EVERY_MS) {

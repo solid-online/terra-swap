@@ -24,6 +24,16 @@
 export const DEX_FACTORY = process.env.NEXT_PUBLIC_DEX_FACTORY || ''
 export const isDexLive = () => DEX_FACTORY.length > 0
 
+/**
+ * Which factory this build fronts. The same code runs two sites: Terra Swap on
+ * its own renounced factory, and a plain interface to Astroport's factory so
+ * the chain's main liquidity stays reachable from an open, self-hostable page.
+ * Astroport mode drops everything that only makes sense on our own pools (the
+ * board, pool creation, the jokes) and lists only pairs of tokens we can name.
+ */
+export const DEX_MODE: 'terraswap' | 'astroport' = process.env.NEXT_PUBLIC_DEX_MODE === 'astroport' ? 'astroport' : 'terraswap'
+export const IS_ASTRO = DEX_MODE === 'astroport'
+
 const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
 
 /** Pool commission, set on the factory. Shown to users; not enforced here. */
@@ -188,20 +198,41 @@ export interface Simulation {
  * whose history is allowed to exist, an unseen pool had its events deleted.
  * Nothing downstream may assume this list is complete unless it is.
  */
+let pairsCache: { at: number; pairs: PairInfo[] } | null = null
 export async function queryPairs(): Promise<PairInfo[]> {
   if (!isDexLive()) return []
+  // Astroport has ~850 pairs (29 pages) that barely change; ours change
+  // whenever someone opens a pool, so only Astroport mode caches, and only a
+  // list that was read to the end.
+  if (IS_ASTRO && pairsCache && Date.now() - pairsCache.at < 600_000) return pairsCache.pairs
   const out: PairInfo[] = []
   let startAfter: AssetInfo[] | undefined
-  for (let page = 0; page < 20; page++) {
+  let complete = false
+  for (let page = 0; page < 40; page++) {
     const r = await smart<{ pairs: PairInfo[] }>(DEX_FACTORY, {
       pairs: { limit: 30, ...(startAfter ? { start_after: startAfter } : {}) },
     })
-    const got = r?.pairs ?? []
+    if (!r) break
+    const got = r.pairs ?? []
     out.push(...got)
-    if (got.length < 30) break
+    if (got.length < 30) { complete = true; break }
     startAfter = got[got.length - 1].asset_infos
   }
+  if (IS_ASTRO && complete) pairsCache = { at: Date.now(), pairs: out }
   return out
+}
+
+/** The pairs this build shows. Astroport mode: only pairs of tokens we can name. */
+export function listedPairs(pairs: PairInfo[]): PairInfo[] {
+  if (!IS_ASTRO) return pairs
+  const known = new Set(KNOWN_TOKENS.map(t => assetId(t.info)))
+  return pairs.filter(p => p.asset_infos.every(a => known.has(assetId(a))))
+}
+
+/** xyk, stable, concentrated, or whatever custom name the pair carries. */
+export function pairTypeOf(p: Pick<PairInfo, 'pair_type'>): string {
+  const [k, v] = Object.entries(p.pair_type ?? {})[0] ?? ['xyk', {}]
+  return k === 'custom' && typeof v === 'string' ? v : k
 }
 
 export async function queryPool(pair: string): Promise<PoolState | null> {
@@ -242,10 +273,17 @@ export interface PoolView extends PairInfo {
   tokens: [KnownToken, KnownToken]
   reserves: [string, string]
   totalShare: string
-  /** Spot price of token[0] in token[1], from reserves. 0 when empty. */
+  /** Spot price of token[0] in token[1]: reserves on xyk, a simulated mid on other pool types (refineSpot). 0 when empty. */
   price: number
   empty: boolean
   label: string
+  /** 'xyk' | 'stable' | 'concentrated' | … */
+  pairType: string
+  /**
+   * token1 per token0 by reserves: the ratio a balanced deposit follows. On
+   * xyk this is also the price; on concentrated and stable pools it is not.
+   */
+  reserveRatio: number
   /** Total value locked in USD, when both sides can be priced. */
   tvlUsd?: number
   /** Market price of token[0] in token[1] from Astroport's deepest pools, when known. */
@@ -279,6 +317,8 @@ export async function marketPrices(): Promise<Record<string, number>> {
     const knownIds = new Set(KNOWN_TOKENS.map(t => assetId(t.info)))
     const relevant = pairs.filter(p => p.asset_infos.every(a => knownIds.has(assetId(a))))
     const views = await Promise.all(relevant.map(async p => toPoolView(p, await queryPool(p.contract_addr))))
+    // Most of Astroport's deep pools are concentrated; their reserves are not their price.
+    await refineSpot(views)
     // Deepest pool per unordered pair wins; then the same USDC-anchored hop we use for our own TVL.
     const deepest = new Map<string, PoolView>()
     for (const v of views) {
@@ -350,7 +390,39 @@ export function toPoolView(pair: PairInfo, pool: PoolState | null): PoolView {
     price: d0 > 0 ? d1 / d0 : 0,
     empty: n0 === 0 || n1 === 0,
     label: `${t0.label} / ${t1.label}`,
+    pairType: pairTypeOf(pair),
+    reserveRatio: d0 > 0 ? d1 / d0 : 0,
   }
+}
+
+/**
+ * Real spot prices for pools whose reserves are not their price.
+ *
+ * On a concentrated pool the reserve ratio can sit well away from the price:
+ * Astroport's LUNA/USDC read $0.04571 from reserves on 2026-09-13 while its own
+ * simulations put LUNA at $0.04656. Selling a sliver each way brackets the
+ * price with the fee on both sides, and the geometric mean cancels the fee.
+ * xyk pools keep the reserve ratio, which is exact for them.
+ */
+export async function refineSpot(pools: PoolView[]): Promise<PoolView[]> {
+  await Promise.all(pools.map(async p => {
+    if (p.pairType === 'xyk' || p.empty) return
+    const [t0, t1] = p.tokens
+    const x0 = (BigInt(p.reserves[0]) / BigInt(10_000)).toString()
+    const x1 = (BigInt(p.reserves[1]) / BigInt(10_000)).toString()
+    if (x0 === '0' || x1 === '0') return
+    const [s0, s1] = await Promise.all([
+      simulateSwap(p.contract_addr, { info: t0.info, amount: x0 }),
+      simulateSwap(p.contract_addr, { info: t1.info, amount: x1 }),
+    ])
+    if (!s0 || !s1 || !(Number(s0.return_amount) > 0) || !(Number(s1.return_amount) > 0)) return
+    const d0 = 10 ** t0.decimals, d1 = 10 ** t1.decimals
+    const sell = (Number(s0.return_amount) / d1) / (Number(x0) / d0)   // token1 received per token0 sold
+    const buy = (Number(x1) / d1) / (Number(s1.return_amount) / d0)    // token1 paid per token0 bought
+    const mid = Math.sqrt(sell * buy)
+    if (Number.isFinite(mid) && mid > 0) p.price = mid
+  }))
+  return pools
 }
 
 /**
@@ -374,17 +446,20 @@ export function usdPrices(pools: PoolView[], minHopUsd = 0): Record<string, numb
       // display units, so decimals never skew the hop
       const ra = Number(p.reserves[0]) / 10 ** a.decimals, rb = Number(p.reserves[1]) / 10 ** b.decimals
       const ida = assetId(a.info), idb = assetId(b.info)
-      const hop = (known: string, unknown: string, rKnown: number, rUnknown: number) => {
+      // p.price is token a in token b. On xyk that is rb / ra, so this is the
+      // old reserve formula exactly; on concentrated pools it is the simulated
+      // mid, which the reserve ratio is not (see refineSpot).
+      if (!(p.price > 0)) continue
+      const hop = (known: string, unknown: string, rKnown: number, rUnknown: number, unknownInKnown: number) => {
         if (px[known] == null || px[unknown] != null) return
         if (!(rKnown > 0) || !(rUnknown > 0)) return
         const depth = rKnown * px[known]   // dollars standing behind this quote
         if (depth < minHopUsd) return
         const cur = best.get(unknown)
-        // price of X = (reserveKnown / reserveX) * priceKnown
-        if (!cur || depth > cur.depth) best.set(unknown, { depth, price: (rKnown / rUnknown) * px[known] })
+        if (!cur || depth > cur.depth) best.set(unknown, { depth, price: unknownInKnown * px[known] })
       }
-      hop(ida, idb, ra, rb)
-      hop(idb, ida, rb, ra)
+      hop(ida, idb, ra, rb, 1 / p.price)   // 1 b = 1/price a
+      hop(idb, ida, rb, ra, p.price)       // 1 a = price b
     }
     if (best.size === 0) break
     best.forEach((v, id) => { px[id] = v.price })

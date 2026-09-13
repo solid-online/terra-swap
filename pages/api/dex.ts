@@ -10,12 +10,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createHash } from 'crypto'
 import {
-  isDexLive, queryPairs, queryPool, toPoolView, annotateTvl,
-  POOL_FEE_BPS, type PoolView,
+  isDexLive, queryPairs, listedPairs, queryPool, toPoolView, refineSpot, annotateTvl,
+  POOL_FEE_BPS, DEX_MODE, type PoolView,
 } from 'lib/dex'
 
 export interface DexResponse {
   live: boolean
+  /** which factory this build fronts */
+  mode: typeof DEX_MODE
   pools: PoolView[]
   feeBps: number
   poolFeeBps: number
@@ -87,10 +89,11 @@ async function seoulWeather(): Promise<{ temp: number; code: number } | null> {
 export default async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) {
   res.setHeader('Cache-Control', 's-maxage=8, stale-while-revalidate=30')
   if (!isDexLive()) {
-    return res.status(200).json({ live: false, pools: [], feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd: 0, height: 0, chainId: '', proposer: '', seoul: null })
+    return res.status(200).json({ live: false, mode: DEX_MODE, pools: [], feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd: 0, height: 0, chainId: '', proposer: '', seoul: null })
   }
   // No market scan here: it lives in /api/dex-market so a cold start never blocks the page.
-  const [pairs, head, seoul] = await Promise.all([queryPairs(), latestBlock(), seoulWeather()])
+  const [allPairs, head, seoul] = await Promise.all([queryPairs(), latestBlock(), seoulWeather()])
+  const pairs = listedPairs(allPairs)
   const pools = await Promise.all(
     pairs.map(async (p) => toPoolView(p, await queryPool(p.contract_addr))),
   )
@@ -103,7 +106,8 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
     Number(a.empty) - Number(b.empty)
     || known(b) - known(a)
     || Number(b.reserves[0]) - Number(a.reserves[0]))
+  await refineSpot(pools)
   annotateTvl(pools)
   const tvlUsd = pools.reduce((s, p) => s + (p.tvlUsd ?? 0), 0)
-  return res.status(200).json({ live: true, pools, feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd, height: head.height, chainId: head.chainId, proposer: head.proposer, seoul })
+  return res.status(200).json({ live: true, mode: DEX_MODE, pools, feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd, height: head.height, chainId: head.chainId, proposer: head.proposer, seoul })
 }

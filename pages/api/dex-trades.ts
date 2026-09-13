@@ -3,18 +3,21 @@
  * GET /api/dex-trades?pair=<addr>&address=<a>  one wallet inside that pool
  * GET /api/dex-trades?address=<a>              one wallet across every pool
  *
- * Reads the ledger only. /api/dex-leaderboard scans the chain into it once a
- * minute, so this is cheap and never fans out to the LCD beyond the pair list.
+ * Terra Swap: reads the ledger only; /api/dex-leaderboard scans the chain into
+ * it once a minute. Astroport mode has no board, so this route scans the pools
+ * it is asked about itself, at most once a minute per pool.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { isDexLive, queryPairs, assetId, tokenFor } from 'lib/dex'
-import { getLedger } from 'lib/dex-ledger'
+import { isDexLive, queryPairs, listedPairs, assetId, tokenFor, IS_ASTRO, DEX_FACTORY } from 'lib/dex'
+import { getLedger, mergeLedger, scanContract } from 'lib/dex-ledger'
 import { toTrade, walletStats, type PairMeta, type Trade, type WalletStats } from 'lib/trades'
 
 const MAX_TAPE = 60
 const MAX_WALLETS = 12
 const ADDR = /^terra1[0-9a-z]{38,58}$/
+const SCAN_EVERY_MS = 60_000
+const lastScan = new Map<string, number>()
 
 export interface TradesResponse {
   pair: string | null
@@ -42,7 +45,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60')
   if (!isDexLive()) return res.status(200).json(empty(pair, address))
 
-  const [pairs, ledger] = await Promise.all([queryPairs(), getLedger()])
+  const pairs = listedPairs(await queryPairs())
+  // Terra Swap's ledger is kept fresh by the board's scan. Astroport mode has
+  // no board, so read the chain here: the one pool asked about, or every listed
+  // pool for a wallet view. At most once a minute per pool per instance.
+  if (IS_ASTRO && pairs.length > 0) {
+    const want = pair ? pairs.filter(p => p.contract_addr === pair) : pairs
+    const due = want.map(p => p.contract_addr).filter(c => Date.now() - (lastScan.get(c) ?? 0) > SCAN_EVERY_MS)
+    if (due.length > 0) {
+      due.forEach(c => lastScan.set(c, Date.now()))
+      const scans = await Promise.all(due.map(c => scanContract(c)))
+      await mergeLedger(scans.flat(), new Set([DEX_FACTORY, ...pairs.map(p => p.contract_addr)]))
+    }
+  }
+  const ledger = await getLedger()
   const metas = new Map<string, PairMeta & { label: string; base: string; quote: string }>()
   for (const p of pairs) {
     const b = tokenFor(p.asset_infos[0]), q = tokenFor(p.asset_infos[1])

@@ -19,7 +19,7 @@ import { isCrystalHolder } from 'lib/holders'
 import {
   KNOWN_TOKENS, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
-  lpPosition, lpConcentration,
+  lpPosition, lpConcentration, IS_ASTRO,
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
 } from 'lib/dex'
 import { arbPlans, fmtAmount, fmtUsd, totalUsd, type ArbPlan } from 'lib/arb'
@@ -42,6 +42,15 @@ type Tab = 'swap' | 'pools' | 'create' | 'board'
 // Gotham lookalike (same geometric skeleton, double-storey a, flat e).
 const TERRA_FONT = "'Montserrat', 'Space Grotesk', 'Inter', system-ui, sans-serif"
 const POOL_FEE_BPS_LABEL = '30 bps'
+/** Astroport mode: this page as a plain interface to Astroport's pools. See DEX_MODE in lib/dex. */
+const LITE = IS_ASTRO
+const APP_NAME = LITE ? 'Terra Pools' : 'Terra Swap'
+/** What a pool charges. Astroport's pairs send part of it to their maker, so "to LPs" is only true on ours. */
+const poolFeeText = (p: PoolView | null | undefined, poolFeeBps: number) => {
+  if (!LITE) return `${poolFeeBps / 100}% to LPs`
+  if (!p) return 'set by the pool'
+  return p.pairType === 'xyk' ? '0.3%, set by the pool' : p.pairType === 'stable' ? '0.05%, set by the pool' : 'dynamic, set by the pool'
+}
 
 // Retro Terra 2020 palette — deep royal navy, electric Terra blue, cool white.
 // Scoped to this page: it shadows the shared Atrium tokens (gold/ember roles
@@ -1131,8 +1140,16 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
     return tokens.filter(t => ids.has(assetId(t.info)))
   }, [from, tradable, tokens])
   useEffect(() => {
-    if (!toOptions.find(t => assetId(t.info) === toId)) setToId(toOptions[0] ? assetId(toOptions[0].info) : '')
-  }, [toOptions, toId])
+    if (toOptions.find(t => assetId(t.info) === toId)) return
+    // Default to the other side of the deepest pool the pay token sits in, so
+    // LUNA opens on LUNA/USDC rather than on whichever token sorts first.
+    const deepest = from
+      ? tradable.filter(p => p.tokens.some(t => sameAsset(t.info, from.info))).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))[0]
+      : undefined
+    const other = deepest && from ? deepest.tokens.find(t => !sameAsset(t.info, from.info)) : undefined
+    const pick = (other && toOptions.find(t => sameAsset(t.info, other.info))) || toOptions[0]
+    setToId(pick ? assetId(pick.info) : '')
+  }, [toOptions, toId, from, tradable])
 
   /* A preset arrives as a pair plus a size. The pay side and the amount land
      immediately; the receive side has to wait one pass for `toOptions` to be
@@ -1149,10 +1166,13 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
   }, [wantTo, toOptions])
 
   const to = toOptions.find(t => assetId(t.info) === toId) ?? null
-  const pool = useMemo(() =>
-    from && to ? tradable.find(p =>
-      p.tokens.some(t => sameAsset(t.info, from.info)) && p.tokens.some(t => sameAsset(t.info, to.info))) ?? null : null,
-    [from, to, tradable])
+  // Several pools can hold the same pair (Astroport keeps xyk and concentrated
+  // side by side), so route through the deepest one.
+  const pool = useMemo(() => {
+    if (!from || !to) return null
+    const both = tradable.filter(p => p.tokens.some(t => sameAsset(t.info, from.info)) && p.tokens.some(t => sameAsset(t.info, to.info)))
+    return both.sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))[0] ?? null
+  }, [from, to, tradable])
 
   useEffect(() => {
     if (!me || !from) { setBalance('0'); return }
@@ -1205,11 +1225,11 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
   const spot = pool && from ? (sameAsset(from.info, pool.tokens[0].info) ? pool.price : (pool.price > 0 ? 1 / pool.price : 0)) : 0
   useEffect(() => {
     if (!from || !to || !(spot > 0)) return
-    document.title = `1 ${from.label} = ${fmtPrice(spot)} ${to.label} · Terra Swap`
-    return () => { document.title = 'Terra Swap' }
+    document.title = `1 ${from.label} = ${fmtPrice(spot)} ${to.label} · ${APP_NAME}`
+    return () => { document.title = APP_NAME }
   }, [from, to, spot])
 
-  const egg = from ? amountEgg(amount, from.label) : null
+  const egg = from && !LITE ? amountEgg(amount, from.label) : null
 
   const go = async () => {
     if (!canSwap || !pool || !from || !micro || !sim) return
@@ -1257,7 +1277,7 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
               color: crystal ? C.success : C.textMuted,
               border: `1px solid ${crystal ? C.success : C.divider}`,
             }}>
-              {feeBps === 0 ? `No protocol fee · pool fee ${poolFeeBps / 100}% to LPs` : crystal ? '✦ Crystal · 0 protocol fee' : `Protocol fee ${feeBps / 100}% · Crystal holders 0`}
+              {feeBps === 0 ? (LITE ? `No interface fee · pool fee ${poolFeeText(pool, poolFeeBps)}` : `No protocol fee · pool fee ${poolFeeBps / 100}% to LPs`) : crystal ? '✦ Crystal · 0 protocol fee' : `Protocol fee ${feeBps / 100}% · Crystal holders 0`}
             </span>
           )
           const total = totalUsd(arbs!)
@@ -1307,6 +1327,7 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
       <div style={{ ...rowStyle, marginBottom: SPACE['3'] }}>
         <span>Balance {from ? fromMicro(balance, from.decimals) : '—'}{from && me && (() => {
           // The poor-o-meter. His words, our balances.
+          if (LITE) return null
           const n = Number(balance) / 10 ** from.decimals
           const tag = n === 0 ? 'the poor. we debate you anyway.' : n < 10 ? 'size is not size.' : n < 100 ? 'steady.' : n < 1000 ? 'deploying capital.' : 'lad.'
           return <span style={{ color: C.textWhisper, fontStyle: 'italic' }}> · {tag}</span>
@@ -1349,7 +1370,7 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
         <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: 'rgba(0,0,0,0.22)', borderRadius: 10, marginBottom: SPACE['3'] }}>
           <Row k='Rate' v={`1 ${from.label} ≈ ${fromMicro((Number(sim.ret) / Math.max(1, Number(micro))) * 10 ** from.decimals, to.decimals)} ${to.label}`} />
           <Row k='Price impact' v={`${fromMicro(sim.spread, to.decimals)} ${to.label} · ${impact.toFixed(2)}%`} hi={impact > 3} />
-          <Row k={`Pool fee ${poolFeeBps / 100}% (to LPs)`} v={`${fromMicro(sim.comm, to.decimals)} ${to.label}`} />
+          <Row k={LITE ? `Pool fee (${poolFeeText(pool, poolFeeBps)})` : `Pool fee ${poolFeeBps / 100}% (to LPs)`} v={`${fromMicro(sim.comm, to.decimals)} ${to.label}`} />
           {feeBps > 0 && <Row k='Protocol fee' v={crystal ? '0 · Crystal' : `${fromMicro(fee, from.decimals)} ${from.label}`} hi={crystal} />}
           <Row k={`Min. received (${slippage}% slippage)`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
         </div>
@@ -1367,11 +1388,11 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
       </div>
 
       {impact > 5 && <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'] }}>High price impact — this pool is thin. Trade smaller or add liquidity first.</div>}
-      {insufficient && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>Not enough minerals. ({from?.label})</div>}
+      {insufficient && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{LITE ? 'Not enough balance.' : 'Not enough minerals.'} ({from?.label})</div>}
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
       {txHash && !err && (
         <div style={{ fontSize: TEXT.xs.size, color: C.success, marginBottom: SPACE['2'], display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <span>{quip || '✓ Swapped.'}</span>
+          <span>{(!LITE && quip) || '✓ Swapped.'}</span>
           {txHash !== 'ok' && <a href={finderTx(txHash)} target='_blank' rel='noreferrer' style={{ color: C.goldLit, fontWeight: 700 }}>View on Terrascope →</a>}
         </div>
       )}
@@ -1396,10 +1417,10 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
           <div className='terra-receipt-row'><span>paid</span><span>{receipt.amtIn} {receipt.from}</span></div>
           <div className='terra-receipt-row'><span>received (est.)</span><span>{receipt.amtOut} {receipt.to}</span></div>
           {feeBps > 0 && <div className='terra-receipt-row'><span>protocol fee</span><span>{receipt.fee}</span></div>}
-          <div className='terra-receipt-row'><span>pool fee</span><span>{poolFeeBps} bps → LPs</span></div>
+          <div className='terra-receipt-row'><span>pool fee</span><span>{LITE ? poolFeeText(pool, poolFeeBps) : `${poolFeeBps} bps → LPs`}</span></div>
           {receipt.height ? <div className='terra-receipt-row'><span>block</span><span>#{receipt.height.toLocaleString('en-US')}</span></div> : null}
           <div className='terra-receipt-row'><span>tx</span><span>{receipt.tx === 'ok' ? '—' : <a href={finderTx(receipt.tx)} target='_blank' rel='noreferrer' style={{ color: 'inherit' }}>{receipt.tx.slice(0, 8)}…{receipt.tx.slice(-4)} ↗</a>}</span></div>
-          <div className='terra-receipt-f'>감사합니다 · thank you · steady lads 🫡</div>
+          <div className='terra-receipt-f'>{LITE ? 'thank you' : '감사합니다 · thank you · steady lads 🫡'}</div>
         </div>
       )}
 
@@ -1408,7 +1429,7 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
             onMouseDown={() => { holdT.current = setTimeout(() => setHolding(true), 650) }}
             onMouseUp={() => { if (holdT.current) clearTimeout(holdT.current); setHolding(false) }}
             onMouseLeave={() => { if (holdT.current) clearTimeout(holdT.current); setHolding(false) }}>
-            {swap.isLoading ? 'Confirm in wallet…' : holding ? 'Deploying capital… 🫡' : impact > 5 ? 'Swap anyway · steady lads' : 'Swap'}
+            {swap.isLoading ? 'Confirm in wallet…' : holding ? (LITE ? 'Swapping…' : 'Deploying capital… 🫡') : impact > 5 ? (LITE ? 'Swap anyway' : 'Swap anyway · steady lads') : 'Swap'}
           </button>
         : <div className='terra-connect-cta'><WalletButton /></div>}
       {pool && from && to && (
@@ -1474,19 +1495,19 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
   const plain = (n: number, places: number) => (Number.isFinite(n) && n > 0 ? n.toFixed(places).replace(/\.?0+$/, '') : '')
   const onA0 = (v: string) => {
     setA0(v)
-    if (!p.empty) setA1(v ? plain(Number(v) * p.price, dp(t1)) : '')
+    if (!p.empty) setA1(v ? plain(Number(v) * p.reserveRatio, dp(t1)) : '')
   }
   const onA1 = (v: string) => {
     setA1(v)
-    if (!p.empty && p.price > 0) setA0(v ? plain(Number(v) / p.price, dp(t0)) : '')
+    if (!p.empty && p.reserveRatio > 0) setA0(v ? plain(Number(v) / p.reserveRatio, dp(t0)) : '')
   }
   const human = (micro: string, t: KnownToken) => Number(micro) / 10 ** t.decimals
   // Gas is paid in LUNA, so a LUNA side keeps a little back.
   const spendable = (i: 0 | 1) => Math.max(0, human(bal[i], p.tokens[i]) - (assetId(p.tokens[i].info) === 'uluna' ? 0.5 : 0))
   /** The largest both-sides deposit this wallet can fund at the pool ratio. */
   const fillMax = () => {
-    if (p.empty || !(p.price > 0)) return
-    const x = Math.min(spendable(0), spendable(1) / p.price) * 0.999
+    if (p.empty || !(p.reserveRatio > 0)) return
+    const x = Math.min(spendable(0), spendable(1) / p.reserveRatio) * 0.999
     if (x > 0) onA0(plain(x, dp(t0)))
   }
   const short: [number, number] = [
@@ -1714,7 +1735,8 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
               ⚠ This pool is {(p.deviation > 1 ? p.deviation : 1 / p.deviation).toFixed(1)}× off market. Adding at this ratio hands the difference to whoever arbitrages it. Swap it back toward {fmtPrice(p.marketPrice ?? 0)} {t1.label} per {t0.label} first, or accept that you are the exit liquidity.
             </div>
           )}
-          {!p.empty && (
+          {/* Zap sizing is constant-product maths, so it is offered on xyk pools only. */}
+          {!p.empty && p.pairType === 'xyk' && (
             <div style={{ display: 'flex', gap: SPACE['2'] }}>
               {(['both', 'zap'] as const).map(sd => (
                 <button key={sd} type='button' onClick={() => setSide(sd)} style={{ ...ghostBtn, padding: '3px 10px', color: side === sd ? C.goldLit : C.textMuted, borderColor: side === sd ? C.goldCore : C.divider }}>
@@ -1723,7 +1745,7 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
               ))}
             </div>
           )}
-          {side === 'both' || p.empty ? (
+          {side === 'both' || p.empty || p.pairType !== 'xyk' ? (
             <>
               <div style={{ display: 'flex', gap: SPACE['2'] }}>
                 <input style={field} type='number' min='0' step='any' placeholder={`0.0 ${t0.label}`} value={a0} onChange={e => onA0(e.target.value)} />
@@ -1743,7 +1765,7 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
               {me && !p.empty && (short[0] > 0 || short[1] > 0) && (() => {
                 const gaps = ([0, 1] as const).filter(i => short[i] > 0)
                 const one = gaps.length === 1 ? gaps[0] : null
-                const imp = one == null ? null : impactFor(one, short[one])
+                const imp = one == null || p.pairType !== 'xyk' ? null : impactFor(one, short[one])
                 return (
                   <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6, padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${C.dividerWarm}` }}>
                     You need {gaps.map((i, k) => {
@@ -1793,7 +1815,7 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
                   </div>
                 )
               })()}
-              {zInsufficient && <div style={{ fontSize: TEXT.xs.size, color: C.alert }}>Not enough minerals. ({zTok.label})</div>}
+              {zInsufficient && <div style={{ fontSize: TEXT.xs.size, color: C.alert }}>{LITE ? 'Not enough balance.' : 'Not enough minerals.'} ({zTok.label})</div>}
               {me
                 ? <button type='button' style={{ ...primaryBtn, opacity: canZap ? 1 : 0.5 }} disabled={!canZap} onClick={doZap}>
                     {zap.isLoading ? 'Confirm in wallet…' : zPlan ? 'Zap in ⚡ · one signature' : 'Enter an amount'}
@@ -2526,7 +2548,7 @@ function Hero({ poolFeeBps, onReplay, onToast, me, right }: { poolFeeBps: number
   const clicks = useRef(0)
   const wordmarkClick = () => {
     clicks.current += 1
-    if (clicks.current >= 3) { clicks.current = 0; onReplay() }
+    if (clicks.current >= 3) { clicks.current = 0; if (!LITE) onReplay() }
     setTimeout(() => { clicks.current = 0 }, 900)
   }
   return (
@@ -2539,7 +2561,7 @@ function Hero({ poolFeeBps, onReplay, onToast, me, right }: { poolFeeBps: number
           const who = me ? `${me.slice(0, 9)}…${me.slice(-4)}` : ''
           void who
           const greet = gm ? `${gm} · ` : ''
-          return `${greet}Experimental`
+          return LITE ? 'Unofficial · Astroport pools' : `${greet}Experimental`
         })()}
       </div>
       <h1 style={{
@@ -2552,7 +2574,7 @@ function Hero({ poolFeeBps, onReplay, onToast, me, right }: { poolFeeBps: number
           <img src='/img/terra-globe.svg' alt='' aria-hidden width={52} height={49} draggable={false}
             style={{ width: '0.82em', height: 'auto', flex: 'none', filter: 'drop-shadow(0 2px 10px rgba(52,88,184,0.45))' }} />
           {/* Like the original lockup: "Terra" heavy, the product word light. */}
-          <span><span style={{ fontWeight: 700 }}>Terra</span> <span style={{ fontWeight: 300, letterSpacing: '0' }}>Swap</span></span>
+          <span><span style={{ fontWeight: 700 }}>Terra</span> <span style={{ fontWeight: 300, letterSpacing: '0' }}>{LITE ? 'Pools' : 'Swap'}</span></span>
         </span>
       </h1>
      </div>
@@ -2656,8 +2678,9 @@ function SwapPageInner() {
   }, [soundOn])
   useEffect(() => { if (party) sound('party') }, [party])
 
-  // `?` opens the shortcut sheet, esc closes it.
+  // `?` opens the shortcut sheet, esc closes it. None of the keys exist in Astroport mode.
   useEffect(() => {
+    if (LITE) return
     const on = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return
@@ -2677,7 +2700,7 @@ function SwapPageInner() {
   useEffect(() => {
     try {
       const who = new URLSearchParams(window.location.search).get('who') || ''
-      if (/^terra1[0-9a-z]{38,}$/.test(who)) { setSpotlight(who); setTab('board') }
+      if (!LITE && /^terra1[0-9a-z]{38,}$/.test(who)) { setSpotlight(who); setTab('board') }
     } catch { /* ssr */ }
   }, [])
   useEffect(() => {
@@ -2703,6 +2726,7 @@ function SwapPageInner() {
 
   // Type a word anywhere on the page (not in a field). Some of them answer.
   useEffect(() => {
+    if (LITE) return
     let buf = ''
     const on = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null
@@ -2762,6 +2786,7 @@ function SwapPageInner() {
   // Retro-Terra load splash: once per browser session, skipped for anyone who
   // asked their OS to reduce motion.
   useEffect(() => {
+    if (LITE) return
     try {
       const seen = sessionStorage.getItem('terraswap_intro_v1')
       const rm = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -2788,13 +2813,14 @@ function SwapPageInner() {
   /* Pools that have drifted off the reference, sized and priced. Bots skip
      these — the gaps are worth a few dollars, which is under the cost of
      running a bot and squarely in reach of a person who is already looking. */
-  const arbs = useMemo(() => (data?.live ? arbPlans(data.pools, marketPx) : []), [data, marketPx])
+  // Not in Astroport mode: the sizing maths is constant-product, and most of their depth is concentrated.
+  const arbs = useMemo(() => (data?.live && !LITE ? arbPlans(data.pools, marketPx) : []), [data, marketPx])
 
   /* SOLID pairs first, then deepest first. That is the book people came for,
      and depth is the only thing that decides whether a trade is worth making.
      Empty pools sink to the bottom without being asked to. */
   const sortedPools = useMemo(() => {
-    const solidFirst = (p: PoolView) => (p.tokens.some(t => t.key === 'SOLID') ? 0 : 1)
+    const solidFirst = (p: PoolView) => (!LITE && p.tokens.some(t => t.key === 'SOLID') ? 0 : 1)
     return [...(data?.pools ?? [])].sort((a, b) => solidFirst(a) - solidFirst(b) || (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))
   }, [data])
 
@@ -2811,6 +2837,7 @@ function SwapPageInner() {
   /** Who holds each pool's LP. Arrives on the side; the page never waits for it. */
   const [holders, setHolders] = useState<Record<string, PoolHolders>>({})
   useEffect(() => {
+    if (LITE) return
     let alive = true
     const pull = () => fetch('/api/dex-holders').then(r => (r.ok ? r.json() : null)).then((j: HoldersResponse | null) => {
       if (alive && j?.pools) setHolders(j.pools)
@@ -2835,7 +2862,7 @@ function SwapPageInner() {
     try {
       const [d, b] = await Promise.all([
         fetch('/api/dex', { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
-        fetch('/api/dex-leaderboard', { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
+        LITE ? Promise.resolve(null) : fetch('/api/dex-leaderboard', { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
       ])
       if (d) { if (marketRef.current) { annotateMarket(d.pools, marketRef.current); annotateValues(d.pools, marketRef.current) } setData(d) }
       if (b) setBoard(b)
@@ -2868,7 +2895,7 @@ function SwapPageInner() {
   // He notices when you walk in.
   const greeted2 = useRef('')
   useEffect(() => {
-    if (!me || greeted2.current === me) return
+    if (LITE || !me || greeted2.current === me) return
     greeted2.current = me
     setTimeout(() => kwonSay({ q: `gm ${me.slice(0, 9)}…${me.slice(-4)}. Yeah but your size is not size.`, when: 'reacting to your wallet · @stablekwon 2021', pose: 'point' }), 1200)
   }, [me])
@@ -2940,7 +2967,7 @@ function SwapPageInner() {
   return (
     <>
       <Head>
-        <title>Terra Swap</title>
+        <title>{APP_NAME}</title>
         <link rel='preconnect' href='https://fonts.googleapis.com' />
         <link rel='preconnect' href='https://fonts.gstatic.com' crossOrigin='anonymous' />
         <link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800&display=swap' />
@@ -2950,7 +2977,7 @@ function SwapPageInner() {
       {shortcuts && <ShortcutsOverlay onClose={() => setShortcuts(false)} />}
       {game && <CapitalGame onClose={() => setGame(false)} />}
       {tv && data && <TvMode data={data} board={board} onClose={() => setTv(false)} />}
-      {mapOn && data?.live && <Minimap pools={data.pools} board={board} revealed={revealed} onJump={c => { setTab('pools'); setTimeout(() => document.getElementById(`pool-${c}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120) }} />}
+      {!LITE && mapOn && data?.live && <Minimap pools={data.pools} board={board} revealed={revealed} onJump={c => { setTab('pools'); setTimeout(() => document.getElementById(`pool-${c}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120) }} />}
       {ledgerOpen && <LedgerOverlay board={board} pools={data?.pools ?? []} onClose={() => setLedgerOpen(false)} />}
       {toast && <Toast msg={toast.msg} href={toast.href} onDone={clearToast} />}
       {/* Opaque Terra ground that sits ABOVE the Atrium cathedral backdrop
@@ -2978,14 +3005,15 @@ function SwapPageInner() {
           {data?.live && (
             <>
               <div className='terra-tabs' style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
-                {tabBtn('swap', 'Swap')}{tabBtn('pools', `Pools · ${data.pools.length}`)}{tabBtn('create', 'Open a pool')}{tabBtn('board', `Board${board?.rows.length ? ` · ${board.rows.length}` : ''}`)}
-                {/* Terra Predict lives next door, same domain. */}
-                <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, marginLeft: 'auto', whiteSpace: 'nowrap' }}>Predict ↗</Link>
+                {tabBtn('swap', 'Swap')}{tabBtn('pools', `Pools · ${data.pools.length}`)}
+                {!LITE && <>{tabBtn('create', 'Open a pool')}{tabBtn('board', `Board${board?.rows.length ? ` · ${board.rows.length}` : ''}`)}</>}
+                {/* Terra Predict lives next door, same domain. Not part of Astroport mode. */}
+                {!LITE && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, marginLeft: 'auto', whiteSpace: 'nowrap' }}>Predict ↗</Link>}
               </div>
               {tab === 'swap' && <SwapPanel pools={data.pools} crystal={crystal} feeBps={data.feeBps} poolFeeBps={data.poolFeeBps} onDone={refresh} arbs={arbs} preset={preset} onTakeArb={takeArb} />}
               {tab === 'pools' && (
                 data.pools.length === 0
-                  ? <Empty title='No pools yet' body='Open the first one. One signature, gas only. Your name goes to the top of the board and everyone sees it was you.' />
+                  ? <Empty title='No pools yet' body={LITE ? 'Could not read the pool list. Try again in a moment.' : 'Open the first one. One signature, gas only. Your name goes to the top of the board and everyone sees it was you.'} />
                   : <div style={{ display: 'grid', gap: SPACE['3'] }}>{visiblePools.map(p => <div key={p.contract_addr} id={`pool-${p.contract_addr}`}><PoolRow p={p} onDone={refresh} onParty={setParty} act={board?.poolActivity?.[p.contract_addr]} height={data.height} firstHand={board?.firstHands?.[p.contract_addr]} crystal={crystal} badge={(() => {
                     const deepest = data.pools.reduce((b, q) => ((q.tvlUsd ?? 0) > (b?.tvlUsd ?? 0) ? q : b), null as PoolView | null)
                     const counts = board?.poolActivity ?? {}
@@ -3035,25 +3063,40 @@ function SwapPageInner() {
           {!data && <Empty title='Loading…' body='' />}
 
           {/* Below the fold: what this is, the numbers, the wire, and the fun. The panel above is the product. */}
-          {data?.live && (
+          {data?.live && LITE && (
+            <p style={{ color: C.textMuted, margin: `${SPACE['4']}px 0 0`, fontSize: TEXT.xs.size, lineHeight: 1.6 }}>
+              An unofficial, open-source interface to Astroport&apos;s pool contracts on Terra. Not affiliated with Astroport.
+              It adds no fee and holds nothing: every swap and deposit goes straight to the pool contract, and pool fees are whatever that contract charges.
+              Pools of LUNA, USDC, SOLID, CAPA, ROAR, PAXG and wBTC. The code is MIT and anyone can host their own copy.
+            </p>
+          )}
+          {data?.live && !LITE && (
             <p style={{ color: C.textMuted, margin: `${SPACE['4']}px 0 0`, fontSize: TEXT.xs.size, lineHeight: 1.6 }}>
               A decentralized exchange on Terra. Swap LUNA, USDC, SOLID, CAPA, ROAR, PAXG and wBTC, open pools, add liquidity.
               Pool fee {(data.poolFeeBps / 100).toFixed(1)}% to liquidity providers. No protocol fee.
               Audited pool contracts, small amounts, a beta: trade what you are happy to lose.
             </p>
           )}
-          {data?.live && <div style={{ marginTop: SPACE['5'] }}><StatBand data={data} board={board} /></div>}
-          {data?.live && <Wire board={board} pools={data.pools} onOpen={() => setLedgerOpen(true)} />}
-          {data?.live && (
+          {data?.live && !LITE && <div style={{ marginTop: SPACE['5'] }}><StatBand data={data} board={board} /></div>}
+          {data?.live && !LITE && <Wire board={board} pools={data.pools} onOpen={() => setLedgerOpen(true)} />}
+          {data?.live && !LITE && (
             <p style={{ fontSize: TEXT.xs.size, color: C.goldLit, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px`, paddingLeft: SPACE['3'], letterSpacing: '0.02em' }}>
               ✦ We keep a list of who was here first. The earliest hands in the earliest pools get remembered.
               What that comes to mean, you find out. Nobody knows what happens next. That is the fun.
             </p>
           )}
-          {data?.live && <Ticker extra={data.pools.every(p => p.empty) ? ['0 pools with liquidity. the board is blank. move first and own the top of it.'] : undefined} />}
-          {data?.live && <KwonLine recent={board?.recent} />}
-          {data?.live && <Credits board={board} />}
-          <Footer height={data?.height} seoul={data?.seoul} soundOn={soundOn} onToggleSound={toggleSound} onSecret={() => setParty({ emoji: '🐎', title: 'STEADY LADS', sub: 'Seven taps on the moon. You found the thumb code. 🫡' })} />
+          {data?.live && !LITE && <Ticker extra={data.pools.every(p => p.empty) ? ['0 pools with liquidity. the board is blank. move first and own the top of it.'] : undefined} />}
+          {data?.live && !LITE && <KwonLine recent={board?.recent} />}
+          {data?.live && !LITE && <Credits board={board} />}
+          {LITE ? (
+            <div style={{ marginTop: SPACE['5'], paddingTop: SPACE['3'], borderTop: `1px solid ${C.divider}`, display: 'flex', flexWrap: 'wrap', gap: SPACE['2'], fontFamily: TERRA_FONT, fontSize: '0.64rem', letterSpacing: '0.08em', color: C.textMuted, textTransform: 'uppercase' }}>
+              <span>phoenix-1{data?.height ? ` #${data.height.toLocaleString('en-US')}` : ''}</span>
+              <span>·</span>
+              <a href='https://github.com/solid-online/terra-swap' target='_blank' rel='noreferrer' style={{ color: C.textMuted }}>source · MIT ↗</a>
+            </div>
+          ) : (
+            <Footer height={data?.height} seoul={data?.seoul} soundOn={soundOn} onToggleSound={toggleSound} onSecret={() => setParty({ emoji: '🐎', title: 'STEADY LADS', sub: 'Seven taps on the moon. You found the thumb code. 🫡' })} />
+          )}
         </article>
       </main>
 
@@ -3362,10 +3405,12 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
   return {
     props: {
       og: {
-        title: who ? `${short} on Terra Swap` : 'Terra Swap',
-        image: `${base}/api/og/swap${who ? `?who=${who}` : ''}`,
+        title: LITE ? 'Terra Pools' : who ? `${short} on Terra Swap` : 'Terra Swap',
+        image: LITE ? `${base}/img/terra-globe-180.png` : `${base}/api/og/swap${who ? `?who=${who}` : ''}`,
         contract: '', token: '',
-        description: who
+        description: LITE
+          ? `An unofficial, open-source interface to Astroport's pool contracts on Terra. No fee, no keys, self-hostable. Not affiliated with Astroport.`
+          : who
           ? `${short} is written down on the Terra Swap board. A DEX for Terra built in a night for the price of gas. Steady lads.`
           : 'A DEX for Terra, shipped overnight on audited pool code, with every fee handed back to the people who show up. No grant. No permission. Steady lads.',
         url: `${base}/${who ? `?who=${who}` : ''}`,
