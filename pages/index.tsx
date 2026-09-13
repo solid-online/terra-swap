@@ -3814,7 +3814,7 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
           ? `An unofficial, open-source interface to Astroport's pool contracts on Terra. No fee, no keys, self-hostable. Not affiliated with Astroport.`
           : who
           ? `${short} is written down on the Terra Swap board. A DEX for Terra built in a night for the price of gas. Steady lads.`
-          : 'A DEX for Terra, shipped overnight on audited pool code, with every fee handed back to the people who show up. No grant. No permission. Steady lads.',
+          : 'A DEX for Terra, shipped overnight on audited pool code, with every fee handed back to the people who show up. No permission. Steady lads.',
         url: `${base}/${who ? `?who=${who}` : ''}`,
         type: 'website',
         // The Terra globe as this page's favicon (terra-money/assets); PNG for Safari/iOS home screen.
