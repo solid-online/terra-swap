@@ -14,7 +14,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kv as vercelKv } from '@vercel/kv'
-import { isDexLive, queryPairs, assetId, tokenFor, type AssetInfo } from 'lib/dex'
+import { isDexLive, queryPairs, queryPairsOf, knownPairs, assetId, tokenFor, AWAY_VENUE, VENUE_FACTORY, type AssetInfo } from 'lib/dex'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
@@ -104,8 +104,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   if (cached && Date.now() - cached.at < CACHE_MS) return res.status(200).json(cached.body)
 
   // Confirm the pair belongs to our factory and learn its asset order.
-  const pairs = await queryPairs()
-  const meta = pairs.find(p => p.contract_addr === pair)
+  // Either site's pool: the swap panel charts whichever pool is deepest for the pair.
+  const meta = (await queryPairs()).find(p => p.contract_addr === pair)
+    ?? knownPairs(await queryPairsOf(VENUE_FACTORY[AWAY_VENUE])).find(p => p.contract_addr === pair)
   if (!meta) return res.status(200).json({ pair, points: [], baseId: '', quoteId: '', trades: 0, volumeQuote: 0, tape: [] })
 
   const base = meta.asset_infos[0], quote = meta.asset_infos[1]

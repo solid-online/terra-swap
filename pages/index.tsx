@@ -19,7 +19,7 @@ import { isCrystalHolder } from 'lib/holders'
 import {
   KNOWN_TOKENS, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
-  lpPosition, lpConcentration, IS_ASTRO,
+  lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_NAME,
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
 } from 'lib/dex'
 import { arbPlans, fmtAmount, fmtUsd, totalUsd, type ArbPlan } from 'lib/arb'
@@ -27,10 +27,12 @@ import type { DexResponse } from 'pages/api/dex'
 import type { BoardResponse, PoolActivity } from 'pages/api/dex-leaderboard'
 import type { LpFlow } from 'lib/dex-ledger'
 import type { PricesResponse } from 'pages/api/dex-prices'
+import type { VenueResponse } from 'pages/api/dex-venue'
+import { quoteBest, executionLegs, worstCaseOut, routeText, reachable, quoteLoop, planRoutedZap, type Quotes, type Loop, type RoutedZap } from 'lib/route'
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
-import { useSwap, useProvideLiquidity, useWithdrawLiquidity, useCreatePair, useZap } from 'components/transactions/useDex'
+import { useRouteSwap, useProvideLiquidity, useWithdrawLiquidity, useCreatePair, useZap } from 'components/transactions/useDex'
 import { humanizeTxError } from 'lib/errors'
 
 type Tab = 'swap' | 'pools' | 'create' | 'board'
@@ -51,6 +53,10 @@ const poolFeeText = (p: PoolView | null | undefined, poolFeeBps: number) => {
   if (!p) return 'set by the pool'
   return p.pairType === 'xyk' ? '0.3%, set by the pool' : p.pairType === 'stable' ? '0.05%, set by the pool' : 'dynamic, set by the pool'
 }
+/** One leg's pool fee, for a pool on either site. Terra Swap's factory sends all of it to LPs. */
+const poolFeeTextFor = (p: PoolView) => p.venue === 'terraswap'
+  ? '0.3% to LPs on Terra Swap'
+  : `${p.pairType === 'xyk' ? '0.3%' : p.pairType === 'stable' ? '0.05%' : 'dynamic'} on Astroport`
 
 // Retro Terra 2020 palette — deep royal navy, electric Terra blue, cool white.
 // Scoped to this page: it shadows the shared Atrium tokens (gold/ember roles
@@ -1092,31 +1098,32 @@ function PriceChart({ pool, from, to, compact }: { pool: PoolView; from: KnownTo
 /** A pair and a size handed to the swap panel from somewhere else on the page. */
 export interface SwapPreset { fromId: string; toId: string; amount: string; n: number }
 
-function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, onTakeArb }: {
-  pools: PoolView[]; crystal: boolean; feeBps: number; poolFeeBps: number; onDone: () => void
+function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, onTakeArb }: {
+  pools: PoolView[]; venuePools: PoolView[]; crystal: boolean; feeBps: number; poolFeeBps: number; onDone: () => void
   arbs?: ArbPlan[]; preset?: SwapPreset | null; onTakeArb?: (p: ArbPlan) => void
 }) {
   const me = useMyAddress()
-  const swap = useSwap()
-  const tradable = pools.filter(p => !p.empty)
+  const swap = useRouteSwap()
+  const tradable = useMemo(() => pools.filter(p => !p.empty), [pools])
+  // Both sites' pools. A swap takes whichever path pays best (lib/route).
+  const routePools = useMemo(() => [...tradable, ...venuePools.filter(p => !p.empty)], [tradable, venuePools])
   const tokens = useMemo(() => {
     const m = new Map<string, KnownToken>()
-    for (const p of tradable) for (const t of p.tokens) m.set(assetId(t.info), t)
+    for (const p of routePools) for (const t of p.tokens) m.set(assetId(t.info), t)
     return Array.from(m.values())
-  }, [tradable])
+  }, [routePools])
 
   const [fromId, setFromId] = useState('')
   const [toId, setToId] = useState('')
   const [amount, setAmount] = useState('')
   const [slippage, setSlippage] = useState('1')
   const [balance, setBalance] = useState('0')
-  const [sim, setSim] = useState<{ ret: string; spread: string; comm: string } | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [txHash, setTxHash] = useState<string | null>(null)
   const [quip, setQuip] = useState('')
   const [holding, setHolding] = useState(false)
   const [phase, setPhase] = useState<0 | 1 | 2 | 3>(0)
-  const [receipt, setReceipt] = useState<{ from: string; to: string; amtIn: string; amtOut: string; fee: string; tx: string; height?: number } | null>(null)
+  const [receipt, setReceipt] = useState<{ from: string; to: string; amtIn: string; amtOut: string; fee: string; tx: string; height?: number; route?: string } | null>(null)
   const holdT = useRef<ReturnType<typeof setTimeout> | null>(null)
   const amountRef = useRef<HTMLInputElement>(null)
 
@@ -1129,16 +1136,8 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
   }, [tokens, fromId, tradable])
 
   const from = tokens.find(t => assetId(t.info) === fromId) ?? null
-  const toOptions = useMemo(() => {
-    if (!from) return []
-    const ids = new Set<string>()
-    for (const p of tradable) {
-      if (p.tokens.some(t => sameAsset(t.info, from.info))) {
-        for (const t of p.tokens) if (!sameAsset(t.info, from.info)) ids.add(assetId(t.info))
-      }
-    }
-    return tokens.filter(t => ids.has(assetId(t.info)))
-  }, [from, tradable, tokens])
+  // Anything reachable in one or two hops across both sites.
+  const toOptions = useMemo(() => (from ? reachable(routePools, from, tokens) : []), [from, routePools, tokens])
   useEffect(() => {
     if (toOptions.find(t => assetId(t.info) === toId)) return
     // Default to the other side of the deepest pool the pay token sits in, so
@@ -1166,13 +1165,13 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
   }, [wantTo, toOptions])
 
   const to = toOptions.find(t => assetId(t.info) === toId) ?? null
-  // Several pools can hold the same pair (Astroport keeps xyk and concentrated
-  // side by side), so route through the deepest one.
+  // The deepest direct pool for the pair on either site. The chart, the tab
+  // title and the fee line read from it; the trade itself follows the route.
   const pool = useMemo(() => {
     if (!from || !to) return null
-    const both = tradable.filter(p => p.tokens.some(t => sameAsset(t.info, from.info)) && p.tokens.some(t => sameAsset(t.info, to.info)))
+    const both = routePools.filter(p => p.tokens.some(t => sameAsset(t.info, from.info)) && p.tokens.some(t => sameAsset(t.info, to.info)))
     return both.sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))[0] ?? null
-  }, [from, to, tradable])
+  }, [from, to, routePools])
 
   useEffect(() => {
     if (!me || !from) { setBalance('0'); return }
@@ -1181,27 +1180,35 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
 
   const micro = from ? toMicro(amount, from.decimals) : null
   const debounced = useDebounced(micro, 350)
+  // Quote every path on both sites. A background refresh of the pools
+  // re-quotes quietly; only a new pair or amount clears the number shown.
+  const [quotes, setQuotes] = useState<Quotes | null>(null)
+  const quoteKey = useRef('')
   useEffect(() => {
     let alive = true
-    setSim(null)
-    if (!pool || !from || !debounced || debounced === '0') return
-    simulateSwap(pool.contract_addr, { info: from.info, amount: debounced }).then(s => {
-      if (alive && s) setSim({ ret: s.return_amount, spread: s.spread_amount, comm: s.commission_amount })
-    })
+    const key = `${fromId}|${toId}|${debounced ?? ''}`
+    if (key !== quoteKey.current) { quoteKey.current = key; setQuotes(null) }
+    if (!from || !to || !debounced || debounced === '0') return
+    quoteBest(routePools, from, to, debounced, HOME_VENUE).then(q => { if (alive) setQuotes(q) }).catch(() => {})
     return () => { alive = false }
-  }, [pool, from, debounced])
+  }, [routePools, from, to, fromId, toId, debounced])
+  const route = quotes?.best ?? null
+  const sim = route ? { ret: route.outMicro } : null
 
   const fee = '0'
-  const impact = sim ? Number(sim.spread) / Math.max(1, Number(sim.ret) + Number(sim.spread)) * 100 : 0
+  const impact = route ? route.impactPct : 0
   const insufficient = !!micro && BigInt(micro) + BigInt(fee) > BigInt(balance || '0')
   const slip = Math.min(0.5, Math.max(0.001, Number(slippage) / 100 || 0.01))
-  const minOut = sim ? (BigInt(sim.ret) * BigInt(Math.round((1 - slip) * 10_000)) / BigInt(10_000)).toString() : '0'
-  const canSwap = !!me && !!pool && !!from && !!to && !!micro && micro !== '0' && !!sim && !insufficient && !swap.isLoading
+  const legsToSign = route ? executionLegs(route, slip) : []
+  const minOut = route ? worstCaseOut(route, slip) : '0'
+  // The quote must be for the amount on screen, not the one before the debounce caught up.
+  const canSwap = !!me && !!route && !!from && !!to && !!micro && micro === route.legs[0].offerMicro
+    && legsToSign.every(l => l.offerAmount !== '0') && !insufficient && !swap.isLoading
 
   const flip = useCallback(() => {
     if (!from || !to) return
     const nf = toId, nt = fromId
-    setFromId(nf); setToId(nt); setSim(null); setErr(null)
+    setFromId(nf); setToId(nt); setQuotes(null); setErr(null)
   }, [from, to, toId, fromId])
 
   // Keyboard: `/` jumps to the amount, `f` flips, 1/2/3 pick slippage. Only
@@ -1232,21 +1239,19 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
   const egg = from && !LITE ? amountEgg(amount, from.label) : null
 
   const go = async () => {
-    if (!canSwap || !pool || !from || !micro || !sim) return
+    if (!canSwap || !route || !from || !micro) return
     setErr(null); setReceipt(null)
     // The stepper: asking your wallet → broadcasting → written down.
     setPhase(1)
     const p2 = setTimeout(() => setPhase(2), 2500)
     try {
-      const r = await swap.mutateAsync({
-        pair: pool.contract_addr, offer: { info: from.info, amount: micro },
-        expectedReturn: sim.ret, maxSpread: slip, crystalHolder: crystal, sender: me,
-      })
+      const r = await swap.mutateAsync({ legs: legsToSign, maxSpread: slip, sender: me })
       clearTimeout(p2); setPhase(3); setTimeout(() => setPhase(0), 2600)
       const hash = (r as { transactionHash?: string })?.transactionHash ?? 'ok'
       if (to) setReceipt({
-        from: from.label, to: to.label, amtIn: fromMicro(micro, from.decimals, 6), amtOut: fromMicro(sim.ret, to.decimals, 6),
+        from: from.label, to: to.label, amtIn: fromMicro(micro, from.decimals, 6), amtOut: fromMicro(route.outMicro, to.decimals, 6),
         fee: crystal ? '0 (Crystal)' : `${fromMicro(fee, from.decimals, 6)} ${from.label}`, tx: hash, height: (r as { height?: number })?.height,
+        route: route.legs.length > 1 || route.legs[0].pool.venue !== HOME_VENUE ? routeText(route) : undefined,
       })
       setTimeout(() => setReceipt(null), 20000)
       setTxHash(hash)
@@ -1303,7 +1308,7 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
       </div>
 
       {pool && from && to && <PriceChart pool={pool} from={from} to={to} compact />}
-      {pool && from && to && pool.deviation != null && (pool.deviation > 1.25 || pool.deviation < 0.8) && (() => {
+      {pool && from && to && pool.deviation != null && (pool.deviation > 1.25 || pool.deviation < 0.8) && (!route || (route.legs.length === 1 && route.legs[0].pool.contract_addr === pool.contract_addr)) && (() => {
         const off = pool.deviation > 1 ? pool.deviation : 1 / pool.deviation
         const fromIsBase = sameAsset(from.info, pool.tokens[0].info)
         // is the token you RECEIVE cheap here (good for you) or expensive (bad)?
@@ -1366,13 +1371,27 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
         <TokenSelect value={toId} onChange={setToId} options={toOptions} />
       </div>
 
-      {sim && from && to && pool && (
+      {route && from && to && (
         <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: 'rgba(0,0,0,0.22)', borderRadius: 10, marginBottom: SPACE['3'] }}>
-          <Row k='Rate' v={`1 ${from.label} ≈ ${fromMicro((Number(sim.ret) / Math.max(1, Number(micro))) * 10 ** from.decimals, to.decimals)} ${to.label}`} />
-          <Row k='Price impact' v={`${fromMicro(sim.spread, to.decimals)} ${to.label} · ${impact.toFixed(2)}%`} hi={impact > 3} />
-          <Row k={LITE ? `Pool fee (${poolFeeText(pool, poolFeeBps)})` : `Pool fee ${poolFeeBps / 100}% (to LPs)`} v={`${fromMicro(sim.comm, to.decimals)} ${to.label}`} />
+          <Row k='Route' v={routeText(route)} />
+          {(() => {
+            // What routing is worth, measured against this site's own pools alone.
+            if (!route.legs.some(l => l.pool.venue !== HOME_VENUE)) return null
+            const home = quotes?.home
+            if (!home) return <Row k={`${VENUE_NAME[HOME_VENUE]} alone`} v='no path for this pair' />
+            const gain = (Number(route.outMicro) / Math.max(1, Number(home.outMicro)) - 1) * 100
+            return gain > 0.05 ? <Row k={`vs ${VENUE_NAME[HOME_VENUE]} alone`} v={`+${gain >= 100 ? gain.toFixed(0) : gain.toFixed(1)}% more ${to.label}`} hi /> : null
+          })()}
+          <Row k='Rate' v={`1 ${from.label} ≈ ${fromMicro((Number(route.outMicro) / Math.max(1, Number(micro))) * 10 ** from.decimals, to.decimals)} ${to.label}`} />
+          <Row k='Price impact' v={`${impact.toFixed(2)}%`} hi={impact > 3} />
+          <Row k={route.legs.length > 1 ? 'Pool fees' : 'Pool fee'} v={route.legs.map(l => poolFeeTextFor(l.pool)).join(' · ')} />
           {feeBps > 0 && <Row k='Protocol fee' v={crystal ? '0 · Crystal' : `${fromMicro(fee, from.decimals)} ${from.label}`} hi={crystal} />}
-          <Row k={`Min. received (${slippage}% slippage)`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
+          <Row k={`Min. received (${slippage}% ${route.legs.length > 1 ? 'per leg' : 'slippage'})`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
+          {route.legs.length > 1 && (
+            <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>
+              One transaction, {route.legs.length} swaps. If any leg would land past its limit, all of it reverts. A sliver of {route.legs[0].ask.label} from the first leg can stay in your wallet.
+            </div>
+          )}
         </div>
       )}
 
@@ -1387,7 +1406,7 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
         ⌨ <b style={{ color: C.textMuted }}>/</b> amount · <b style={{ color: C.textMuted }}>f</b> flip · <b style={{ color: C.textMuted }}>1 2 3</b> slippage
       </div>
 
-      {impact > 5 && <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'] }}>High price impact — this pool is thin. Trade smaller or add liquidity first.</div>}
+      {impact > 5 && <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'] }}>High price impact: even the best path is thin for this size. Trade smaller.</div>}
       {insufficient && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{LITE ? 'Not enough balance.' : 'Not enough minerals.'} ({from?.label})</div>}
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
       {txHash && !err && (
@@ -1417,7 +1436,7 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
           <div className='terra-receipt-row'><span>paid</span><span>{receipt.amtIn} {receipt.from}</span></div>
           <div className='terra-receipt-row'><span>received (est.)</span><span>{receipt.amtOut} {receipt.to}</span></div>
           {feeBps > 0 && <div className='terra-receipt-row'><span>protocol fee</span><span>{receipt.fee}</span></div>}
-          <div className='terra-receipt-row'><span>pool fee</span><span>{LITE ? poolFeeText(pool, poolFeeBps) : `${poolFeeBps} bps → LPs`}</span></div>
+          <div className='terra-receipt-row'><span>{receipt.route ? 'route' : 'pool fee'}</span><span>{receipt.route ?? (LITE ? poolFeeText(pool, poolFeeBps) : `${poolFeeBps} bps → LPs`)}</span></div>
           {receipt.height ? <div className='terra-receipt-row'><span>block</span><span>#{receipt.height.toLocaleString('en-US')}</span></div> : null}
           <div className='terra-receipt-row'><span>tx</span><span>{receipt.tx === 'ok' ? '—' : <a href={finderTx(receipt.tx)} target='_blank' rel='noreferrer' style={{ color: 'inherit' }}>{receipt.tx.slice(0, 8)}…{receipt.tx.slice(-4)} ↗</a>}</span></div>
           <div className='terra-receipt-f'>{LITE ? 'thank you' : '감사합니다 · thank you · steady lads 🫡'}</div>
@@ -1439,6 +1458,89 @@ function SwapPanel({ pools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, o
         </div>
       )}
     </Card>
+  )
+}
+
+// ─── Closing a gap in one transaction ───────────────────────────
+
+const LOOP_SLIP = 0.005
+
+/**
+ * "Take it", done properly. The old button handed the swap panel one side of
+ * the trade and left the person holding the other token. This buys the cheap
+ * side in the drifted pool and sells it straight back through the best path
+ * elsewhere, in one transaction, ending in the token it started with. It is
+ * offered only when even the worst case, every leg slipping to its limit,
+ * ends ahead. First come: the gap moves on every trade.
+ */
+function LoopPanel({ plan, pools, onClose, onOneSided, onDone }: {
+  plan: ArbPlan; pools: PoolView[]; onClose: () => void; onOneSided: (p: ArbPlan) => void; onDone: () => void
+}) {
+  const me = useMyAddress()
+  const run = useRouteSwap()
+  const poolsRef = useRef(pools)
+  poolsRef.current = pools
+  const [loop, setLoop] = useState<Loop | null | undefined>(undefined)
+  const [err, setErr] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    setLoop(undefined); setErr(null); setDone(null)
+    quoteLoop(poolsRef.current, plan.pool, plan.inToken, plan.inMicro, LOOP_SLIP)
+      .then(l => { if (alive) setLoop(l) })
+      .catch(() => { if (alive) setLoop(null) })
+    return () => { alive = false }
+  }, [plan])
+  const start = plan.inToken
+  const amt = (m: string) => fromMicro(m, start.decimals, 6)
+  const go = async () => {
+    if (!loop || !me) return
+    setErr(null)
+    try {
+      const r = await run.mutateAsync({ legs: executionLegs(loop.quote, LOOP_SLIP), maxSpread: LOOP_SLIP, sender: me, memo: 'close a gap' })
+      setDone((r as { transactionHash?: string })?.transactionHash ?? 'ok')
+      onDone()
+    } catch (e) { setErr(humanizeTxError(e)) }
+  }
+  return (
+    <div style={{ marginBottom: SPACE['3'] }}>
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: SPACE['2'], flexWrap: 'wrap' }}>
+          <Section title='Close the gap' />
+          <span style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>{plan.pool.label} · {plan.off.toFixed(2)}× off market</span>
+          <button type='button' onClick={onClose} style={{ ...ghostBtn, marginLeft: 'auto', padding: '2px 8px' }}>close</button>
+        </div>
+        {loop === undefined && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Pricing the way back through both sites…</div>}
+        {loop === null && (
+          <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6 }}>
+            No round trip pays right now: selling back elsewhere costs more than the gap is worth. You can still take one side of it.
+            <div style={{ marginTop: SPACE['2'] }}><button type='button' style={ghostBtn} onClick={() => onOneSided(plan)}>Trade one side instead</button></div>
+          </div>
+        )}
+        {loop && (
+          <div style={{ display: 'grid', gap: SPACE['2'] }}>
+            <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6 }}>
+              {loop.quote.legs.map((l, i) => (
+                <div key={i}>{i + 1} · {l.offer.label} → {l.ask.label} on {VENUE_NAME[l.pool.venue]}{l.pool.contract_addr === plan.pool.contract_addr ? ', the drifted pool' : ''}</div>
+              ))}
+            </div>
+            <div>
+              <Row k='You put in' v={`${amt(loop.inMicro)} ${start.label}`} />
+              <Row k='Expected back' v={`${amt(loop.expectedOutMicro)} ${start.label}`} />
+              <Row k={`At worst, every leg ${LOOP_SLIP * 100}% worse`} v={`${amt(loop.worstOutMicro)} ${start.label} · +${amt(loop.worstGainMicro)}`} hi />
+            </div>
+            <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5 }}>
+              One transaction, before gas. If any leg would land past its limit, all of it reverts and only gas is spent. Someone else can close it first.
+            </div>
+            {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert }}>{err}</div>}
+            {done && <div style={{ fontSize: TEXT.xs.size, color: C.success }}>✓ Closed.{done !== 'ok' && <> <a href={finderTx(done)} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>View tx →</a></>}</div>}
+            {me
+              ? <button type='button' style={{ ...primaryBtn, opacity: run.isLoading || done ? 0.5 : 1 }} disabled={run.isLoading || !!done} onClick={go}>{run.isLoading ? 'Confirm in wallet…' : 'Close it · one signature'}</button>
+              : <div className='terra-connect-cta'><WalletButton /></div>}
+          </div>
+        )}
+      </Card>
+    </div>
   )
 }
 
@@ -1464,7 +1566,7 @@ function Spark({ pair }: { pair: string }) {
   )
 }
 
-function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, spark, arb, onTake, holders, flow }: { p: PoolView; onDone: () => void; onParty: (x: Party) => void; act?: PoolActivity; height?: number; firstHand?: { address: string; height: number; txhash?: string }; crystal: boolean; badge?: 'deepest' | 'hottest'; spark?: boolean; arb?: ArbPlan; onTake?: (a: ArbPlan) => void; holders?: PoolHolders; flow?: LpFlow }) {
+function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, crystal, badge, spark, arb, onTake, holders, flow }: { p: PoolView; routePools: PoolView[]; onDone: () => void; onParty: (x: Party) => void; act?: PoolActivity; height?: number; firstHand?: { address: string; height: number; txhash?: string }; crystal: boolean; badge?: 'deepest' | 'hottest'; spark?: boolean; arb?: ArbPlan; onTake?: (a: ArbPlan) => void; holders?: PoolHolders; flow?: LpFlow }) {
   const me = useMyAddress()
   const provide = useProvideLiquidity()
   const withdraw = useWithdrawLiquidity()
@@ -1534,27 +1636,46 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
   const [zAmt, setZAmt] = useState('')
   const [zBal, setZBal] = useState('0')
   const [zPlan, setZPlan] = useState<ZapPlan | null>(null)
+  const [zRouted, setZRouted] = useState<RoutedZap | null>(null)
   const zTok = p.tokens[zIdx]
   const zMicro = toMicro(zAmt, zTok.decimals)
   const zDebounced = useDebounced(zMicro, 350)
   useEffect(() => { if (me && side === 'zap') queryBalance(me, zTok.info).then(setZBal); else setZBal('0') }, [me, side, zTok, ok])
+  // Routing pools refresh in the background; plan against the latest without re-planning on each refresh.
+  const routeRef = useRef(routePools)
+  routeRef.current = routePools
   useEffect(() => {
-    let alive = true; setZPlan(null)
+    let alive = true; setZPlan(null); setZRouted(null)
     if (side !== 'zap' || p.empty || !zDebounced || zDebounced === '0') return
     planZap(p, zIdx, zDebounced, 0.01).then(pl => { if (alive) setZPlan(pl) })
+    // The same zap with its swap done through the best path elsewhere. On a thin
+    // pool that is the difference between 10% impact and almost none.
+    planRoutedZap(routeRef.current, p, zIdx, zDebounced, 0.01).then(rz => { if (alive) setZRouted(rz) }).catch(() => {})
     return () => { alive = false }
   }, [side, p, zIdx, zDebounced])
+  // Routed wins when it moves the price meaningfully less than swapping inside this pool.
+  const useRouted = !!zRouted && (!zPlan || zRouted.impactPct + 0.5 < zPlan.impact)
   const zInsufficient = !!zMicro && BigInt(zMicro) > BigInt(zBal || '0')
-  const canZap = !!me && !!zPlan && !zInsufficient && !zap.isLoading
+  const canZap = !!me && (useRouted || !!zPlan) && !zInsufficient && !zap.isLoading
   const doZap = async () => {
-    if (!canZap || !zPlan) return
+    if (!canZap) return
     setErr(null); setOk(null)
     try {
-      await zap.mutateAsync({
-        pair: p.contract_addr, offer: { info: zTok.info, amount: zPlan.swapAmount }, expectedReturn: zPlan.expectedReturn,
-        maxSpread: 0.01, crystalHolder: crystal, provide: zPlan.provide, slippage: 0.02, sender: me,
-      })
-      setOk('Zapped in. One signature, both sides.'); setZAmt(''); setMode('none'); onDone()
+      if (useRouted && zRouted) {
+        const tOut = p.tokens[zIdx === 0 ? 1 : 0]
+        const keep = { info: zTok.info, amount: zRouted.keepMicro }, got = { info: tOut.info, amount: zRouted.getMicro }
+        const legs = executionLegs(zRouted.swap, 0.01)
+        await zap.mutateAsync({
+          pair: p.contract_addr, offer: { info: zTok.info, amount: legs[0].offerAmount }, expectedReturn: legs[legs.length - 1].expectedReturn,
+          maxSpread: 0.01, crystalHolder: crystal, provide: zIdx === 0 ? [keep, got] : [got, keep], slippage: 0.02, sender: me, legs,
+        })
+      } else if (zPlan) {
+        await zap.mutateAsync({
+          pair: p.contract_addr, offer: { info: zTok.info, amount: zPlan.swapAmount }, expectedReturn: zPlan.expectedReturn,
+          maxSpread: 0.01, crystalHolder: crystal, provide: zPlan.provide, slippage: 0.02, sender: me,
+        })
+      } else return
+      setOk(useRouted && zRouted ? `Zapped in. The swap went through ${Array.from(new Set(zRouted.swap.legs.map(l => VENUE_NAME[l.pool.venue]))).join(' and ')}.` : 'Zapped in. One signature, both sides.'); setZAmt(''); setMode('none'); onDone()
       kwonSay({ q: 'Steady lads, deploying more capital 🫡', when: 'reacting to your zap · just now', pose: 'salute' })
     } catch (e) { setErr(humanizeTxError(e)) }
   }
@@ -1804,7 +1925,17 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
                 <span>Balance {fromMicro(zBal, zTok.decimals)}</span>
                 {me && Number(zBal) > 0 && <button type='button' style={{ ...ghostBtn, padding: '2px 8px' }} onClick={() => setZAmt(fromMicro((BigInt(zBal) * BigInt(9_960) / BigInt(10_000)).toString(), zTok.decimals, 6).replace(/,/g, ''))}>max</button>}
               </div>
-              {zPlan && (() => {
+              {useRouted && zRouted ? (() => {
+                const tOut = p.tokens[zIdx === 0 ? 1 : 0]
+                const legs = executionLegs(zRouted.swap, 0.01)
+                return (
+                  <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6, padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${C.dividerWarm}` }}>
+                    <div>1 · swap <b style={{ color: C.goldLit }}>{fromMicro(legs[0].offerAmount, zTok.decimals, 6)} {zTok.label}</b> → at least {fromMicro(zRouted.getMicro, tOut.decimals, 6)} {tOut.label}, routed {routeText(zRouted.swap)} <span style={{ color: zRouted.impactPct > 3 ? C.alert : C.textMuted }}>({zRouted.impactPct.toFixed(2)}% impact{zPlan ? `, against ${zPlan.impact.toFixed(1)}% inside this pool` : ''})</span></div>
+                    <div>2 · add <b style={{ color: C.goldLit }}>{fromMicro(zRouted.keepMicro, zTok.decimals, 6)} {zTok.label}</b> + <b style={{ color: C.goldLit }}>{fromMicro(zRouted.getMicro, tOut.decimals, 6)} {tOut.label}</b></div>
+                    <div style={{ color: C.textWhisper }}>Anything the swap returns above that, and any {zTok.label} not needed to match, stays in your wallet.</div>
+                  </div>
+                )
+              })() : zPlan && (() => {
                 const tOut = p.tokens[zIdx === 0 ? 1 : 0]
                 const keep = zPlan.provide[zIdx], got = zPlan.provide[zIdx === 0 ? 1 : 0]
                 return (
@@ -1818,7 +1949,7 @@ function PoolRow({ p, onDone, onParty, act, height, firstHand, crystal, badge, s
               {zInsufficient && <div style={{ fontSize: TEXT.xs.size, color: C.alert }}>{LITE ? 'Not enough balance.' : 'Not enough minerals.'} ({zTok.label})</div>}
               {me
                 ? <button type='button' style={{ ...primaryBtn, opacity: canZap ? 1 : 0.5 }} disabled={!canZap} onClick={doZap}>
-                    {zap.isLoading ? 'Confirm in wallet…' : zPlan ? 'Zap in ⚡ · one signature' : 'Enter an amount'}
+                    {zap.isLoading ? 'Confirm in wallet…' : useRouted ? 'Zap in ⚡ · routed · one signature' : zPlan ? 'Zap in ⚡ · one signature' : 'Enter an amount'}
                   </button>
                 : <div className='terra-connect-cta'><WalletButton /></div>}
             </>
@@ -2845,15 +2976,33 @@ function SwapPageInner() {
     pull(); const iv = setInterval(pull, 120_000)
     return () => { alive = false; clearInterval(iv) }
   }, [])
-  /** "Take it" hands the swap panel a pair and the size that closes the gap. */
+  /** The other site's pools, for routing. Arrives on the side; swaps work without it. */
+  const [venuePools, setVenuePools] = useState<PoolView[]>([])
+  useEffect(() => {
+    let alive = true
+    const pull = () => fetch('/api/dex-venue').then(r => (r.ok ? r.json() : null)).then((j: VenueResponse | null) => {
+      if (alive && j?.pools) setVenuePools(j.pools)
+    }).catch(() => {})
+    pull(); const iv = setInterval(pull, 60_000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [])
+  const routePoolsAll = useMemo(() => [...(data?.pools ?? []).filter(p => !p.empty), ...venuePools], [data, venuePools])
+  /** "Take it" opens the round trip in one transaction. The one-sided trade stays as the fallback. */
+  const [loopFor, setLoopFor] = useState<ArbPlan | null>(null)
   const [preset, setPreset] = useState<SwapPreset | null>(null)
-  const takeArb = useCallback((plan: ArbPlan) => {
+  const oneSided = useCallback((plan: ArbPlan) => {
+    setLoopFor(null)
     setPreset({
       fromId: assetId(plan.inToken.info),
       toId: assetId(plan.outToken.info),
       amount: fromMicro(plan.inMicro, plan.inToken.decimals, 6).replace(/,/g, ''),
       n: Date.now(),
     })
+    setTab('swap')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
+  const takeArb = useCallback((plan: ArbPlan) => {
+    setLoopFor(plan)
     setTab('swap')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
@@ -3010,11 +3159,12 @@ function SwapPageInner() {
                 {/* Terra Predict lives next door, same domain. Not part of Astroport mode. */}
                 {!LITE && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, marginLeft: 'auto', whiteSpace: 'nowrap' }}>Predict ↗</Link>}
               </div>
-              {tab === 'swap' && <SwapPanel pools={data.pools} crystal={crystal} feeBps={data.feeBps} poolFeeBps={data.poolFeeBps} onDone={refresh} arbs={arbs} preset={preset} onTakeArb={takeArb} />}
+              {tab === 'swap' && loopFor && <LoopPanel plan={loopFor} pools={routePoolsAll} onClose={() => setLoopFor(null)} onOneSided={oneSided} onDone={refresh} />}
+              {tab === 'swap' && <SwapPanel pools={data.pools} venuePools={venuePools} crystal={crystal} feeBps={data.feeBps} poolFeeBps={data.poolFeeBps} onDone={refresh} arbs={arbs} preset={preset} onTakeArb={takeArb} />}
               {tab === 'pools' && (
                 data.pools.length === 0
                   ? <Empty title='No pools yet' body={LITE ? 'Could not read the pool list. Try again in a moment.' : 'Open the first one. One signature, gas only. Your name goes to the top of the board and everyone sees it was you.'} />
-                  : <div style={{ display: 'grid', gap: SPACE['3'] }}>{visiblePools.map(p => <div key={p.contract_addr} id={`pool-${p.contract_addr}`}><PoolRow p={p} onDone={refresh} onParty={setParty} act={board?.poolActivity?.[p.contract_addr]} height={data.height} firstHand={board?.firstHands?.[p.contract_addr]} crystal={crystal} badge={(() => {
+                  : <div style={{ display: 'grid', gap: SPACE['3'] }}>{visiblePools.map(p => <div key={p.contract_addr} id={`pool-${p.contract_addr}`}><PoolRow p={p} routePools={routePoolsAll} onDone={refresh} onParty={setParty} act={board?.poolActivity?.[p.contract_addr]} height={data.height} firstHand={board?.firstHands?.[p.contract_addr]} crystal={crystal} badge={(() => {
                     const deepest = data.pools.reduce((b, q) => ((q.tvlUsd ?? 0) > (b?.tvlUsd ?? 0) ? q : b), null as PoolView | null)
                     const counts = board?.poolActivity ?? {}
                     const hottest = data.pools.reduce((b, q) => ((counts[q.contract_addr]?.count ?? 0) > (b ? (counts[b.contract_addr]?.count ?? 0) : 0) ? q : b), null as PoolView | null)

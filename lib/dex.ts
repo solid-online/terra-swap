@@ -34,6 +34,16 @@ export const isDexLive = () => DEX_FACTORY.length > 0
 export const DEX_MODE: 'terraswap' | 'astroport' = process.env.NEXT_PUBLIC_DEX_MODE === 'astroport' ? 'astroport' : 'terraswap'
 export const IS_ASTRO = DEX_MODE === 'astroport'
 
+/** Terra Swap's renounced factory, and Astroport's. Each site routes through both. */
+export const TERRA_SWAP_FACTORY = 'terra1gx7n4yrfc2req7tdt9vpj66kr0cssnqkjsr80xmfacjpdlw6mzlqvlp3xd'
+export const ASTRO_FACTORY = 'terra14x9fr055x5hvr48hzy2t4q7kvjvfttsvxusa4xsdcy702mnzsvuqprer8r'
+export type Venue = 'terraswap' | 'astroport'
+/** This build's own pools, and the other site's, which it routes into as well. */
+export const HOME_VENUE: Venue = IS_ASTRO ? 'astroport' : 'terraswap'
+export const AWAY_VENUE: Venue = IS_ASTRO ? 'terraswap' : 'astroport'
+export const VENUE_FACTORY: Record<Venue, string> = { terraswap: TERRA_SWAP_FACTORY, astroport: ASTRO_FACTORY }
+export const VENUE_NAME: Record<Venue, string> = { terraswap: 'Terra Swap', astroport: 'Astroport' }
+
 const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
 
 /** Pool commission, set on the factory. Shown to users; not enforced here. */
@@ -189,27 +199,29 @@ export interface Simulation {
   commission_amount: string
 }
 
-/** Every pair our factory has created. */
 /**
- * Every pair the factory knows, paged.
+ * Every pair a factory knows, paged, cached per factory.
  *
  * This used to ask for 30 and stop. Past 30 pools the tail simply vanished,
  * and because the leaderboard treats "pools I can see" as the list of pools
  * whose history is allowed to exist, an unseen pool had its events deleted.
- * Nothing downstream may assume this list is complete unless it is.
+ * Nothing downstream may assume this list is complete unless it is, so only a
+ * list read to the end is cached. Astroport's ~850 pairs barely change and
+ * keep ten minutes; the other site's factory, read for routing, keeps one;
+ * Terra Swap's own factory is never cached, so a pool someone just opened
+ * shows up at once.
  */
-let pairsCache: { at: number; pairs: PairInfo[] } | null = null
-export async function queryPairs(): Promise<PairInfo[]> {
-  if (!isDexLive()) return []
-  // Astroport has ~850 pairs (29 pages) that barely change; ours change
-  // whenever someone opens a pool, so only Astroport mode caches, and only a
-  // list that was read to the end.
-  if (IS_ASTRO && pairsCache && Date.now() - pairsCache.at < 600_000) return pairsCache.pairs
+const pairsCache = new Map<string, { at: number; pairs: PairInfo[] }>()
+export async function queryPairsOf(factory: string): Promise<PairInfo[]> {
+  if (!factory) return []
+  const ttl = factory === ASTRO_FACTORY ? 600_000 : factory === DEX_FACTORY ? 0 : 60_000
+  const hit = pairsCache.get(factory)
+  if (ttl > 0 && hit && Date.now() - hit.at < ttl) return hit.pairs
   const out: PairInfo[] = []
   let startAfter: AssetInfo[] | undefined
   let complete = false
   for (let page = 0; page < 40; page++) {
-    const r = await smart<{ pairs: PairInfo[] }>(DEX_FACTORY, {
+    const r = await smart<{ pairs: PairInfo[] }>(factory, {
       pairs: { limit: 30, ...(startAfter ? { start_after: startAfter } : {}) },
     })
     if (!r) break
@@ -218,15 +230,25 @@ export async function queryPairs(): Promise<PairInfo[]> {
     if (got.length < 30) { complete = true; break }
     startAfter = got[got.length - 1].asset_infos
   }
-  if (IS_ASTRO && complete) pairsCache = { at: Date.now(), pairs: out }
+  if (ttl > 0 && complete) pairsCache.set(factory, { at: Date.now(), pairs: out })
   return out
+}
+
+/** Every pair this build's factory knows. */
+export async function queryPairs(): Promise<PairInfo[]> {
+  if (!isDexLive()) return []
+  return queryPairsOf(DEX_FACTORY)
+}
+
+/** Only pairs whose two tokens we can name. */
+export function knownPairs(pairs: PairInfo[]): PairInfo[] {
+  const known = new Set(KNOWN_TOKENS.map(t => assetId(t.info)))
+  return pairs.filter(p => p.asset_infos.every(a => known.has(assetId(a))))
 }
 
 /** The pairs this build shows. Astroport mode: only pairs of tokens we can name. */
 export function listedPairs(pairs: PairInfo[]): PairInfo[] {
-  if (!IS_ASTRO) return pairs
-  const known = new Set(KNOWN_TOKENS.map(t => assetId(t.info)))
-  return pairs.filter(p => p.asset_infos.every(a => known.has(assetId(a))))
+  return IS_ASTRO ? knownPairs(pairs) : pairs
 }
 
 /** xyk, stable, concentrated, or whatever custom name the pair carries. */
@@ -279,6 +301,8 @@ export interface PoolView extends PairInfo {
   label: string
   /** 'xyk' | 'stable' | 'concentrated' | … */
   pairType: string
+  /** which site's factory the pool belongs to */
+  venue: Venue
   /**
    * token1 per token0 by reserves: the ratio a balanced deposit follows. On
    * xyk this is also the price; on concentrated and stable pools it is not.
@@ -299,24 +323,13 @@ export interface PoolView extends PairInfo {
  * USDC-anchored pools. Our own pools are too thin to be a price; theirs are
  * the market this experiment is measured against. Cached five minutes.
  */
-const ASTRO_FACTORY = 'terra14x9fr055x5hvr48hzy2t4q7kvjvfttsvxusa4xsdcy702mnzsvuqprer8r'
 let marketCache: { at: number; px: Record<string, number> } | null = null
 export async function marketPrices(): Promise<Record<string, number>> {
   if (marketCache && Date.now() - marketCache.at < 300_000) return marketCache.px
   try {
-    // Every Astroport pair, then only the ones made of tokens we know.
-    const pairs: PairInfo[] = []
-    let start: AssetInfo[] | undefined
-    for (let page = 0; page < 40; page++) {
-      const r = await smart<{ pairs: PairInfo[] }>(ASTRO_FACTORY, { pairs: { limit: 30, ...(start ? { start_after: start } : {}) } })
-      const got = r?.pairs ?? []
-      pairs.push(...got)
-      if (got.length < 30) break
-      start = got[got.length - 1].asset_infos
-    }
-    const knownIds = new Set(KNOWN_TOKENS.map(t => assetId(t.info)))
-    const relevant = pairs.filter(p => p.asset_infos.every(a => knownIds.has(assetId(a))))
-    const views = await Promise.all(relevant.map(async p => toPoolView(p, await queryPool(p.contract_addr))))
+    // Every Astroport pair (cached, and shared with routing), then only the ones made of tokens we know.
+    const relevant = knownPairs(await queryPairsOf(ASTRO_FACTORY))
+    const views = await Promise.all(relevant.map(async p => toPoolView(p, await queryPool(p.contract_addr), 'astroport')))
     // Most of Astroport's deep pools are concentrated; their reserves are not their price.
     await refineSpot(views)
     // Deepest pool per unordered pair wins; then the same USDC-anchored hop we use for our own TVL.
@@ -372,7 +385,7 @@ export function annotateMarket(pools: PoolView[], px: Record<string, number>): P
   return pools
 }
 
-export function toPoolView(pair: PairInfo, pool: PoolState | null): PoolView {
+export function toPoolView(pair: PairInfo, pool: PoolState | null, venue: Venue = HOME_VENUE): PoolView {
   const t0 = tokenFor(pair.asset_infos[0])
   const t1 = tokenFor(pair.asset_infos[1])
   // Reserves come back in the pair's own asset order, which matches asset_infos.
@@ -391,6 +404,7 @@ export function toPoolView(pair: PairInfo, pool: PoolState | null): PoolView {
     empty: n0 === 0 || n1 === 0,
     label: `${t0.label} / ${t1.label}`,
     pairType: pairTypeOf(pair),
+    venue,
     reserveRatio: d0 > 0 ? d1 / d0 : 0,
   }
 }
