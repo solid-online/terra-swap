@@ -30,7 +30,7 @@ import type { LpFlow } from 'lib/dex-ledger'
 import type { PricesResponse } from 'pages/api/dex-prices'
 import type { VenueResponse } from 'pages/api/dex-venue'
 import type { PositionsResponse } from 'pages/api/positions'
-import { quoteBest, executionLegs, worstCaseOut, routeText, reachable, quoteLoop, planRoutedZap, type Quotes, type Loop, type RoutedZap } from 'lib/route'
+import { quoteBest, executionLegs, planRoute, routeText, reachable, quoteLoop, planRoutedZap, type Quotes, type Loop, type RoutedZap } from 'lib/route'
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
@@ -45,7 +45,6 @@ type Tab = 'swap' | 'pools' | 'positions' | 'create' | 'board'
 // only font host our CSP allows, so we use Montserrat — the well-known free
 // Gotham lookalike (same geometric skeleton, double-storey a, flat e).
 const TERRA_FONT = "'Montserrat', 'Space Grotesk', 'Inter', system-ui, sans-serif"
-const POOL_FEE_BPS_LABEL = '30 bps'
 /** Astroport mode: this page as a plain interface to Astroport's pools. See DEX_MODE in lib/dex. */
 const LITE = IS_ASTRO
 const APP_NAME = LITE ? 'Terra Pools' : 'Terra Swap'
@@ -1204,17 +1203,18 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
     return () => { alive = false }
   }, [routePools, from, to, fromId, toId, debounced])
   const route = quotes?.best ?? null
-  const sim = route ? { ret: route.outMicro } : null
 
   const fee = '0'
   const impact = route ? route.impactPct : 0
   const insufficient = !!micro && BigInt(micro) + BigInt(fee) > BigInt(balance || '0')
   const slip = Math.min(0.5, Math.max(0.001, Number(slippage) / 100 || 0.01))
-  const legsToSign = route ? executionLegs(route, slip) : []
-  const minOut = route ? worstCaseOut(route, slip) : '0'
+  // How a route is signed decides what arrives: through Astroport's router the quote itself, as separate swaps a little less.
+  const plan = route ? planRoute(route, slip) : null
+  const sim = plan ? { ret: plan.expectedOut } : null
+  const minOut = plan?.minOut ?? '0'
   // The quote must be for the amount on screen, not the one before the debounce caught up.
-  const canSwap = !!me && !!route && !!from && !!to && !!micro && micro === route.legs[0].offerMicro
-    && legsToSign.every(l => l.offerAmount !== '0') && !insufficient && !swap.isLoading
+  const canSwap = !!me && !!route && !!plan && !!from && !!to && !!micro && micro === route.legs[0].offerMicro
+    && plan.legs.every(l => l.offerAmount !== '0') && minOut !== '0' && !insufficient && !swap.isLoading
 
   const flip = useCallback(() => {
     if (!from || !to) return
@@ -1250,17 +1250,17 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   const egg = from && !LITE ? amountEgg(amount, from.label) : null
 
   const go = async () => {
-    if (!canSwap || !route || !from || !micro) return
+    if (!canSwap || !route || !plan || !from || !micro) return
     setErr(null); setReceipt(null)
     // The stepper: asking your wallet → broadcasting → written down.
     setPhase(1)
     const p2 = setTimeout(() => setPhase(2), 2500)
     try {
-      const r = await swap.mutateAsync({ legs: legsToSign, maxSpread: slip, sender: me })
+      const r = await swap.mutateAsync({ plan, maxSpread: slip, sender: me })
       clearTimeout(p2); setPhase(3); setTimeout(() => setPhase(0), 2600)
       const hash = (r as { transactionHash?: string })?.transactionHash ?? 'ok'
       if (to) setReceipt({
-        from: from.label, to: to.label, amtIn: fromMicro(micro, from.decimals, 6), amtOut: fromMicro(route.outMicro, to.decimals, 6),
+        from: from.label, to: to.label, amtIn: fromMicro(micro, from.decimals, 6), amtOut: fromMicro(plan.expectedOut, to.decimals, 6),
         fee: crystal ? '0 (Crystal)' : `${fromMicro(fee, from.decimals, 6)} ${from.label}`, tx: hash, height: (r as { height?: number })?.height,
         route: route.legs.length > 1 || route.legs[0].pool.venue !== HOME_VENUE ? routeText(route) : undefined,
       })
@@ -1393,14 +1393,16 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
             const gain = (Number(route.outMicro) / Math.max(1, Number(home.outMicro)) - 1) * 100
             return gain > 0.05 ? <Row k={`vs ${VENUE_NAME[HOME_VENUE]} alone`} v={`+${gain >= 100 ? gain.toFixed(0) : gain.toFixed(1)}% more ${to.label}`} hi /> : null
           })()}
-          <Row k='Rate' v={`1 ${from.label} ≈ ${fromMicro((Number(route.outMicro) / Math.max(1, Number(micro))) * 10 ** from.decimals, to.decimals)} ${to.label}`} />
+          <Row k='Rate' v={`1 ${from.label} ≈ ${fromMicro((Number(sim?.ret ?? route.outMicro) / Math.max(1, Number(micro))) * 10 ** from.decimals, to.decimals)} ${to.label}`} />
           <Row k='Price impact' v={`${impact.toFixed(2)}%`} hi={impact > 3} />
           <Row k={route.legs.length > 1 ? 'Pool fees' : 'Pool fee'} v={route.legs.map(l => poolFeeTextFor(l.pool)).join(' · ')} />
           {feeBps > 0 && <Row k='Protocol fee' v={crystal ? '0 · Crystal' : `${fromMicro(fee, from.decimals)} ${from.label}`} hi={crystal} />}
-          <Row k={`Min. received (${slippage}% ${route.legs.length > 1 ? 'per leg' : 'slippage'})`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
-          {route.legs.length > 1 && (
+          <Row k={`Min. received (${slippage}% ${plan?.kind === 'legs' && route.legs.length > 1 ? 'per leg' : 'slippage'})`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
+          {plan && route.legs.length > 1 && (
             <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>
-              One transaction, {route.legs.length} swaps. If any leg would land past its limit, all of it reverts. A sliver of {route.legs[0].ask.label} from the first leg can stay in your wallet.
+              {plan.kind === 'router'
+                ? <>One transaction through Astroport&apos;s router: each swap&apos;s full return goes into the next, and it reverts if less than the minimum arrives.</>
+                : <>One transaction, {route.legs.length} swaps. Each swap after the first spends the least the one before it can return, so if any leg would land past its limit, all of it reverts.{plan.leftover.length > 0 && <> At the quoted prices about {plan.leftover.map(x => `${fromMicro(x.micro, x.token.decimals, 6)} ${x.token.label}`).join(' and ')} stays in your wallet.</>}</>}
             </div>
           )}
         </div>
@@ -1550,21 +1552,29 @@ function PositionsPanel({ onDone }: { onDone: () => void }) {
         const ax = data.astro
         // Convert what unstaking returns (a hair under the estimate, in case the ratio moves) plus what is already held.
         const convertAmount = (BigInt(ax.astroCw20) + (BigInt(ax.leaveEstimate) * BigInt(9_999)) / BigInt(10_000)).toString()
+        // The converter pays out of its own balance and nothing else. It held none on 2026-09-13 and every
+        // conversion failed with "insufficient funds", so only offer one it can actually pay.
+        const canConvert = BigInt(ax.converterFunds || '0') >= BigInt(convertAmount)
+        const hasX = ax.xastro !== '0'
         return (
           <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${C.dividerWarm}`, display: 'grid', gap: 2, marginBottom: SPACE['3'] }}>
             <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>Old ASTRO on Terra</b>
             {ax.xastro !== '0' && <div style={rowStyle}><span>xASTRO in the first staking</span><span style={{ color: C.textSecondary }}>{fromMicro(ax.xastro, 6)} · unstakes to about {fromMicro(ax.leaveEstimate, 6)} ASTRO.cw20</span></div>}
             {ax.astroCw20 !== '0' && <div style={rowStyle}><span>ASTRO.cw20 in wallet</span><span style={{ color: C.textSecondary }}>{fromMicro(ax.astroCw20, 6)}</span></div>}
             <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.5 }}>
-              Astroport now uses the ASTRO that comes over IBC from Neutron. The old staking contract and the old token still work: this {ax.xastro !== '0' ? 'unstakes the xASTRO and ' : ''}converts all ASTRO.cw20 through Astroport&apos;s own converter, in one signature.
+              {canConvert
+                ? <>Astroport now uses the ASTRO that comes over IBC from Neutron. This {hasX ? 'unstakes the xASTRO and ' : ''}converts all ASTRO.cw20 through Astroport&apos;s own converter, in one signature.</>
+                : <>Astroport&apos;s converter to today&apos;s ASTRO has nothing left to pay out right now, so a conversion would fail. {hasX ? 'Unstaking still works and returns ASTRO.cw20 to your wallet.' : 'The ASTRO.cw20 stays in your wallet.'}</>}
             </div>
-            <button type='button' disabled={!!busy} style={{ ...primaryBtn, marginTop: 4, opacity: busy && busy !== 'astro' ? 0.5 : 1 }}
-              onClick={() => run('astro', () => astroExit.mutateAsync({
-                staking: ASTRO_STAKING, xastro: XASTRO_CW20, converter: ASTRO_CONVERTER, astroCw20: ASTRO_CW20,
-                xastroAmount: ax.xastro, convertAmount, sender: me,
-              }), 'Done. The ASTRO is in your wallet.')}>
-              {busy === 'astro' ? 'Confirm in wallet…' : ax.xastro !== '0' ? 'Unstake and convert to ASTRO' : 'Convert to ASTRO'}
-            </button>
+            {(canConvert || hasX) && (
+              <button type='button' disabled={!!busy} style={{ ...primaryBtn, marginTop: 4, opacity: busy && busy !== 'astro' ? 0.5 : 1 }}
+                onClick={() => run('astro', () => astroExit.mutateAsync({
+                  staking: ASTRO_STAKING, xastro: XASTRO_CW20, converter: ASTRO_CONVERTER, astroCw20: ASTRO_CW20,
+                  xastroAmount: ax.xastro, convertAmount: canConvert ? convertAmount : '0', sender: me,
+                }), canConvert ? 'Done. The ASTRO is in your wallet.' : 'Unstaked. The ASTRO.cw20 is in your wallet.')}>
+                {busy === 'astro' ? 'Confirm in wallet…' : canConvert ? (hasX ? 'Unstake and convert to ASTRO' : 'Convert to ASTRO') : 'Unstake to ASTRO.cw20'}
+              </button>
+            )}
           </div>
         )
       })()}
@@ -1662,7 +1672,7 @@ function LoopPanel({ plan, pools, onClose, onOneSided, onDone }: {
     if (!loop || !me) return
     setErr(null)
     try {
-      const r = await run.mutateAsync({ legs: executionLegs(loop.quote, LOOP_SLIP), maxSpread: LOOP_SLIP, sender: me, memo: 'close a gap' })
+      const r = await run.mutateAsync({ plan: planRoute(loop.quote, LOOP_SLIP), maxSpread: LOOP_SLIP, sender: me, memo: 'close a gap' })
       setDone((r as { transactionHash?: string })?.transactionHash ?? 'ok')
       onDone()
     } catch (e) { setErr(humanizeTxError(e)) }
@@ -1692,7 +1702,7 @@ function LoopPanel({ plan, pools, onClose, onOneSided, onDone }: {
             <div>
               <Row k='You put in' v={`${amt(loop.inMicro)} ${start.label}`} />
               <Row k='Expected back' v={`${amt(loop.expectedOutMicro)} ${start.label}`} />
-              <Row k={`At worst, every leg ${LOOP_SLIP * 100}% worse`} v={`${amt(loop.worstOutMicro)} ${start.label} · +${amt(loop.worstGainMicro)}`} hi />
+              <Row k={`At worst, with ${LOOP_SLIP * 100}% slippage`} v={`${amt(loop.worstOutMicro)} ${start.label} · +${amt(loop.worstGainMicro)}`} hi />
             </div>
             <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5 }}>
               One transaction, before gas. If any leg would land past its limit, all of it reverts and only gas is spent. Someone else can close it first.
@@ -1840,13 +1850,12 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
         const keep = { info: zTok.info, amount: zRouted.keepMicro }, got = { info: tOut.info, amount: zRouted.getMicro }
         const legs = executionLegs(zRouted.swap, 0.01)
         await zap.mutateAsync({
-          pair: p.contract_addr, offer: { info: zTok.info, amount: legs[0].offerAmount }, expectedReturn: legs[legs.length - 1].expectedReturn,
-          maxSpread: 0.01, crystalHolder: crystal, provide: zIdx === 0 ? [keep, got] : [got, keep], slippage: 0.02, sender: me, legs,
+          pair: p.contract_addr, legs, maxSpread: 0.01, provide: zIdx === 0 ? [keep, got] : [got, keep], slippage: 0.02, sender: me,
         })
       } else if (zPlan) {
         await zap.mutateAsync({
-          pair: p.contract_addr, offer: { info: zTok.info, amount: zPlan.swapAmount }, expectedReturn: zPlan.expectedReturn,
-          maxSpread: 0.01, crystalHolder: crystal, provide: zPlan.provide, slippage: 0.02, sender: me,
+          pair: p.contract_addr, offer: { info: zTok.info, amount: zPlan.swapAmount }, limitReturn: zPlan.limitReturn,
+          maxSpread: 0.01, provide: zPlan.provide, slippage: 0.02, sender: me,
         })
       } else return
       setOk(useRouted && zRouted ? `Zapped in. The swap went through ${Array.from(new Set(zRouted.swap.legs.map(l => VENUE_NAME[l.pool.venue]))).join(' and ')}.` : 'Zapped in. One signature, both sides.'); setZAmt(''); setMode('none'); onDone()
@@ -2116,7 +2125,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
                   <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6, padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${C.divider}` }}>
                     <div>1 · swap <b style={{ color: C.goldLit }}>{fromMicro(zPlan.swapAmount, zTok.decimals, 6)} {zTok.label}</b> → ≈ {fromMicro(zPlan.expectedReturn, tOut.decimals, 6)} {tOut.label} <span style={{ color: zPlan.impact > 3 ? C.alert : C.textMuted }}>({zPlan.impact.toFixed(2)}% impact)</span></div>
                     <div>2 · add <b style={{ color: C.goldLit }}>{fromMicro(keep.amount, zTok.decimals, 6)} {zTok.label}</b> + <b style={{ color: C.goldLit }}>{fromMicro(got.amount, tOut.decimals, 6)} {tOut.label}</b></div>
-                    <div style={{ color: C.textWhisper }}>No protocol fee · pool fee {POOL_FEE_BPS_LABEL} to LPs · dust from rounding stays in your wallet</div>
+                    <div style={{ color: C.textWhisper }}>No interface fee · pool fee {poolFeeTextFor(p)} · dust from rounding stays in your wallet</div>
                   </div>
                 )
               })()}

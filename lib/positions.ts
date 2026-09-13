@@ -12,7 +12,7 @@
  */
 
 import {
-  ASTRO_CW20, ASTRO_FACTORY, ASTRO_STAKING, TERRA_SWAP_FACTORY, VENUE_INCENTIVES, XASTRO_CW20,
+  ASTRO_CONVERTER, ASTRO_CW20, ASTRO_FACTORY, ASTRO_IBC_DENOM, ASTRO_STAKING, TERRA_SWAP_FACTORY, VENUE_INCENTIVES, XASTRO_CW20,
   assetId, knownPairs, marketPrices, queryCw20Balance, queryNativeBalance, queryPairsOf, queryPool,
   resolveToken, smart, toPoolView,
   type Asset, type KnownToken, type PairInfo, type PoolView, type Venue,
@@ -131,20 +131,27 @@ export interface AstroLegacy {
   astroCw20: string
   /** ASTRO.cw20 that unstaking all of that xASTRO returns, rounded down */
   leaveEstimate: string
+  /**
+   * Today's ASTRO the converter holds. It pays conversions out of this and
+   * nothing else: on 2026-09-13 it held none, and every conversion failed with
+   * "insufficient funds".
+   */
+  converterFunds: string
 }
 
 /** Old ASTRO a wallet still holds: xASTRO in the first staking contract and ASTRO.cw20. */
 export async function readAstroLegacy(address: string): Promise<AstroLegacy> {
-  const [xastro, astroCw20, shares, deposit] = await Promise.all([
+  const [xastro, astroCw20, shares, deposit, converterFunds] = await Promise.all([
     queryCw20Balance(XASTRO_CW20, address),
     queryCw20Balance(ASTRO_CW20, address),
     smart<string>(ASTRO_STAKING, { total_shares: {} }),
     smart<string>(ASTRO_STAKING, { total_deposit: {} }),
+    queryNativeBalance(ASTRO_CONVERTER, ASTRO_IBC_DENOM),
   ])
   const leave = typeof shares === 'string' && typeof deposit === 'string' && BigInt(shares) > BigInt(0)
     ? (BigInt(xastro || '0') * BigInt(deposit)) / BigInt(shares)
     : BigInt(0)
-  return { xastro: xastro || '0', astroCw20: astroCw20 || '0', leaveEstimate: leave.toString() }
+  return { xastro: xastro || '0', astroCw20: astroCw20 || '0', leaveEstimate: leave.toString(), converterFunds: converterFunds || '0' }
 }
 
 export async function readPositions(address: string): Promise<Position[]> {

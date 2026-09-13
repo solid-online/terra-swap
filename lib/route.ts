@@ -10,12 +10,15 @@
  * drifted, flow from the Astroport interface goes through it, which is also
  * what pulls it back to market.
  *
- * A route executes as consecutive swaps in one transaction. Each leg carries
- * its own price limit, and if any leg fails the whole transaction reverts.
+ * A route made only of Astroport's pools goes through Astroport's router, which
+ * carries each swap's full return into the next and checks one minimum at the
+ * end. A route through Terra Swap's pools, which that router cannot reach, is
+ * signed as consecutive swaps in one transaction, each with its own price
+ * limit. Either way, if anything falls short the whole transaction reverts.
  */
 
 import {
-  assetId, sameAsset, simulateSwap, toMicro, VENUE_NAME,
+  assetId, priceLimit, sameAsset, simulateSwap, toMicro, VENUE_NAME,
   type KnownToken, type PoolView, type Venue,
 } from 'lib/dex'
 
@@ -46,9 +49,12 @@ export interface Quote {
 export interface ExecLeg {
   pair: string
   offerInfo: KnownToken['info']
+  askInfo: KnownToken['info']
   offerAmount: string
-  /** simulated return after the pool's fee, scaled to this offer; sets the price limit */
+  /** simulated return after the pool's fee, scaled to this offer */
   expectedReturn: string
+  /** what the price limit is written against, which depends on the pool type (priceLimit) */
+  limitReturn: string
   /** the least this leg can return if the transaction succeeds */
   minReturn: string
 }
@@ -153,28 +159,27 @@ export async function quoteBest(pools: PoolView[], from: KnownToken, to: KnownTo
 const shave = (x: bigint, slip: number) => (x * BigInt(Math.round((1 - slip) * 10_000))) / BigInt(10_000)
 
 /**
- * What gets signed. The first leg offers the full amount. Each later leg offers
- * the previous leg's expected return shaved by the slippage limit, with its own
- * expectation scaled to match. If the previous leg returns less than that, the
- * later leg cannot be paid and the whole transaction reverts, so nothing is
- * left half done. Anything a leg returns above it stays in the wallet.
+ * A route as separate swap messages. The first leg offers the full amount;
+ * each later leg offers the least the leg before it can return, so it is
+ * always paid out of that return and never out of tokens already in the
+ * wallet. If a leg lands past its limit, the whole transaction reverts. When
+ * every leg lands on its quote, what a leg returns above the next leg's offer
+ * (about the slippage setting, per intermediate token) stays in the wallet;
+ * planRoute reports it, and avoids it wherever the router can be used.
  */
 export function executionLegs(q: Quote, slip: number): ExecLeg[] {
   const out: ExecLeg[] = []
   let prev: bigint | null = null
   for (const l of q.legs) {
-    const offer: bigint = prev === null ? BigInt(l.offerMicro) : shave(prev, slip)
+    const offer: bigint = prev === null ? BigInt(l.offerMicro) : prev
     const expected: bigint = (BigInt(l.returnMicro) * offer) / BigInt(l.offerMicro)
     const commission: bigint = (BigInt(l.commissionMicro) * offer) / BigInt(l.offerMicro)
-    // Astroport compares the limit with the return before its fee comes out,
-    // so the floor that holds whichever way a pool checks it is the shaved
-    // expectation less the fee.
-    const floor: bigint = shave(expected, slip) - commission
+    const { limitReturn, floor } = priceLimit(l.pool.pairType, expected, commission, slip)
     out.push({
-      pair: l.pool.contract_addr, offerInfo: l.offer.info, offerAmount: offer.toString(),
-      expectedReturn: expected.toString(), minReturn: (floor > BigInt(0) ? floor : BigInt(0)).toString(),
+      pair: l.pool.contract_addr, offerInfo: l.offer.info, askInfo: l.ask.info, offerAmount: offer.toString(),
+      expectedReturn: expected.toString(), limitReturn: limitReturn.toString(), minReturn: floor.toString(),
     })
-    prev = expected
+    prev = floor
   }
   return out
 }
@@ -189,6 +194,41 @@ export function worstCaseOut(q: Quote, slip: number): string {
   return legs[legs.length - 1].minReturn
 }
 
+export interface RoutePlan {
+  /** 'router': one message through Astroport's router. 'legs': one swap message per leg (executionLegs). */
+  kind: 'router' | 'legs'
+  legs: ExecLeg[]
+  /** what reaches the wallet when every pool trades at its quote, smallest units of the output token */
+  expectedOut: string
+  /** the least the transaction lets through */
+  minOut: string
+  /** intermediate tokens a 'legs' route leaves in the wallet at its quote */
+  leftover: { token: KnownToken; micro: string }[]
+}
+
+/**
+ * How a quote gets signed.
+ *
+ * Separate swap messages cannot hand one swap's actual return to the next, so
+ * a multi-leg route signed that way leaves a slippage-sized slice of each
+ * intermediate token in the wallet and delivers that much less of the output
+ * than the quote (found in the 2026-09-13 audit). Astroport's router can: two
+ * or more Astroport pools go through it, deliver the quote, and check one
+ * minimum on what arrives. Routes that touch Terra Swap's pools stay as legs
+ * and say what they leave behind.
+ */
+export function planRoute(q: Quote, slip: number): RoutePlan {
+  const legs = executionLegs(q, slip)
+  if (q.legs.length > 1 && q.legs.every(l => l.pool.venue === 'astroport')) {
+    return { kind: 'router', legs, expectedOut: q.outMicro, minOut: shave(BigInt(q.outMicro), slip).toString(), leftover: [] }
+  }
+  const leftover = legs.slice(0, -1)
+    .map((l, i) => ({ token: q.legs[i].ask, micro: (BigInt(l.expectedReturn) - BigInt(legs[i + 1].offerAmount)).toString() }))
+    .filter(x => BigInt(x.micro) > BigInt(0))
+  const last = legs[legs.length - 1]
+  return { kind: 'legs', legs, expectedOut: last.expectedReturn, minOut: last.minReturn, leftover }
+}
+
 /** "SOLID → LUNA (Terra Swap) → USDC (Astroport)" */
 export function routeText(q: Quote): string {
   return [q.legs[0].offer.label, ...q.legs.map(l => `${l.ask.label} (${VENUE_NAME[l.pool.venue]})`)].join(' → ')
@@ -199,7 +239,7 @@ export function routeText(q: Quote): string {
 export interface Loop {
   quote: Quote
   inMicro: string
-  /** simulated return of the whole loop */
+  /** what the loop returns when every pool trades at its quote, signed the way planRoute signs it */
   expectedOutMicro: string
   /** the least it returns if every leg slips to its limit */
   worstOutMicro: string
@@ -230,10 +270,11 @@ export async function quoteLoop(pools: PoolView[], drifted: PoolView, start: Kno
       returnMicro: s.return_amount, spreadMicro: s.spread_amount, commissionMicro: s.commission_amount,
     }
     const quote: Quote = { legs: [first, ...back.best.legs], outMicro: back.best.outMicro, impactPct: 0 }
-    const worst = BigInt(worstCaseOut(quote, slip))
+    const plan = planRoute(quote, slip)
+    const worst = BigInt(plan.minOut)
     const gain = worst - BigInt(inMicro)
     if (!best || gain > BigInt(best.worstGainMicro)) {
-      best = { quote, inMicro, expectedOutMicro: back.best.outMicro, worstOutMicro: worst.toString(), worstGainMicro: gain.toString() }
+      best = { quote, inMicro, expectedOutMicro: plan.expectedOut, worstOutMicro: worst.toString(), worstGainMicro: gain.toString() }
     }
   }
   return best && BigInt(best.worstGainMicro) > BigInt(0) ? best : null

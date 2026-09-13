@@ -1,5 +1,5 @@
 /**
- * GET /api/dex — every pool on the Atrium factory with live reserves.
+ * GET /api/dex — every pool this build lists, with live reserves and spot prices.
  *
  * One server-side fan-out so the swap page makes one request instead of
  * N+1 LCD calls from every visitor's browser. Short edge cache: reserves

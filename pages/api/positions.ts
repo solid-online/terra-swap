@@ -3,11 +3,13 @@
  * Terra Swap or Astroport, staked LP included. See lib/positions.
  *
  * Chain data only, the same anyone can read from an explorer. A build reads
- * a few dozen contracts plus the wallet's recent history, so results are kept
- * briefly per address and only a handful of builds run at once.
+ * well over a hundred contracts plus the wallet's recent history from a public
+ * endpoint, so the address has to be a real terra address, results are kept
+ * briefly per address, and each instance runs only so many builds a minute.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { fromBech32 } from '@cosmjs/encoding'
 import { VENUE_INCENTIVES } from 'lib/dex'
 import { readAstroLegacy, readPositions, type AstroLegacy, type Position } from 'lib/positions'
 
@@ -21,24 +23,43 @@ export interface PositionsResponse {
   at: number
 }
 
-const ADDR = /^terra1[0-9a-z]{38,58}$/
 const FRESH_MS = 20_000
+/** A re-read asked for right after a transaction still waits this long between builds. */
+const REREAD_MS = 4_000
 const MAX_BUILDS = 6
+const BUILDS_PER_MINUTE = 60
 const cache = new Map<string, PositionsResponse>()
 const inflight = new Map<string, Promise<PositionsResponse>>()
+let windowAt = 0
+let windowBuilds = 0
+
+/** A checksummed terra address, account or contract. Anything else would only cost a build. */
+function terraAddress(v: unknown): string | null {
+  if (typeof v !== 'string' || v.length > 90) return null
+  try {
+    const { prefix, data } = fromBech32(v)
+    return prefix === 'terra' && (data.length === 20 || data.length === 32) ? v : null
+  } catch { return null }
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<PositionsResponse | { error: string }>) {
-  const address = typeof req.query.address === 'string' && ADDR.test(req.query.address) ? req.query.address : null
+  const address = terraAddress(req.query.address)
   if (!address) return res.status(400).json({ error: 'address required' })
   res.setHeader('Cache-Control', 'no-store')
 
   const hit = cache.get(address)
+  const age = hit ? Date.now() - hit.at : Infinity
   const fresh = typeof req.query._ === 'string'   // after a transaction the page asks for a re-read
-  if (hit && !fresh && Date.now() - hit.at < FRESH_MS) return res.status(200).json(hit)
+  if (hit && (age < REREAD_MS || (!fresh && age < FRESH_MS))) return res.status(200).json(hit)
 
   let build = inflight.get(address)
   if (!build) {
-    if (inflight.size >= MAX_BUILDS) return res.status(503).json({ error: 'busy, try again in a moment' })
+    const now = Date.now()
+    if (now - windowAt > 60_000) { windowAt = now; windowBuilds = 0 }
+    if (inflight.size >= MAX_BUILDS || windowBuilds >= BUILDS_PER_MINUTE) {
+      return hit ? res.status(200).json(hit) : res.status(503).json({ error: 'busy, try again in a moment' })
+    }
+    windowBuilds++
     build = Promise.all([readPositions(address), readAstroLegacy(address).catch(() => null)])
       .then(([positions, astro]) => ({ address, positions, incentives: VENUE_INCENTIVES.astroport, astro, at: Date.now() }))
       .finally(() => { inflight.delete(address) })

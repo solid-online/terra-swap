@@ -1,24 +1,13 @@
 /**
- * Atrium Swap — contract interface for the Atrium-run Astroport factory.
+ * Contract interface for Astroport-code pools on Terra: which factory this
+ * build fronts, the tokens it names, pool reads, prices, and the zap planner.
  *
- * Why this exists: Astroport's team has gone quiet and their frontend can
- * disappear without the contracts going anywhere. Meanwhile a $150k grant is
- * on the table to "build a DEX for Terra". This is the experiment that tests
- * the premise: the AMM code is Astroport's own audited xyk pair (code_id 392,
- * instantiable by anyone), run from a factory Atrium controls, with a frontend
- * that lives under atrium.markets. Not a line of AMM maths is ours, which is
- * the whole point — the SCV audit showed how fee arithmetic goes wrong in a
- * contract far simpler than an AMM.
+ * Nothing here holds keys or takes a fee. Every transaction the page builds
+ * goes straight to Astroport's own contracts (lib/msgs), and the AMM maths is
+ * Astroport's audited pair code; none of it is reimplemented here.
  *
- * Everything degrades to "not live yet" until NEXT_PUBLIC_DEX_FACTORY
- * points at the instantiated factory. Same pattern as the launchpad.
- *
- * Fee model, decided for the beta:
- *   • Pool fee 30 bps, ALL of it to LPs (factory maker_fee_bps = 0). The
- *     experiment does not skim the pools; liquidity providers get everything.
- *   • Atrium frontend fee 25 bps on the offered asset, sent to treasury in the
- *     same tx. Crystal holders pay 0. That is the perk, and it lives in the
- *     frontend, never in the AMM.
+ * NEXT_PUBLIC_DEX_FACTORY picks the factory and NEXT_PUBLIC_DEX_MODE the site.
+ * Without a factory the page renders "not live yet".
  */
 
 export const DEX_FACTORY = process.env.NEXT_PUBLIC_DEX_FACTORY || ''
@@ -59,6 +48,15 @@ export const COIN_REGISTRY = 'terra1zuf8fla02926nhpfvk09k2pg6qv9aayflp0qt4a0mspp
 export const ASTRO_STAKING = 'terra1nyu6sk9rvtvsltm7tjjrp6rlavnm3e4sq03kltde6kesam260f8szar8ze'
 export const XASTRO_CW20 = 'terra1x62mjnme4y0rdnag3r8rfgjuutsqlkkyuh4ndgex0wl3wue25uksau39q8'
 export const ASTRO_CONVERTER = 'terra1jyu4nct8ake3k8y8g42n8dvc9umtl5cktmtcy6rfdygse62fp7qse5rwjm'
+/**
+ * Astroport's router on Terra, pointed at Astroport's factory. It carries each
+ * swap's full return into the next and checks one minimum at the end, which
+ * separate swap messages cannot do. It finds each pool by its two tokens, and
+ * Astroport's factory allows one pool per token pair ("Pair was already
+ * created" for a second pool type; no duplicates among its 846 pairs on
+ * 2026-09-13), so it trades exactly the pool a quote used.
+ */
+export const ASTRO_ROUTER = 'terra1j8hayvehh3yy02c2vtw5fdhz9f4drhtee8p5n5rguvg3nyd6m83qd2y90a'
 
 const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
 
@@ -375,6 +373,27 @@ export async function simulateSwap(pair: string, offer: Asset): Promise<Simulati
   return smart<Simulation>(pair, { simulation: { offer_asset: offer } })
 }
 
+/**
+ * What a swap's price limit is written against, and the least that limit lets
+ * through.
+ *
+ * Astroport's pairs do not test the limit the same way. Simulated 2026-09-13
+ * with a limit placed between the return and the return plus fee: xyk and
+ * stable pairs let it through (they add the fee back before comparing),
+ * concentrated pairs refused it (they compare the return alone). Writing xyk
+ * and stable limits against return plus fee makes a slippage setting mean the
+ * same on every pool type. An unknown pool type keeps the looser floor.
+ */
+export function priceLimit(pairType: string, expected: bigint, commission: bigint, slip: number): { limitReturn: bigint; floor: bigint } {
+  const shave = (x: bigint) => (x * BigInt(Math.round((1 - slip) * 10_000))) / BigInt(10_000)
+  let limitReturn = expected
+  let floor: bigint
+  if (pairType === 'concentrated') floor = shave(expected)
+  else if (pairType === 'xyk' || pairType === 'stable') { limitReturn = expected + commission; floor = shave(limitReturn) - commission }
+  else floor = shave(expected) - commission
+  return { limitReturn, floor: floor > BigInt(0) ? floor : BigInt(0) }
+}
+
 export async function queryNativeBalance(addr: string, denom: string): Promise<string> {
   try {
     const r = await fetch(`${LCD}/cosmos/bank/v1beta1/balances/${addr}/by_denom?denom=${encodeURIComponent(denom)}`, {
@@ -683,12 +702,14 @@ export interface ZapPlan {
   provide: [Asset, Asset]
   /** price impact of the swap leg, % */
   impact: number
+  /** what the swap's price limit is written against (priceLimit) */
+  limitReturn: string
 }
 
 /**
- * Plan a zap: split X, simulate the swap leg against the pool, and shave the
- * received side by `maxSpread` so the provide leg cannot ask for more than the
- * wallet will actually hold once the swap has settled.
+ * Plan a zap: split X, simulate the swap leg against the pool, and ask the
+ * provide leg for no more than the least the swap can return at `maxSpread`
+ * (priceLimit), so it is always paid from the swap itself.
  */
 export async function planZap(pool: PoolView, inIdx: 0 | 1, xMicro: string, maxSpread: number): Promise<ZapPlan | null> {
   const tIn = pool.tokens[inIdx], tOut = pool.tokens[inIdx === 0 ? 1 : 0]
@@ -697,11 +718,12 @@ export async function planZap(pool: PoolView, inIdx: 0 | 1, xMicro: string, maxS
   const sim = await simulateSwap(pool.contract_addr, { info: tIn.info, amount: swapAmount })
   if (!sim || !(Number(sim.return_amount) > 0)) return null
   const remaining = (BigInt(xMicro) - BigInt(swapAmount)).toString()
-  const shaved = (BigInt(sim.return_amount) * BigInt(Math.round((1 - maxSpread) * 10_000)) / BigInt(10_000)).toString()
+  const { limitReturn, floor } = priceLimit(pool.pairType, BigInt(sim.return_amount), BigInt(sim.commission_amount), maxSpread)
+  if (floor === BigInt(0)) return null
   const inAsset: Asset = { info: tIn.info, amount: remaining }
-  const outAsset: Asset = { info: tOut.info, amount: shaved }
+  const outAsset: Asset = { info: tOut.info, amount: floor.toString() }
   const provide: [Asset, Asset] = inIdx === 0 ? [inAsset, outAsset] : [outAsset, inAsset]
   const impact = Number(sim.spread_amount) / Math.max(1, Number(sim.return_amount) + Number(sim.spread_amount)) * 100
-  return { inIdx, swapAmount, expectedReturn: sim.return_amount, spread: sim.spread_amount, provide, impact }
+  return { inIdx, swapAmount, expectedReturn: sim.return_amount, limitReturn: limitReturn.toString(), spread: sim.spread_amount, provide, impact }
 }
 
