@@ -19,7 +19,7 @@ import { isCrystalHolder } from 'lib/holders'
 import {
   KNOWN_TOKENS, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
-  lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_NAME,
+  lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_NAME, VENUE_INCENTIVES, smart,
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
 } from 'lib/dex'
 import { arbPlans, fmtAmount, fmtUsd, totalUsd, type ArbPlan } from 'lib/arb'
@@ -28,14 +28,15 @@ import type { BoardResponse, PoolActivity } from 'pages/api/dex-leaderboard'
 import type { LpFlow } from 'lib/dex-ledger'
 import type { PricesResponse } from 'pages/api/dex-prices'
 import type { VenueResponse } from 'pages/api/dex-venue'
+import type { PositionsResponse } from 'pages/api/positions'
 import { quoteBest, executionLegs, worstCaseOut, routeText, reachable, quoteLoop, planRoutedZap, type Quotes, type Loop, type RoutedZap } from 'lib/route'
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
-import { useRouteSwap, useProvideLiquidity, useWithdrawLiquidity, useCreatePair, useZap } from 'components/transactions/useDex'
+import { useRouteSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useCreatePair, useZap } from 'components/transactions/useDex'
 import { humanizeTxError } from 'lib/errors'
 
-type Tab = 'swap' | 'pools' | 'create' | 'board'
+type Tab = 'swap' | 'pools' | 'positions' | 'create' | 'board'
 
 // The classic Terra brand face is Gotham (terra.money served "Gotham A/B"
 // from Hoefler & Co's cloud.typography in 2020–21; the wordmark is Gotham
@@ -1461,6 +1462,137 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   )
 }
 
+// ─── Positions: everything a wallet holds, on either site ───────
+
+/**
+ * Every pool position the connected wallet holds on Terra Swap or Astroport,
+ * LP staked in Astroport's incentives contract included, with the ways out.
+ * Built so nobody has to open Astroport's app to find or leave a position.
+ */
+function PositionsPanel({ onDone }: { onDone: () => void }) {
+  const me = useMyAddress()
+  const exit = useExitPosition()
+  const unstake = useUnstake()
+  const claim = useClaimRewards()
+  const stake = useStakeLp()
+  const [data, setData] = useState<PositionsResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [reload, setReload] = useState(0)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [ok, setOk] = useState<string | null>(null)
+  useEffect(() => {
+    if (!me) { setData(null); return }
+    let alive = true
+    setLoading(true)
+    fetch(`/api/positions?address=${me}${reload ? `&_=${reload}` : ''}`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then((j: PositionsResponse | null) => { if (alive && j?.positions) setData(j) })
+      .catch(() => {})
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [me, reload])
+
+  const run = async (key: string, f: () => Promise<unknown>, msg: string) => {
+    setErr(null); setOk(null); setBusy(key)
+    try {
+      await f()
+      setOk(msg); onDone()
+      // The block lands in ~6s and the LCD indexes a moment later.
+      ;[5000, 11000].forEach(ms => setTimeout(() => setReload(Date.now()), ms))
+    } catch (e) { setErr(humanizeTxError(e)) } finally { setBusy(null) }
+  }
+
+  if (!me) {
+    return (
+      <Card>
+        <Section title='Your positions' />
+        <p style={{ fontSize: TEXT.sm.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px` }}>
+          Connect a wallet to see every pool position it holds on Terra Swap and Astroport, LP staked in Astroport&apos;s incentives included, and to leave any of them from here.
+        </p>
+        <div className='terra-connect-cta'><WalletButton /></div>
+      </Card>
+    )
+  }
+
+  const positions = data?.positions ?? []
+  const incentives = data?.incentives ?? null
+  const claimable = positions.filter(p => p.pending.length > 0)
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: SPACE['2'] }}>
+        <Section title='Your positions' />
+        <button type='button' onClick={() => setReload(Date.now())} style={{ ...ghostBtn, marginLeft: 'auto', padding: '2px 8px' }} disabled={loading}>{loading ? 'reading…' : 'refresh'}</button>
+      </div>
+      <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px` }}>
+        Every pool position this wallet holds on Terra Swap and Astroport, including LP staked in Astroport&apos;s incentives contract. Withdrawing takes one signature: it unstakes what it needs and sends both tokens to your wallet.
+      </p>
+      {loading && !data && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Reading your positions from the chain…</div>}
+      {data && positions.length === 0 && <div style={{ fontSize: TEXT.sm.size, color: C.textMuted }}>No pool positions found for this wallet.</div>}
+      {incentives && claimable.length > 0 && (
+        <button type='button' style={{ ...primaryBtn, marginBottom: SPACE['3'], opacity: busy ? 0.5 : 1 }} disabled={!!busy}
+          onClick={() => run('claim', () => claim.mutateAsync({ incentives, lpTokens: claimable.map(p => p.pool.liquidity_token), sender: me }), 'Rewards claimed to your wallet.')}>
+          {busy === 'claim' ? 'Confirm in wallet…' : `Claim rewards from ${claimable.length} pool${claimable.length === 1 ? '' : 's'}`}
+        </button>
+      )}
+      <div style={{ display: 'grid', gap: SPACE['2'] }}>
+        {positions.map(pos => {
+          const { pool } = pos
+          const [t0, t1] = pool.tokens
+          const key = pool.contract_addr
+          const total = BigInt(pos.walletLp || '0') + BigInt(pos.stakedLp || '0')
+          const part = (pct: number) => ((total * BigInt(pct)) / BigInt(100)).toString()
+          const staked = BigInt(pos.stakedLp || '0') > BigInt(0)
+          return (
+            <div key={key} style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${C.divider}`, display: 'grid', gap: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], flexWrap: 'wrap' }}>
+                <PairIcons a={t0.label} b={t1.label} size={18} />
+                <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>{pool.label}</b>
+                <span style={{ fontSize: TEXT.caption.size, letterSpacing: '0.1em', textTransform: 'uppercase', color: C.textMuted }}>{VENUE_NAME[pool.venue]}</span>
+                {pos.usd != null && <span style={{ marginLeft: 'auto', color: C.goldLit, fontWeight: 700, fontSize: TEXT.sm.size }}>{fmtUsd(pos.usd)}</span>}
+              </div>
+              <div style={rowStyle}><span>Claim on</span><span style={{ color: C.textSecondary }}>{fmtAmount(pos.amounts[0])} {t0.label} + {fmtAmount(pos.amounts[1])} {t1.label}</span></div>
+              <div style={rowStyle}>
+                <span>LP</span>
+                <span style={{ color: C.textSecondary }}>{fromMicro(pos.walletLp, 6)} in wallet{staked ? ` · ${fromMicro(pos.stakedLp, 6)} staked in Astroport Incentives` : ''}</span>
+              </div>
+              {pos.pending.length > 0 && (
+                <div style={rowStyle}><span>Pending rewards</span><span style={{ color: C.success }}>{pos.pending.map(r => `${fromMicro(r.amount, r.token.decimals)} ${r.token.label}`).join(' · ')}</span></div>
+              )}
+              <div style={{ display: 'flex', gap: SPACE['2'], flexWrap: 'wrap', marginTop: 4 }}>
+                {[25, 50, 100].map(pct => (
+                  <button key={pct} type='button' disabled={!!busy}
+                    style={{ ...ghostBtn, padding: '3px 10px', color: pct === 100 ? C.goldLit : C.textSecondary, borderColor: pct === 100 ? C.goldCore : C.divider, opacity: busy && busy !== `${key}:${pct}` ? 0.5 : 1 }}
+                    onClick={() => run(`${key}:${pct}`, () => exit.mutateAsync({
+                      pair: key, lpToken: pool.liquidity_token, incentives: VENUE_INCENTIVES[pool.venue],
+                      walletLp: pos.walletLp, stakedLp: pos.stakedLp, amount: part(pct), sender: me,
+                    }), pct === 100 ? `Left ${pool.label}. Both tokens are in your wallet.` : `Withdrew ${pct}% of ${pool.label}.`)}>
+                    {busy === `${key}:${pct}` ? 'Confirm in wallet…' : pct === 100 ? 'Withdraw all' : `Withdraw ${pct}%`}
+                  </button>
+                ))}
+                {staked && incentives && (
+                  <button type='button' disabled={!!busy} style={{ ...ghostBtn, padding: '3px 10px', opacity: busy && busy !== `${key}:unstake` ? 0.5 : 1 }}
+                    onClick={() => run(`${key}:unstake`, () => unstake.mutateAsync({ incentives, lpToken: pool.liquidity_token, amount: pos.stakedLp, sender: me }), 'Unstaked. The LP is back in your wallet.')}>
+                    {busy === `${key}:unstake` ? 'Confirm in wallet…' : 'Unstake only'}
+                  </button>
+                )}
+                {pos.rewardsActive && incentives && BigInt(pos.walletLp || '0') > BigInt(0) && (
+                  <button type='button' disabled={!!busy} style={{ ...ghostBtn, padding: '3px 10px', opacity: busy && busy !== `${key}:stake` ? 0.5 : 1 }}
+                    onClick={() => run(`${key}:stake`, () => stake.mutateAsync({ incentives, lpToken: pool.liquidity_token, amount: pos.walletLp, sender: me }), 'Staked in Astroport Incentives.')}>
+                    {busy === `${key}:stake` ? 'Confirm in wallet…' : 'Stake for rewards'}
+                  </button>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginTop: SPACE['2'] }}>{err}</div>}
+      {ok && <div style={{ fontSize: TEXT.xs.size, color: C.success, marginTop: SPACE['2'] }}>✓ {ok}</div>}
+    </Card>
+  )
+}
+
 // ─── Closing a gap in one transaction ───────────────────────────
 
 const LOOP_SLIP = 0.005
@@ -1569,7 +1701,7 @@ function Spark({ pair }: { pair: string }) {
 function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, crystal, badge, spark, arb, onTake, holders, flow }: { p: PoolView; routePools: PoolView[]; onDone: () => void; onParty: (x: Party) => void; act?: PoolActivity; height?: number; firstHand?: { address: string; height: number; txhash?: string }; crystal: boolean; badge?: 'deepest' | 'hottest'; spark?: boolean; arb?: ArbPlan; onTake?: (a: ArbPlan) => void; holders?: PoolHolders; flow?: LpFlow }) {
   const me = useMyAddress()
   const provide = useProvideLiquidity()
-  const withdraw = useWithdrawLiquidity()
+  const withdraw = useExitPosition()
   const [mode, setMode] = useState<'none' | 'add' | 'remove' | 'trades'>('none')
   const [a0, setA0] = useState(''); const [a1, setA1] = useState('')
   const [lp, setLp] = useState('0'); const [lpAmt, setLpAmt] = useState('')
@@ -1578,6 +1710,15 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
   const [t0, t1] = p.tokens
 
   useEffect(() => { if (me) queryCw20Balance(p.liquidity_token, me).then(setLp) }, [me, p.liquidity_token, ok])
+  // LP staked in Astroport's incentives contract is still this wallet's. Count
+  // it, and let Remove unstake whatever the wallet does not hold.
+  const [staked, setStaked] = useState('0')
+  useEffect(() => {
+    const inc = VENUE_INCENTIVES[p.venue]
+    if (!me || !inc) { setStaked('0'); return }
+    smart<string>(inc, { deposit: { lp_token: p.liquidity_token, user: me } }).then(v => setStaked(typeof v === 'string' ? v : '0'))
+  }, [me, p.venue, p.liquidity_token, ok])
+  const lpAll = (BigInt(lp || '0') + BigInt(staked || '0')).toString()
 
   // Both sides' wallet balances, read while the add form is open. Asked for in
   // the community chat 2026-09-12: "how much of either side is in your wallet
@@ -1691,12 +1832,12 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
     } catch (e) { setErr(humanizeTxError(e)) }
   }
   const lpMicro = toMicro(lpAmt, 6)
-  const canRemove = !!me && !!lpMicro && lpMicro !== '0' && BigInt(lpMicro) <= BigInt(lp || '0') && !withdraw.isLoading
+  const canRemove = !!me && !!lpMicro && lpMicro !== '0' && BigInt(lpMicro) <= BigInt(lpAll) && !withdraw.isLoading
   const remove = async () => {
     if (!canRemove || !lpMicro) return
     setErr(null); setOk(null)
     try {
-      await withdraw.mutateAsync({ pair: p.contract_addr, lpToken: p.liquidity_token, amount: lpMicro, sender: me })
+      await withdraw.mutateAsync({ pair: p.contract_addr, lpToken: p.liquidity_token, incentives: VENUE_INCENTIVES[p.venue], walletLp: lp, stakedLp: staked, amount: lpMicro, sender: me })
       setOk('Liquidity removed.'); setLpAmt(''); setMode('none'); onDone()
     } catch (e) { setErr(humanizeTxError(e)) }
   }
@@ -1755,7 +1896,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
         <div style={{ marginLeft: 'auto', display: 'flex', gap: SPACE['2'] }}>
           {!p.empty && <button type='button' style={{ ...ghostBtn, color: mode === 'trades' ? C.goldLit : C.textSecondary, borderColor: mode === 'trades' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'trades' ? 'none' : 'trades')} title='chart, tape and the wallets behind it'>Trades</button>}
           <button type='button' style={{ ...ghostBtn, color: mode === 'add' ? C.goldLit : C.textSecondary, borderColor: mode === 'add' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'add' ? 'none' : 'add')}>Add</button>
-          {Number(lp) > 0 && <button type='button' style={{ ...ghostBtn, color: mode === 'remove' ? C.goldLit : C.textSecondary, borderColor: mode === 'remove' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'remove' ? 'none' : 'remove')}>Remove</button>}
+          {Number(lpAll) > 0 && <button type='button' style={{ ...ghostBtn, color: mode === 'remove' ? C.goldLit : C.textSecondary, borderColor: mode === 'remove' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'remove' ? 'none' : 'remove')}>Remove</button>}
         </div>
       </div>
       {/* The gap, sized. Without the number, "1.9× off market" is a warning
@@ -1807,12 +1948,12 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
       {/* An LP balance is a claim on a fraction of the pool. Say which fraction,
           of what, and what it is worth. The raw token count said none of that. */}
       {(() => {
-        const pos = lpPosition(p, lp)
+        const pos = lpPosition(p, lpAll)
         if (!pos) return null
         const usd = pos.usd == null ? null : pos.usd >= 10 ? `$${Math.round(pos.usd).toLocaleString('en-US')}` : `$${pos.usd.toFixed(2)}`
         return (
           <div style={{ ...rowStyle, marginTop: 2 }}>
-            <span>Your LP · <b style={{ color: C.goldLit }}>{pos.sharePct.toFixed(pos.sharePct >= 10 ? 0 : 1)}%</b> of the pool</span>
+            <span>Your LP · <b style={{ color: C.goldLit }}>{pos.sharePct.toFixed(pos.sharePct >= 10 ? 0 : 1)}%</b> of the pool{staked !== '0' && <span style={{ color: C.textWhisper }}> · {fromMicro(staked, 6)} staked</span>}</span>
             <span style={{ color: C.textSecondary }}>
               {fmtAmount(pos.amounts[0])} {t0.label} + {fmtAmount(pos.amounts[1])} {t1.label}{usd ? ` · ${usd}` : ''}
             </span>
@@ -1825,7 +1966,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
           inventing one turns an honest number into a flattering one. Two sides
           moving opposite ways is impermanent loss, shown plainly. */}
       {(() => {
-        const pos = lpPosition(p, lp)
+        const pos = lpPosition(p, lpAll)
         if (!pos || !flow) return null
         const put = [
           Number(flow.net[assetId(t0.info)] ?? '0') / 10 ** t0.decimals,
@@ -1960,7 +2101,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
         <div style={{ marginTop: SPACE['3'], display: 'grid', gap: SPACE['2'] }}>
           <div style={{ display: 'flex', gap: SPACE['2'] }}>
             <input style={field} type='number' min='0' step='any' placeholder='LP amount' value={lpAmt} onChange={e => setLpAmt(e.target.value)} />
-            <button type='button' style={ghostBtn} onClick={() => setLpAmt(fromMicro(lp, 6, 6).replace(/,/g, ''))}>all</button>
+            <button type='button' style={ghostBtn} onClick={() => setLpAmt(fromMicro(lpAll, 6, 6).replace(/,/g, ''))}>all</button>
           </div>
           <button type='button' style={{ ...primaryBtn, opacity: canRemove ? 1 : 0.5 }} disabled={!canRemove} onClick={remove}>
             {withdraw.isLoading ? 'Confirm in wallet…' : 'Remove liquidity'}
@@ -3154,7 +3295,7 @@ function SwapPageInner() {
           {data?.live && (
             <>
               <div className='terra-tabs' style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
-                {tabBtn('swap', 'Swap')}{tabBtn('pools', `Pools · ${data.pools.length}`)}
+                {tabBtn('swap', 'Swap')}{tabBtn('pools', `Pools · ${data.pools.length}`)}{tabBtn('positions', 'Positions')}
                 {!LITE && <>{tabBtn('create', 'Open a pool')}{tabBtn('board', `Board${board?.rows.length ? ` · ${board.rows.length}` : ''}`)}</>}
                 {/* Terra Predict lives next door, same domain. Not part of Astroport mode. */}
                 {!LITE && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, marginLeft: 'auto', whiteSpace: 'nowrap' }}>Predict ↗</Link>}
@@ -3177,6 +3318,7 @@ function SwapPageInner() {
                     )}
                     </div>
               )}
+              {tab === 'positions' && <PositionsPanel onDone={refresh} />}
               {tab === 'create' && <CreatePanel pools={data.pools} onDone={refresh} onCreated={() => setTab('pools')} onParty={setParty} />}
               {tab === 'board' && <Leaderboard board={board} me={me} onGoSwap={() => setTab('swap')} height={data.height} crystal={crystal} spotlight={spotlight} />}
               <div style={{ marginTop: SPACE['3'] }} />
@@ -3217,7 +3359,7 @@ function SwapPageInner() {
             <p style={{ color: C.textMuted, margin: `${SPACE['4']}px 0 0`, fontSize: TEXT.xs.size, lineHeight: 1.6 }}>
               An unofficial, open-source interface to Astroport&apos;s pool contracts on Terra. Not affiliated with Astroport.
               It adds no fee and holds nothing: every swap and deposit goes straight to the pool contract, and pool fees are whatever that contract charges.
-              Pools of LUNA, USDC, SOLID, CAPA, ROAR, PAXG and wBTC. The code is MIT and anyone can host their own copy.
+              Pools of LUNA, ampLUNA, arbLUNA, USDC, USDT, EURe, ATOM, wBTC, PAXG, ASTRO, SOLID, CAPA and ROAR, and a Positions tab that finds and exits LP anywhere on Terra Swap or Astroport, staked LP included. The code is MIT and anyone can host their own copy.
             </p>
           )}
           {data?.live && !LITE && (

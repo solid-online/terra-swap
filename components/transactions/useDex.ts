@@ -152,6 +152,68 @@ export const useRouteSwap = () => {
   })
 }
 
+/** Send LP to a contract with a hook message: cw20 LP through Send, native LP as funds. */
+function lpSend(sender: string, lpToken: string, contract: string, amount: string, hook: object): EncodeObject {
+  return lpToken.startsWith('terra1')
+    ? exec(sender, lpToken, { send: { contract, amount, msg: b64(hook) } })
+    : exec(sender, contract, hook, [{ denom: lpToken, amount }])
+}
+
+export interface ExitArgs {
+  pair: string
+  lpToken: string
+  /** the venue's incentives contract, when some of the LP is staked there */
+  incentives: string | null
+  walletLp: string
+  stakedLp: string
+  /** LP to withdraw, smallest units, up to wallet + staked */
+  amount: string
+  sender: string
+}
+
+/**
+ * Leave all or part of a position in one transaction: take whatever the wallet
+ * does not already hold out of the incentives contract, then withdraw the
+ * liquidity. Both tokens land in the wallet. If either step fails, neither
+ * happens.
+ */
+export const useExitPosition = () => {
+  const broadcast = useDexBroadcast()
+  return useMutation(async (a: ExitArgs) => {
+    const amount = BigInt(a.amount), wallet = BigInt(a.walletLp || '0'), staked = BigInt(a.stakedLp || '0')
+    if (amount <= BigInt(0) || amount > wallet + staked) throw new Error('That is more LP than this position holds')
+    const msgs: EncodeObject[] = []
+    const fromStake = amount > wallet ? amount - wallet : BigInt(0)
+    if (fromStake > BigInt(0)) {
+      if (!a.incentives) throw new Error('This pool has no incentives contract to unstake from')
+      msgs.push(exec(a.sender, a.incentives, { withdraw: { lp_token: a.lpToken, amount: fromStake.toString() } }))
+    }
+    msgs.push(lpSend(a.sender, a.lpToken, a.pair, amount.toString(), { withdraw_liquidity: {} }))
+    return broadcast(msgs, `${MEMO}: ${fromStake > BigInt(0) ? 'unstake and remove liquidity' : 'remove liquidity'}`)
+  })
+}
+
+/** Take staked LP back to the wallet without withdrawing the liquidity. */
+export const useUnstake = () => {
+  const broadcast = useDexBroadcast()
+  return useMutation(async (a: { incentives: string; lpToken: string; amount: string; sender: string }) =>
+    broadcast([exec(a.sender, a.incentives, { withdraw: { lp_token: a.lpToken, amount: a.amount } })], `${MEMO}: unstake LP`))
+}
+
+/** Claim pending incentive rewards for several pools at once. */
+export const useClaimRewards = () => {
+  const broadcast = useDexBroadcast()
+  return useMutation(async (a: { incentives: string; lpTokens: string[]; sender: string }) =>
+    broadcast([exec(a.sender, a.incentives, { claim_rewards: { lp_tokens: a.lpTokens } })], `${MEMO}: claim rewards`))
+}
+
+/** Stake wallet LP in the incentives contract. Only offered where the pool pays rewards. */
+export const useStakeLp = () => {
+  const broadcast = useDexBroadcast()
+  return useMutation(async (a: { incentives: string; lpToken: string; amount: string; sender: string }) =>
+    broadcast([lpSend(a.sender, a.lpToken, a.incentives, a.amount, { deposit: {} })], `${MEMO}: stake LP`))
+}
+
 export interface ProvideArgs {
   pair: string
   assets: [Asset, Asset]

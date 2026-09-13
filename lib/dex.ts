@@ -43,6 +43,13 @@ export const HOME_VENUE: Venue = IS_ASTRO ? 'astroport' : 'terraswap'
 export const AWAY_VENUE: Venue = IS_ASTRO ? 'terraswap' : 'astroport'
 export const VENUE_FACTORY: Record<Venue, string> = { terraswap: TERRA_SWAP_FACTORY, astroport: ASTRO_FACTORY }
 export const VENUE_NAME: Record<Venue, string> = { terraswap: 'Terra Swap', astroport: 'Astroport' }
+/** Where a venue's LP gets staked for rewards ("Astroport Incentives"). Terra Swap's factory has none. */
+export const VENUE_INCENTIVES: Record<Venue, string | null> = {
+  terraswap: null,
+  astroport: 'terra1eywh4av8sln6r45pxq45ltj798htfy0cfcf7fy3pxc2gcv6uc07se4ch9x',
+}
+/** The native coin registry both factories read decimals from. */
+export const COIN_REGISTRY = 'terra1zuf8fla02926nhpfvk09k2pg6qv9aayflp0qt4a0msppu2h4exqs6af275'
 
 const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
 
@@ -105,6 +112,22 @@ export const AXL_WBTC_DENOM = 'ibc/05D299885B07905B6886F554B39346EA6761246076A11
  * send the wrong one.
  */
 export const USDC_INJ_DENOM = 'ibc/E8481AD838C31D4FC12A504B10F9B4E2F830F8818D2735C2FFC707579B5FA60B'
+/**
+ * Added 2026-09-13 so the pools interface covers where Terra's liquidity
+ * actually sits, not only the tokens this project started with. Astroport TVL
+ * per token that day: ampLUNA $2.1M, EURe $514k, USDT $159k, arbLUNA $121k,
+ * ATOM $38k, ASTRO $23k. Origins read from each denom's IBC trace.
+ */
+export const AMPLUNA_CW20 = 'terra1ecgazyd0waaj3g7l9cmy5gulhxkps2gmxu9ghducvuypjq68mq2s5lvsct'
+export const ARBLUNA_CW20 = 'terra1se7rvuerys4kd2snt6vqswh9wugu49vhyzls8ymc02wl37g2p2ms5yz490'
+/** EURe over Noble, channel-253. */
+export const EURE_DENOM = 'ibc/8D52B251B447B7160421ACFBD50F6B0ABE5F98D2C404B03701130F12044439A1'
+/** Tether USDT, erc20/tether/usdt over channel-272. */
+export const USDT_DENOM = 'ibc/9B19062D46CAB50361CE9B0A3E6D0A7A53AC9E7CB361F32A73CC733144A9A9E5'
+/** ATOM from the Cosmos Hub, channel-0. */
+export const ATOM_DENOM = 'ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2'
+/** ASTRO as Terra's original cw20. Incentives are denominated in the IBC ASTRO, which positions name from its trace. */
+export const ASTRO_CW20 = 'terra1nsuqsk6kh58ulczatwev87ttq2z6r3pusulg9r24mfj2fvtzd4uq3exn26'
 
 /** SOLID first, deliberately — it is the pair the experiment is about. */
 export const KNOWN_TOKENS: KnownToken[] = [
@@ -116,6 +139,14 @@ export const KNOWN_TOKENS: KnownToken[] = [
   { key: 'wBTC.atom', label: 'wBTC.atom', info: { native_token: { denom: WBTC_ATOM_DENOM } }, decimals: 8, cw20: false },
   { key: 'PAXG', label: 'PAXG', info: { native_token: { denom: PAXG_ATOM_DENOM } }, decimals: 18, cw20: false },
   { key: 'USDC.inj', label: 'USDC.inj', info: { native_token: { denom: USDC_INJ_DENOM } }, decimals: 6, cw20: false },
+  { key: 'ampLUNA', label: 'ampLUNA', info: { token: { contract_addr: AMPLUNA_CW20 } }, decimals: 6, cw20: true },
+  { key: 'arbLUNA', label: 'arbLUNA', info: { token: { contract_addr: ARBLUNA_CW20 } }, decimals: 6, cw20: true },
+  { key: 'EURe', label: 'EURe', info: { native_token: { denom: EURE_DENOM } }, decimals: 6, cw20: false },
+  { key: 'USDT', label: 'USDT', info: { native_token: { denom: USDT_DENOM } }, decimals: 6, cw20: false },
+  { key: 'ATOM', label: 'ATOM', info: { native_token: { denom: ATOM_DENOM } }, decimals: 6, cw20: false },
+  { key: 'ASTRO', label: 'ASTRO', info: { token: { contract_addr: ASTRO_CW20 } }, decimals: 6, cw20: true },
+  // USDC over Axelar (channel-6, $81k on Astroport) is deliberately not listed or routed: Noble USDC
+  // is the one dollar this stack uses. Positions in its pools still show up and can be exited.
   // wBTC.axl (AXL_WBTC_DENOM) deliberately not listed: 0.23 BTC on-chain vs
   // 6.55 for the Eureka one. Two wBTCs in a picker is a footgun, not a feature.
   // ampCAPA is deliberately absent: Astroport rejects its TokenFactory denom
@@ -135,6 +166,44 @@ export function tokenFor(info: AssetInfo): KnownToken {
   // Unknown asset: still tradable, just labelled by its id.
   const cw20 = 'token' in info
   return { key: id, label: id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id, info, decimals: 6, cw20 }
+}
+
+const resolvedTokens = new Map<string, KnownToken>()
+/**
+ * A token we do not list, named and sized from the chain: a cw20's own
+ * token_info, or a native denom's decimals from the coin registry and a name
+ * from its IBC trace. For places where someone's position can be in any pool.
+ */
+export async function resolveToken(info: AssetInfo): Promise<KnownToken> {
+  const id = assetId(info)
+  const known = KNOWN_TOKENS.find(t => assetId(t.info) === id)
+  if (known) return known
+  const hit = resolvedTokens.get(id)
+  if (hit) return hit
+  let label = tokenFor(info).label
+  let decimals = 6
+  if ('token' in info) {
+    const t = await smart<{ symbol?: string; decimals?: number }>(id, { token_info: {} })
+    if (t?.symbol) label = t.symbol
+    if (typeof t?.decimals === 'number') decimals = t.decimals
+  } else {
+    const d = await smart<number>(COIN_REGISTRY, { native_token: { denom: id } })
+    if (typeof d === 'number') decimals = d
+    if (id.startsWith('factory/')) label = id.split('/').pop() ?? label
+    else if (id.startsWith('ibc/')) {
+      try {
+        const r = await fetch(`${LCD}/ibc/apps/transfer/v1/denom_traces/${id.slice(4)}`, { signal: AbortSignal.timeout(8000) })
+        const trace = r.ok ? (await r.json())?.denom_trace : null
+        const base: string = trace?.base_denom ?? ''
+        const name = base.includes('/') ? base.split('/').pop() ?? '' : base.replace(/^u/, '')
+        // channel-6 is Axelar: say so, so two USDCs never look alike.
+        if (name) label = `${name.toUpperCase()}${trace?.path === 'transfer/channel-6' ? '.axl' : ''}`
+      } catch { /* keep the short id */ }
+    }
+  }
+  const token: KnownToken = { key: id, label, info, decimals, cw20: 'token' in info }
+  resolvedTokens.set(id, token)
+  return token
 }
 
 export function sameAsset(a: AssetInfo, b: AssetInfo): boolean {
@@ -385,9 +454,11 @@ export function annotateMarket(pools: PoolView[], px: Record<string, number>): P
   return pools
 }
 
-export function toPoolView(pair: PairInfo, pool: PoolState | null, venue: Venue = HOME_VENUE): PoolView {
-  const t0 = tokenFor(pair.asset_infos[0])
-  const t1 = tokenFor(pair.asset_infos[1])
+export function toPoolView(pair: PairInfo, pool: PoolState | null, venue: Venue = HOME_VENUE, tokens?: [KnownToken, KnownToken]): PoolView {
+  // Tokens resolved from the chain win over the static list, so an unlisted
+  // token with 18 decimals is not priced as if it had 6.
+  const t0 = tokens?.[0] ?? tokenFor(pair.asset_infos[0])
+  const t1 = tokens?.[1] ?? tokenFor(pair.asset_infos[1])
   // Reserves come back in the pair's own asset order, which matches asset_infos.
   const r0 = pool?.assets.find((a) => sameAsset(a.info, t0.info))?.amount ?? '0'
   const r1 = pool?.assets.find((a) => sameAsset(a.info, t1.info))?.amount ?? '0'
