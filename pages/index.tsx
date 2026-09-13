@@ -20,6 +20,7 @@ import {
   KNOWN_TOKENS, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
   lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_NAME, VENUE_INCENTIVES, smart,
+  COIN_REGISTRY, ASTRO_STAKING, XASTRO_CW20, ASTRO_CONVERTER, ASTRO_CW20,
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
 } from 'lib/dex'
 import { arbPlans, fmtAmount, fmtUsd, totalUsd, type ArbPlan } from 'lib/arb'
@@ -33,7 +34,7 @@ import { quoteBest, executionLegs, worstCaseOut, routeText, reachable, quoteLoop
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
-import { useRouteSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useCreatePair, useZap } from 'components/transactions/useDex'
+import { useRouteSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap } from 'components/transactions/useDex'
 import { humanizeTxError } from 'lib/errors'
 
 type Tab = 'swap' | 'pools' | 'positions' | 'create' | 'board'
@@ -130,14 +131,23 @@ const field: React.CSSProperties = {
 const select: React.CSSProperties = { ...field, cursor: 'pointer', fontSize: TEXT.sm.size, width: 'auto', minWidth: 120 }
 
 // ─── Token symbols ──────────────────────────────────────────────
-// Self-hosted so the CSP never has to trust a third-party image host. LUNA is
-// terra-money/assets; USDC, wBTC, PAXG and ROAR come from the Cosmos chain
-// registry; SOLID and CAPA are our own marks, cropped square.
+// Self-hosted so the CSP never has to trust a third-party image host, and so a
+// visitor's browser never asks one. LUNA is terra-money/assets; USDC, wBTC,
+// PAXG, ROAR, ampLUNA, arbLUNA, EURe, USDT, ATOM and both ASTROs come from the
+// Cosmos chain registry; SOLID and CAPA are our own marks, cropped square.
 const TOKEN_ICONS: Record<string, string> = {
   LUNA: '/img/tokens/luna.svg', USDC: '/img/tokens/usdc.svg', SOLID: '/img/tokens/solid.svg', CAPA: '/img/tokens/capa.svg',
   ROAR: '/img/tokens/roar.png', 'wBTC.atom': '/img/tokens/wbtc.svg', PAXG: '/img/tokens/paxg.svg',
   // Same issuer, same mark. The label is what tells it apart from Noble USDC.
   'USDC.inj': '/img/tokens/usdc.svg',
+  ampLUNA: '/img/tokens/ampluna.svg', arbLUNA: '/img/tokens/arbluna.svg', EURe: '/img/tokens/eure.svg',
+  USDT: '/img/tokens/usdt.svg', ATOM: '/img/tokens/atom.svg',
+  // Two ASTROs on Terra: the original cw20 and the IBC one from Neutron that Astroport pays in now.
+  'ASTRO.cw20': '/img/tokens/astro-cw20.svg', ASTRO: '/img/tokens/astro.png',
+  bLUNA: '/img/tokens/bluna.png', ampROAR: '/img/tokens/amproar.png', stLUNA: '/img/tokens/stluna.svg',
+  stATOM: '/img/tokens/statom.svg', dATOM: '/img/tokens/datom.svg', INJ: '/img/tokens/inj.svg', FUEL: '/img/tokens/fuel.png',
+  'USDT.axl': '/img/tokens/usdt.svg',
+  // LunaX and VKR have no mark in the chain registry; they get the lettered coin.
 }
 
 function TokenIcon({ label, size = 20, style }: { label: string; size?: number; style?: React.CSSProperties }) {
@@ -1475,6 +1485,7 @@ function PositionsPanel({ onDone }: { onDone: () => void }) {
   const unstake = useUnstake()
   const claim = useClaimRewards()
   const stake = useStakeLp()
+  const astroExit = useAstroLegacyExit()
   const [data, setData] = useState<PositionsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [reload, setReload] = useState(0)
@@ -1525,16 +1536,38 @@ function PositionsPanel({ onDone }: { onDone: () => void }) {
         <button type='button' onClick={() => setReload(Date.now())} style={{ ...ghostBtn, marginLeft: 'auto', padding: '2px 8px' }} disabled={loading}>{loading ? 'reading…' : 'refresh'}</button>
       </div>
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px` }}>
-        Every pool position this wallet holds on Terra Swap and Astroport, including LP staked in Astroport&apos;s incentives contract. Withdrawing takes one signature: it unstakes what it needs and sends both tokens to your wallet.
+        Every pool position this wallet holds on Terra Swap and Astroport, including LP staked in Astroport&apos;s incentives contract, and any old ASTRO. Withdrawing takes one signature: it unstakes what it needs and sends both tokens to your wallet.
       </p>
       {loading && !data && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Reading your positions from the chain…</div>}
-      {data && positions.length === 0 && <div style={{ fontSize: TEXT.sm.size, color: C.textMuted }}>No pool positions found for this wallet.</div>}
+      {data && positions.length === 0 && !(data.astro && (data.astro.xastro !== '0' || data.astro.astroCw20 !== '0')) && <div style={{ fontSize: TEXT.sm.size, color: C.textMuted }}>No pool positions found for this wallet.</div>}
       {incentives && claimable.length > 0 && (
         <button type='button' style={{ ...primaryBtn, marginBottom: SPACE['3'], opacity: busy ? 0.5 : 1 }} disabled={!!busy}
           onClick={() => run('claim', () => claim.mutateAsync({ incentives, lpTokens: claimable.map(p => p.pool.liquidity_token), sender: me }), 'Rewards claimed to your wallet.')}>
           {busy === 'claim' ? 'Confirm in wallet…' : `Claim rewards from ${claimable.length} pool${claimable.length === 1 ? '' : 's'}`}
         </button>
       )}
+      {data?.astro && (data.astro.xastro !== '0' || data.astro.astroCw20 !== '0') && (() => {
+        const ax = data.astro
+        // Convert what unstaking returns (a hair under the estimate, in case the ratio moves) plus what is already held.
+        const convertAmount = (BigInt(ax.astroCw20) + (BigInt(ax.leaveEstimate) * BigInt(9_999)) / BigInt(10_000)).toString()
+        return (
+          <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${C.dividerWarm}`, display: 'grid', gap: 2, marginBottom: SPACE['3'] }}>
+            <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>Old ASTRO on Terra</b>
+            {ax.xastro !== '0' && <div style={rowStyle}><span>xASTRO in the first staking</span><span style={{ color: C.textSecondary }}>{fromMicro(ax.xastro, 6)} · unstakes to about {fromMicro(ax.leaveEstimate, 6)} ASTRO.cw20</span></div>}
+            {ax.astroCw20 !== '0' && <div style={rowStyle}><span>ASTRO.cw20 in wallet</span><span style={{ color: C.textSecondary }}>{fromMicro(ax.astroCw20, 6)}</span></div>}
+            <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.5 }}>
+              Astroport now uses the ASTRO that comes over IBC from Neutron. The old staking contract and the old token still work: this {ax.xastro !== '0' ? 'unstakes the xASTRO and ' : ''}converts all ASTRO.cw20 through Astroport&apos;s own converter, in one signature.
+            </div>
+            <button type='button' disabled={!!busy} style={{ ...primaryBtn, marginTop: 4, opacity: busy && busy !== 'astro' ? 0.5 : 1 }}
+              onClick={() => run('astro', () => astroExit.mutateAsync({
+                staking: ASTRO_STAKING, xastro: XASTRO_CW20, converter: ASTRO_CONVERTER, astroCw20: ASTRO_CW20,
+                xastroAmount: ax.xastro, convertAmount, sender: me,
+              }), 'Done. The ASTRO is in your wallet.')}>
+              {busy === 'astro' ? 'Confirm in wallet…' : ax.xastro !== '0' ? 'Unstake and convert to ASTRO' : 'Convert to ASTRO'}
+            </button>
+          </div>
+        )
+      })()}
       <div style={{ display: 'grid', gap: SPACE['2'] }}>
         {positions.map(pos => {
           const { pool } = pos
@@ -2253,24 +2286,73 @@ function PoolTrades({ p }: { p: PoolView }) {
 
 // ─── Create tab ─────────────────────────────────────────────────
 
-function CreatePanel({ pools, onDone, onCreated, onParty }: { pools: PoolView[]; onDone: () => void; onCreated: () => void; onParty: (x: Party) => void }) {
+/**
+ * Astroport's own settings for a concentrated pool, read from its LUNA/USDC and
+ * CAPA/LUNA pools on 2026-09-13; the two were identical. Only the starting
+ * price differs from pool to pool.
+ */
+/**
+ * Tokens a new pool can hold. Astroport's factory rejects a TokenFactory denom
+ * with capitals in it ("Non-IBC token denom should be lowercase"), so ampROAR
+ * trades in its existing pools but cannot open new ones.
+ */
+const CREATABLE_TOKENS = KNOWN_TOKENS.filter(t => !('native_token' in t.info && t.info.native_token.denom.startsWith('factory/') && /[A-Z]/.test(t.info.native_token.denom)))
+
+const PCL_DEFAULTS = {
+  amp: '10', gamma: '0.000145', mid_fee: '0.0026', out_fee: '0.0045', fee_gamma: '0.00023',
+  repeg_profit_threshold: '0.000002', min_price_scale_delta: '0.000146', ma_half_time: 600,
+}
+
+function CreatePanel({ pools, marketPx, onDone, onCreated, onParty }: { pools: PoolView[]; marketPx?: Record<string, number> | null; onDone: () => void; onCreated: () => void; onParty: (x: Party) => void }) {
   const me = useMyAddress()
   const create = useCreatePair()
   const [a, setA] = useState(assetId(KNOWN_TOKENS[0].info))
   const [b, setB] = useState(assetId(KNOWN_TOKENS[1].info))
+  const [kind, setKind] = useState<'xyk' | 'concentrated'>('xyk')
+  const [startPrice, setStartPrice] = useState('')
+  const [registered, setRegistered] = useState<boolean | null>(true)
   const [err, setErr] = useState<string | null>(null)
   const [ok, setOk] = useState(false)
-  const ia = KNOWN_TOKENS.find(t => assetId(t.info) === a)!.info
-  const ib = KNOWN_TOKENS.find(t => assetId(t.info) === b)!.info
+  const ta = KNOWN_TOKENS.find(t => assetId(t.info) === a)!
+  const tb = KNOWN_TOKENS.find(t => assetId(t.info) === b)!
+  const ia = ta.info, ib = tb.info
   const exists = pools.some(p => p.tokens.some(t => sameAsset(t.info, ia)) && p.tokens.some(t => sameAsset(t.info, ib)))
-  const can = !!me && a !== b && !exists && !create.isLoading
+
+  // Astroport's factory refuses a native token its coin registry does not know. Say so before asking for a signature.
+  useEffect(() => {
+    let alive = true
+    const natives = [ia, ib].filter(i => 'native_token' in i).map(i => assetId(i))
+    if (!LITE || natives.length === 0) { setRegistered(true); return }
+    setRegistered(null)
+    Promise.all(natives.map(d => smart<number>(COIN_REGISTRY, { native_token: { denom: d } })))
+      .then(r => { if (alive) setRegistered(r.every(x => typeof x === 'number')) })
+    return () => { alive = false }
+  }, [ia, ib])
+
+  // A concentrated pool starts at a price: how much of the first token one of the second is worth.
+  useEffect(() => {
+    const pa = marketPx?.[a], pb = marketPx?.[b]
+    setStartPrice(pa && pb && pa > 0 && pb > 0 ? String(Number((pb / pa).toPrecision(8))) : '')
+  }, [a, b, marketPx])
+  const priceScale = (() => {
+    const n = Number(startPrice)
+    if (!(n > 0) || !Number.isFinite(n)) return null
+    const s = n.toFixed(18).replace(/\.?0+$/, '')
+    return Number(s) > 0 ? s : null
+  })()
+  const pcl = LITE && kind === 'concentrated'
+  const can = !!me && a !== b && !exists && registered === true && (!pcl || !!priceScale) && !create.isLoading
   const go = async () => {
     if (!can) return
     setErr(null); setOk(false)
     try {
-      await create.mutateAsync({ assetInfos: [ia, ib] as [AssetInfo, AssetInfo], sender: me })
+      await create.mutateAsync({
+        assetInfos: [ia, ib] as [AssetInfo, AssetInfo], sender: me,
+        pairType: pcl ? 'concentrated' : 'xyk',
+        initParams: pcl && priceScale ? { ...PCL_DEFAULTS, price_scale: priceScale } : undefined,
+      })
       setOk(true); onDone()
-      onParty({ emoji: '🏗️', title: 'BUILDER', sub: 'You opened a pool. 50 points, the stamp is yours, and it is empty — go be its first hand too.' })
+      if (!LITE) onParty({ emoji: '🏗️', title: 'BUILDER', sub: 'You opened a pool. 50 points, the stamp is yours, and it is empty — go be its first hand too.' })
       // The pool exists now but is empty; take them straight to Pools where
       // they (or anyone) can be the first hand in it.
       setTimeout(onCreated, 3400)
@@ -2278,16 +2360,35 @@ function CreatePanel({ pools, onDone, onCreated, onParty }: { pools: PoolView[];
   }
   return (
     <Card>
-      <Section title='Open a pool' />
+      <Section title={LITE ? 'Open an Astroport pool' : 'Open a pool'} />
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `${SPACE['2']}px 0 ${SPACE['3']}px` }}>
-        Anyone can. Creating the pool costs gas and nothing else; it opens empty, and whoever adds liquidity first sets the price.
+        {LITE
+          ? <>Astroport&apos;s factory lets anyone open a pool. It costs gas; the pool opens empty and the first deposit fills it. A standard pool spreads liquidity over every price. A concentrated pool uses Astroport&apos;s own settings and starts at the price you give it.</>
+          : <>Anyone can. Creating the pool costs gas and nothing else; it opens empty, and whoever adds liquidity first sets the price.</>}
       </p>
+      {LITE && (
+        <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
+          {(['xyk', 'concentrated'] as const).map(k => (
+            <button key={k} type='button' onClick={() => setKind(k)} style={{ ...ghostBtn, padding: '3px 10px', color: kind === k ? C.goldLit : C.textMuted, borderColor: kind === k ? C.goldCore : C.divider }}>
+              {k === 'xyk' ? 'Standard' : 'Concentrated'}
+            </button>
+          ))}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: SPACE['2'], alignItems: 'center', marginBottom: SPACE['3'] }}>
-        <TokenSelect value={a} onChange={setA} options={KNOWN_TOKENS} style={{ flex: 1 }} />
+        <TokenSelect value={a} onChange={setA} options={CREATABLE_TOKENS} style={{ flex: 1 }} />
         <span style={{ color: C.textMuted }}>/</span>
-        <TokenSelect value={b} onChange={setB} options={KNOWN_TOKENS} style={{ flex: 1 }} />
+        <TokenSelect value={b} onChange={setB} options={CREATABLE_TOKENS} style={{ flex: 1 }} />
       </div>
-      {exists && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginBottom: SPACE['2'] }}>That pool already exists — add liquidity to it instead. <span style={{ color: C.goldLit }}>You must construct additional pylons.</span></div>}
+      {pcl && (
+        <div style={{ marginBottom: SPACE['3'] }}>
+          <label style={label}>Starting price · 1 {tb.label} = ? {ta.label}</label>
+          <input style={field} type='number' min='0' step='any' placeholder='0.0' value={startPrice} onChange={e => setStartPrice(e.target.value)} />
+          <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Filled from the market where both tokens have a price. Check it: the pool trades around it until liquidity moves it.</div>
+        </div>
+      )}
+      {registered === false && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>Astroport&apos;s coin registry does not know one of these tokens, so its factory would refuse the pool.</div>}
+      {exists && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginBottom: SPACE['2'] }}>That pool already exists — add liquidity to it instead.{!LITE && <> <span style={{ color: C.goldLit }}>You must construct additional pylons.</span></>}</div>}
       {a === b && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>Pick two different tokens.</div>}
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
       {ok && <div style={{ fontSize: TEXT.xs.size, color: C.success, marginBottom: SPACE['2'] }}>✓ Pool created. It will show in Pools once the block lands.</div>}
@@ -3296,7 +3397,7 @@ function SwapPageInner() {
             <>
               <div className='terra-tabs' style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
                 {tabBtn('swap', 'Swap')}{tabBtn('pools', `Pools · ${data.pools.length}`)}{tabBtn('positions', 'Positions')}
-                {!LITE && <>{tabBtn('create', 'Open a pool')}{tabBtn('board', `Board${board?.rows.length ? ` · ${board.rows.length}` : ''}`)}</>}
+                {tabBtn('create', 'Open a pool')}{!LITE && tabBtn('board', `Board${board?.rows.length ? ` · ${board.rows.length}` : ''}`)}
                 {/* Terra Predict lives next door, same domain. Not part of Astroport mode. */}
                 {!LITE && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, marginLeft: 'auto', whiteSpace: 'nowrap' }}>Predict ↗</Link>}
               </div>
@@ -3319,7 +3420,7 @@ function SwapPageInner() {
                     </div>
               )}
               {tab === 'positions' && <PositionsPanel onDone={refresh} />}
-              {tab === 'create' && <CreatePanel pools={data.pools} onDone={refresh} onCreated={() => setTab('pools')} onParty={setParty} />}
+              {tab === 'create' && <CreatePanel pools={data.pools} marketPx={marketPx} onDone={refresh} onCreated={() => setTab('pools')} onParty={setParty} />}
               {tab === 'board' && <Leaderboard board={board} me={me} onGoSwap={() => setTab('swap')} height={data.height} crystal={crystal} spotlight={spotlight} />}
               <div style={{ marginTop: SPACE['3'] }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: SPACE['3'], fontSize: TEXT.xs.size, color: C.textWhisper }}>
@@ -3359,7 +3460,7 @@ function SwapPageInner() {
             <p style={{ color: C.textMuted, margin: `${SPACE['4']}px 0 0`, fontSize: TEXT.xs.size, lineHeight: 1.6 }}>
               An unofficial, open-source interface to Astroport&apos;s pool contracts on Terra. Not affiliated with Astroport.
               It adds no fee and holds nothing: every swap and deposit goes straight to the pool contract, and pool fees are whatever that contract charges.
-              Pools of LUNA, ampLUNA, arbLUNA, USDC, USDT, EURe, ATOM, wBTC, PAXG, ASTRO, SOLID, CAPA and ROAR, and a Positions tab that finds and exits LP anywhere on Terra Swap or Astroport, staked LP included. The code is MIT and anyone can host their own copy.
+              Every Astroport token with real liquidity, pool creation, and a Positions tab that finds and exits LP anywhere on Terra Swap or Astroport, staked LP and old ASTRO included. The code is MIT and anyone can host their own copy.
             </p>
           )}
           {data?.live && !LITE && (

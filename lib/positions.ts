@@ -12,7 +12,7 @@
  */
 
 import {
-  ASTRO_FACTORY, TERRA_SWAP_FACTORY, VENUE_INCENTIVES,
+  ASTRO_CW20, ASTRO_FACTORY, ASTRO_STAKING, TERRA_SWAP_FACTORY, VENUE_INCENTIVES, XASTRO_CW20,
   assetId, knownPairs, marketPrices, queryCw20Balance, queryNativeBalance, queryPairsOf, queryPool,
   resolveToken, smart, toPoolView,
   type Asset, type KnownToken, type PairInfo, type PoolView, type Venue,
@@ -122,6 +122,29 @@ async function mapLimit<T, R>(items: T[], limit: number, f: (x: T) => Promise<R>
     }
   }))
   return out
+}
+
+export interface AstroLegacy {
+  /** xASTRO from Astroport's first staking contract, in the wallet */
+  xastro: string
+  /** ASTRO.cw20 in the wallet */
+  astroCw20: string
+  /** ASTRO.cw20 that unstaking all of that xASTRO returns, rounded down */
+  leaveEstimate: string
+}
+
+/** Old ASTRO a wallet still holds: xASTRO in the first staking contract and ASTRO.cw20. */
+export async function readAstroLegacy(address: string): Promise<AstroLegacy> {
+  const [xastro, astroCw20, shares, deposit] = await Promise.all([
+    queryCw20Balance(XASTRO_CW20, address),
+    queryCw20Balance(ASTRO_CW20, address),
+    smart<string>(ASTRO_STAKING, { total_shares: {} }),
+    smart<string>(ASTRO_STAKING, { total_deposit: {} }),
+  ])
+  const leave = typeof shares === 'string' && typeof deposit === 'string' && BigInt(shares) > BigInt(0)
+    ? (BigInt(xastro || '0') * BigInt(deposit)) / BigInt(shares)
+    : BigInt(0)
+  return { xastro: xastro || '0', astroCw20: astroCw20 || '0', leaveEstimate: leave.toString() }
 }
 
 export async function readPositions(address: string): Promise<Position[]> {

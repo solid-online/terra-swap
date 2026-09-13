@@ -50,6 +50,15 @@ export const VENUE_INCENTIVES: Record<Venue, string | null> = {
 }
 /** The native coin registry both factories read decimals from. */
 export const COIN_REGISTRY = 'terra1zuf8fla02926nhpfvk09k2pg6qv9aayflp0qt4a0msppu2h4exqs6af275'
+/**
+ * Astroport's first ASTRO staking on Terra (cw20 ASTRO in, cw20 xASTRO out),
+ * still holding 31.6M ASTRO for 27.8M xASTRO on 2026-09-13, and Astroport's
+ * converter from ASTRO.cw20 to the IBC ASTRO it uses today. Addresses from
+ * Astroport's own phoenix-1 deployment file.
+ */
+export const ASTRO_STAKING = 'terra1nyu6sk9rvtvsltm7tjjrp6rlavnm3e4sq03kltde6kesam260f8szar8ze'
+export const XASTRO_CW20 = 'terra1x62mjnme4y0rdnag3r8rfgjuutsqlkkyuh4ndgex0wl3wue25uksau39q8'
+export const ASTRO_CONVERTER = 'terra1jyu4nct8ake3k8y8g42n8dvc9umtl5cktmtcy6rfdygse62fp7qse5rwjm'
 
 const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
 
@@ -128,6 +137,26 @@ export const USDT_DENOM = 'ibc/9B19062D46CAB50361CE9B0A3E6D0A7A53AC9E7CB361F32A7
 export const ATOM_DENOM = 'ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2'
 /** ASTRO as Terra's original cw20. Incentives are denominated in the IBC ASTRO, which positions name from its trace. */
 export const ASTRO_CW20 = 'terra1nsuqsk6kh58ulczatwev87ttq2z6r3pusulg9r24mfj2fvtzd4uq3exn26'
+/**
+ * Every other token in an Astroport pool with at least $100 of liquidity on
+ * 2026-09-13, so no swap needs Astroport's own app. Decimals from each token's
+ * token_info or the coin registry; INJ is not in the registry and is 18.
+ */
+export const ASTRO_IBC_DENOM = 'ibc/8D8A7F7253615E5F76CB6252A1E1BD921D5EDB7BBAAF8913FB1C77FF125D9995'
+export const BLUNA_CW20 = 'terra17aj4ty4sz4yhgm08na8drc0v03v2jwr3waxcqrwhajj729zhl7zqnpc0ml'
+export const LUNAX_CW20 = 'terra14xsm2wzvu7xaf567r693vgfkhmvfs08l68h4tjj5wjgyn5ky8e2qvzyanh'
+export const VKR_CW20 = 'terra1gy73st560m2j0esw5c5rjmr899hvtv4rhh4seeajt3clfhr4aupszjss4j'
+/** Stride, channel-46. */
+export const STLUNA_DENOM = 'ibc/08095CEDEA29977C9DD0CE9A48329FDA622C183359D5F90CF04CC4FF80CBE431'
+export const STATOM_DENOM = 'ibc/FD9DBF0DB4D301313195159303811FD2FD72185C4B11A51659EFCD49D7FF1228'
+/** Neutron, channel-229. */
+export const DATOM_DENOM = 'ibc/223FF539430381ADAB3A66AC4822E253C3F845E9841F17FEEC207B3AA9F8D915'
+export const FUEL_DENOM = 'ibc/4B44179AC2F0BEE50C16A673B3B886398988692885B2848A1C8AEF27148B3961'
+/** Injective, channel-255. */
+export const INJ_DENOM = 'ibc/25BC59386BB65725F735EFC0C369BB717AA8B5DAD846EAF9CBF5D0F18F207211'
+export const AMPROAR_DENOM = 'factory/terra1vklefn7n6cchn0u962w3gaszr4vf52wjvd4y95t2sydwpmpdtszsqvk9wy/ampROAR'
+/** Tether over Axelar, channel-6. A USDT, not a USDC, so the Noble-only rule does not apply. */
+export const AXL_USDT_DENOM = 'ibc/CBF67A2BCF6CAE343FDF251E510C8E18C361FC02B23430C121116E0811835DEF'
 
 /** SOLID first, deliberately — it is the pair the experiment is about. */
 export const KNOWN_TOKENS: KnownToken[] = [
@@ -144,7 +173,19 @@ export const KNOWN_TOKENS: KnownToken[] = [
   { key: 'EURe', label: 'EURe', info: { native_token: { denom: EURE_DENOM } }, decimals: 6, cw20: false },
   { key: 'USDT', label: 'USDT', info: { native_token: { denom: USDT_DENOM } }, decimals: 6, cw20: false },
   { key: 'ATOM', label: 'ATOM', info: { native_token: { denom: ATOM_DENOM } }, decimals: 6, cw20: false },
-  { key: 'ASTRO', label: 'ASTRO', info: { token: { contract_addr: ASTRO_CW20 } }, decimals: 6, cw20: true },
+  // Named as the chain registry names it, so it never reads the same as the IBC ASTRO Astroport pays in now.
+  { key: 'ASTRO.cw20', label: 'ASTRO.cw20', info: { token: { contract_addr: ASTRO_CW20 } }, decimals: 6, cw20: true },
+  { key: 'ASTRO', label: 'ASTRO', info: { native_token: { denom: ASTRO_IBC_DENOM } }, decimals: 6, cw20: false },
+  { key: 'bLUNA', label: 'bLUNA', info: { token: { contract_addr: BLUNA_CW20 } }, decimals: 6, cw20: true },
+  { key: 'LunaX', label: 'LunaX', info: { token: { contract_addr: LUNAX_CW20 } }, decimals: 6, cw20: true },
+  { key: 'stLUNA', label: 'stLUNA', info: { native_token: { denom: STLUNA_DENOM } }, decimals: 6, cw20: false },
+  { key: 'stATOM', label: 'stATOM', info: { native_token: { denom: STATOM_DENOM } }, decimals: 6, cw20: false },
+  { key: 'dATOM', label: 'dATOM', info: { native_token: { denom: DATOM_DENOM } }, decimals: 6, cw20: false },
+  { key: 'INJ', label: 'INJ', info: { native_token: { denom: INJ_DENOM } }, decimals: 18, cw20: false },
+  { key: 'ampROAR', label: 'ampROAR', info: { native_token: { denom: AMPROAR_DENOM } }, decimals: 6, cw20: false },
+  { key: 'FUEL', label: 'FUEL', info: { native_token: { denom: FUEL_DENOM } }, decimals: 6, cw20: false },
+  { key: 'VKR', label: 'VKR', info: { token: { contract_addr: VKR_CW20 } }, decimals: 6, cw20: true },
+  { key: 'USDT.axl', label: 'USDT.axl', info: { native_token: { denom: AXL_USDT_DENOM } }, decimals: 6, cw20: false },
   // USDC over Axelar (channel-6, $81k on Astroport) is deliberately not listed or routed: Noble USDC
   // is the one dollar this stack uses. Positions in its pools still show up and can be exited.
   // wBTC.axl (AXL_WBTC_DENOM) deliberately not listed: 0.23 BTC on-chain vs

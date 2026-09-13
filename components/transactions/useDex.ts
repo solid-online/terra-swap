@@ -300,14 +300,51 @@ export const useWithdrawLiquidity = () => {
 export interface CreatePairArgs {
   assetInfos: [AssetInfo, AssetInfo]
   sender: string
+  /** Terra Swap's factory only has xyk; Astroport's also opens concentrated pools. */
+  pairType?: 'xyk' | 'concentrated'
+  /** Concentrated pools need their curve settings and a starting price. */
+  initParams?: object
 }
 
-/** Permissionless on our factory: anyone in the community can open a pool. */
+/** Permissionless on both factories: anyone can open a pool. */
 export const useCreatePair = () => {
   const broadcast = useDexBroadcast()
   return useMutation(async (a: CreatePairArgs) =>
-    broadcast([exec(a.sender, DEX_FACTORY,
-      { create_pair: { pair_type: { xyk: {} }, asset_infos: a.assetInfos } })],
-      `${MEMO}: create pool`),
+    broadcast([exec(a.sender, DEX_FACTORY, {
+      create_pair: {
+        pair_type: a.pairType === 'concentrated' ? { custom: 'concentrated' } : { xyk: {} },
+        asset_infos: a.assetInfos,
+        ...(a.initParams ? { init_params: b64(a.initParams) } : {}),
+      },
+    })], `${MEMO}: create pool`),
   )
+}
+
+export interface AstroExitArgs {
+  staking: string
+  xastro: string
+  converter: string
+  astroCw20: string
+  /** old xASTRO to unstake, smallest units, '0' to skip */
+  xastroAmount: string
+  /** ASTRO.cw20 to convert after that, smallest units, '0' to skip */
+  convertAmount: string
+  sender: string
+}
+
+/**
+ * Old ASTRO, brought current in one transaction: unstake xASTRO from Astroport's
+ * first staking contract (`leave`), then send ASTRO.cw20 to Astroport's converter,
+ * which pays out the IBC ASTRO. If the convert asks for more than the unstake
+ * returned, the whole thing reverts.
+ */
+export const useAstroLegacyExit = () => {
+  const broadcast = useDexBroadcast()
+  return useMutation(async (a: AstroExitArgs) => {
+    const msgs: EncodeObject[] = []
+    if (a.xastroAmount !== '0') msgs.push(exec(a.sender, a.xastro, { send: { contract: a.staking, amount: a.xastroAmount, msg: b64({ leave: {} }) } }))
+    if (a.convertAmount !== '0') msgs.push(exec(a.sender, a.astroCw20, { send: { contract: a.converter, amount: a.convertAmount, msg: b64({}) } }))
+    if (msgs.length === 0) throw new Error('Nothing to convert')
+    return broadcast(msgs, `${MEMO}: ${a.xastroAmount !== '0' ? 'unstake old xASTRO and convert' : 'convert ASTRO'}`)
+  })
 }

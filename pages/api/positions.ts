@@ -9,13 +9,15 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { VENUE_INCENTIVES } from 'lib/dex'
-import { readPositions, type Position } from 'lib/positions'
+import { readAstroLegacy, readPositions, type AstroLegacy, type Position } from 'lib/positions'
 
 export interface PositionsResponse {
   address: string
   positions: Position[]
   /** Astroport's incentives contract, which unstake and claim talk to */
   incentives: string | null
+  /** old xASTRO and ASTRO.cw20 still in the wallet */
+  astro: AstroLegacy | null
   at: number
 }
 
@@ -37,8 +39,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   let build = inflight.get(address)
   if (!build) {
     if (inflight.size >= MAX_BUILDS) return res.status(503).json({ error: 'busy, try again in a moment' })
-    build = readPositions(address)
-      .then(positions => ({ address, positions, incentives: VENUE_INCENTIVES.astroport, at: Date.now() }))
+    build = Promise.all([readPositions(address), readAstroLegacy(address).catch(() => null)])
+      .then(([positions, astro]) => ({ address, positions, incentives: VENUE_INCENTIVES.astroport, astro, at: Date.now() }))
       .finally(() => { inflight.delete(address) })
     inflight.set(address, build)
   }
