@@ -21,6 +21,8 @@ EXPECTED_SHA=d4f36193c98a92dd455fda0e3b2a899071edda1c638d3dbc8149e0e9caf31ff3
 FACTORIES='["terra1gx7n4yrfc2req7tdt9vpj66kr0cssnqkjsr80xmfacjpdlw6mzlqvlp3xd","terra14x9fr055x5hvr48hzy2t4q7kvjvfttsvxusa4xsdcy702mnzsvuqprer8r"]'
 KEYRING=${KEYRING:-file}
 KR=(--keyring-backend "$KEYRING")
+# A key kept under another terrad home: TERRA_HOME=/path ./deploy.sh <key-name>
+if [[ -n "${TERRA_HOME:-}" ]]; then KR+=(--home "$TERRA_HOME"); fi
 Q=(--node "$NODE" -o json)
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -68,8 +70,13 @@ command -v jq >/dev/null || die "jq not found"
 GOT_SHA=$(sha "$WASM")
 [[ "$GOT_SHA" == "$EXPECTED_SHA" ]] || die "wasm sha256 is $GOT_SHA, expected $EXPECTED_SHA"
 echo "  wasm ok: $WASM ($GOT_SHA)"
-KEY_ADDR=$(signed keys show "$KEY" -a "${KR[@]}" | tail -1)
-[[ "$KEY_ADDR" =~ ^terra1 ]] || die "could not read the address of key $KEY"
+ERR=$(mktemp)
+KEY_ADDR=$(signed keys show "$KEY" -a "${KR[@]}" 2>"$ERR" | tail -1 || true)
+if [[ ! "$KEY_ADDR" =~ ^terra1 ]]; then
+  WHY=$(grep -m1 -i -E 'passphrase|not found|not a valid|no such' "$ERR" || true); rm -f "$ERR"
+  die "could not open key '$KEY' in the '$KEYRING' keyring${TERRA_HOME:+ under $TERRA_HOME} (${WHY:-no reason given}). Nothing was sent. Check which keyring holds it with: terrad keys list --keyring-backend $KEYRING${TERRA_HOME:+ --home $TERRA_HOME}"
+fi
+rm -f "$ERR"
 LUNA=$(terrad query bank balances "$KEY_ADDR" "${Q[@]}" | jq -r '[.balances[]? | select(.denom=="uluna") | .amount][0] // "0"')
 (( LUNA >= 200000 )) || die "$KEY_ADDR holds $LUNA uluna; keep at least 0.2 LUNA for gas"
 echo "  key ok: $KEY_ADDR, $(awk "BEGIN{printf \"%.2f\", $LUNA/1000000}") LUNA"
