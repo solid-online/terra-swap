@@ -35,10 +35,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+      # The routing section re-prices a fixed set of trades with the same code the site runs.
+      - name: Compile the site's routing code
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx tsc lib/route.ts --module commonjs --target es2020 --lib es2020,dom --moduleResolution node --baseUrl . --rootDir . --outDir .report-lib --skipLibCheck --esModuleInterop
       - name: Build the report
         env:
           MONTH: ${{ inputs.month }}
           MAINTENANCE_ADDRESS: ${{ vars.MAINTENANCE_ADDRESS }}
+          NODE_PATH: .report-lib
         run: node scripts/monthly-report.mjs status-data "$MONTH" "$MAINTENANCE_ADDRESS" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish it on the status branch
         working-directory: status-data

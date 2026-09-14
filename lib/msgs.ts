@@ -9,11 +9,9 @@
  * They go to Astroport's own contracts (pairs on either factory, the
  * factories, the incentives contract, the router, the first ASTRO staking and
  * the ASTRO converter), to Terra Swap's router in contracts/router, to the
- * liquid staking hubs in lib/lst, and over IBC
- * between Noble and Terra. One is built by Skip Go's API rather than here, the
- * swap-on-arrival deposit, and skipDepositMsg takes it apart and checks it
- * before any wallet sees it. None sends anything anywhere else, and none
- * takes a fee.
+ * liquid staking hubs in lib/lst, and over IBC between Noble and Terra, where
+ * a deposit can carry a call to Terra Swap's router that swaps it on arrival.
+ * None sends anything anywhere else, and none takes a fee.
  */
 
 import type { EncodeObject } from '@cosmjs/proto-signing'
@@ -21,7 +19,7 @@ import { MsgExecuteContract } from 'cosmjs-types/cosmwasm/wasm/v1/tx'
 import { MsgTransfer } from 'cosmjs-types/ibc/applications/transfer/v1/tx'
 import { toUtf8 } from '@cosmjs/encoding'
 import { ASTRO_ROUTER, NOBLE_USDC, TERRA_SWAP_ROUTER, VENUE_FACTORY, type Asset, type AssetInfo } from 'lib/dex'
-import { NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, SKIP_ENTRY_POINT_TERRA } from 'lib/skip'
+import { NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM } from 'lib/noble'
 import type { ExecLeg, RoutePlan, TradePlan } from 'lib/route'
 
 type Coin = { denom: string; amount: string }
@@ -86,6 +84,9 @@ export function routerMsg(sender: string, hops: { offer: AssetInfo; ask: AssetIn
   return exec(sender, first.token.contract_addr, { send: { contract: router, amount, msg: b64(inner) } })
 }
 
+/** Legs as operations for Terra Swap's router, each naming the factory that owns its pair. */
+const routerOperations = (legs: ExecLeg[]) => legs.map(l => ({ factory: VENUE_FACTORY[l.venue], offer_asset_info: l.offerInfo, ask_asset_info: l.askInfo }))
+
 /**
  * A route through Terra Swap's router (contracts/router), which reaches pairs
  * on both factories. Each operation names the factory that owns its pair; the
@@ -97,7 +98,7 @@ export function terraSwapRouterMsg(sender: string, legs: ExecLeg[], amount: stri
   if (!router) throw new Error("Terra Swap's router is not on chain yet")
   const inner = {
     execute_swap_operations: {
-      operations: legs.map(l => ({ factory: VENUE_FACTORY[l.venue], offer_asset_info: l.offerInfo, ask_asset_info: l.askInfo })),
+      operations: routerOperations(legs),
       minimum_receive: minimumReceive,
     },
   }
@@ -158,8 +159,8 @@ export interface ZapArgs {
   /** In-pool zap: the swap leg, and what its price limit is written against (ZapPlan.limitReturn). */
   offer?: Asset
   limitReturn?: string
-  /** Routed zap: buy the other side through these legs instead (lib/route executionLegs). */
-  legs?: ExecLeg[]
+  /** Routed zap: buy the other side along this route instead, signed as lib/route planRoute decided (RoutedZap.plan). */
+  route?: RoutePlan
   /** 0.01 = 1%: the limit each swap carries */
   maxSpread: number
   /** the provide leg, in pair order */
@@ -170,13 +171,14 @@ export interface ZapArgs {
 
 /**
  * Single-sided add in one signature: the swap (inside the pool, or through the
- * best path elsewhere), then allowances and provide_liquidity. The provide leg
- * asks for no more than the swap is guaranteed to return, so if anything
- * cannot be satisfied the whole transaction reverts and nothing moves.
+ * best path elsewhere, via a router when that path crosses several pools, so no
+ * intermediate token is left over), then allowances and provide_liquidity. The
+ * provide leg asks for no more than the swap is guaranteed to return, so if
+ * anything cannot be satisfied the whole transaction reverts and nothing moves.
  */
 export function zapMsgs(a: ZapArgs): EncodeObject[] {
   let swaps: EncodeObject[]
-  if (a.legs?.length) swaps = legMsgs(a.sender, a.legs, a.maxSpread)
+  if (a.route) swaps = routeMsgs(a.sender, a.route, a.maxSpread)
   else if (a.offer && a.limitReturn) swaps = [swapMsg(a.sender, a.pair, a.offer, a.limitReturn, a.maxSpread)]
   else throw new Error('Nothing to swap')
   return [...swaps, ...provideMsgs({ pair: a.pair, assets: a.provide, slippage: a.slippage, sender: a.sender })]
@@ -303,82 +305,39 @@ export function ibcTransferMsg(a: { sender: string; receiver: string; channel: s
   }
 }
 
-export interface SkipDepositExpect {
+export interface ArrivalSwapArgs {
   nobleAddress: string
   terraAddress: string
   /** USDC on Noble, smallest units, exactly as entered */
   amount: string
-  /** the Terra token asked for, as Skip writes it: uluna, ibc/…, or cw20:terra1… */
-  destDenom: string
-  /** Astroport pools this site lists. A deposit may only swap through these. */
-  allowedPools: ReadonlySet<string>
-}
-
-interface SkipTransferJson {
-  source_port?: string; source_channel?: string; token?: { denom?: string; amount?: string }
-  sender?: string; receiver?: string; memo?: string; timeout_timestamp?: string | number
-  timeout_height?: { revision_number?: string | number; revision_height?: string | number }
-}
-interface SkipMemoJson {
-  wasm?: { contract?: string; msg?: { swap_and_action?: {
-    user_swap?: { swap_exact_asset_in?: { swap_venue_name?: string; operations?: { pool: string; denom_in: string; denom_out: string }[] } }
-    min_asset?: { native?: { denom?: string; amount?: string }; cw20?: { address?: string; amount?: string } }
-    post_swap_action?: { transfer?: { to_address?: string } }
-    affiliates?: unknown[]
-  } } }
+  /** lib/route routerPlan for USDC on Terra into the token asked for, priced for `amount` */
+  plan: RoutePlan
+  router?: string
+  timeoutMinutes?: number
 }
 
 /**
- * The one message Skip Go builds for a deposit, taken apart before any wallet
- * sees it. It has to be an IBC transfer of exactly the USDC entered, from this
- * wallet's Noble address over Noble's channel to Terra, to Skip's entry point.
- * Its memo has to swap only through Astroport pools this site lists, start
- * from Noble USDC, end in the token asked for with a minimum set, carry no
- * fee, and send the result to this wallet's own Terra address, naming no
- * other address anywhere. Anything else throws and nothing is signed.
+ * USDC leaving Noble and arriving on Terra already swapped, in one signature
+ * and with no third party in the path. Terra runs IBC hooks: a transfer whose
+ * receiver is a contract, and whose memo is {"wasm":{"contract","msg"}} naming
+ * that same contract, is paid to the contract and runs the message as the
+ * transfer lands. Here the contract is Terra Swap's router, the message is the
+ * route with its minimum, and `to` is the wallet's own Terra address. If the
+ * swap would deliver less than the minimum, or anything else in it fails, the
+ * transfer is acknowledged as failed and Noble returns the USDC to the sender.
  */
-export function skipDepositMsg(raw: { msg: string; msg_type_url: string }, e: SkipDepositExpect): { msg: EncodeObject; minOut: string } {
-  const refuse = (why: string): never => { throw new Error(`Refused the transaction Skip built: ${why}`) }
-  if (raw.msg_type_url !== '/ibc.applications.transfer.v1.MsgTransfer') refuse(`unexpected message type ${raw.msg_type_url}`)
-  let m: SkipTransferJson = {}
-  try { m = JSON.parse(raw.msg) as SkipTransferJson } catch { refuse('the message is unreadable') }
-  if (m.source_port !== 'transfer' || m.source_channel !== NOBLE_TO_TERRA_CHANNEL) refuse('it uses another IBC channel')
-  if (m.sender !== e.nobleAddress) refuse('it is not sent from your Noble address')
-  if (m.token?.denom !== NOBLE_USDC_DENOM || m.token?.amount !== e.amount) refuse('the amount or token differs from what you entered')
-  if (m.receiver !== SKIP_ENTRY_POINT_TERRA) refuse("it does not go to Skip's entry point on Terra")
-  let memo: SkipMemoJson = {}
-  try { memo = JSON.parse(m.memo ?? '') as SkipMemoJson } catch { refuse('the memo is unreadable') }
-  if (memo.wasm?.contract !== SKIP_ENTRY_POINT_TERRA) refuse('the memo calls another contract')
-  const action = memo.wasm?.msg?.swap_and_action
-  const swap = action?.user_swap?.swap_exact_asset_in
-  if (!action || !swap || swap.swap_venue_name !== 'terra-astroport') refuse('the swap is not on Astroport')
-  const ops = swap?.operations ?? []
-  // Skip writes a cw20 as "cw20:terra1…" in routes but as the bare contract address inside the swap steps.
-  const bare = (d?: string) => (d ?? '').replace(/^cw20:/, '')
-  if (ops.length === 0) refuse('there is no swap in it')
-  if (bare(ops[0].denom_in) !== NOBLE_USDC) refuse('the swap does not start from Noble USDC')
-  if (bare(ops[ops.length - 1].denom_out) !== bare(e.destDenom)) refuse('the swap ends in a different token')
-  ops.forEach((op, i) => {
-    if (!e.allowedPools.has(op.pool)) refuse(`pool ${op.pool} is not one this site lists`)
-    if (i > 0 && bare(op.denom_in) !== bare(ops[i - 1].denom_out)) refuse('the swap steps do not connect')
+export function arrivalSwapMsg(a: ArrivalSwapArgs): EncodeObject {
+  const router = a.router ?? TERRA_SWAP_ROUTER
+  if (!router) throw new Error("Terra Swap's router is not on chain")
+  if (!/^terra1[02-9ac-hj-np-z]{38,58}$/.test(a.terraAddress)) throw new Error('That is not a Terra address')
+  const legs = a.plan.legs
+  const first = legs[0]?.offerInfo
+  if (!first || a.plan.minOut === '0' || legs.some(l => l.offerAmount === '0')) throw new Error('Amount too small to route')
+  if (!('native_token' in first) || first.native_token.denom !== NOBLE_USDC) throw new Error('A swap on arrival has to start from USDC')
+  if (legs[0].offerAmount !== a.amount) throw new Error('The price was for a different amount. Wait a moment and try again.')
+  const msg = { execute_swap_operations: { operations: routerOperations(legs), minimum_receive: a.plan.minOut, to: a.terraAddress } }
+  return ibcTransferMsg({
+    sender: a.nobleAddress, receiver: router, channel: NOBLE_TO_TERRA_CHANNEL, denom: NOBLE_USDC_DENOM, amount: a.amount,
+    memo: JSON.stringify({ wasm: { contract: router, msg } }), timeoutMinutes: a.timeoutMinutes,
   })
-  const min = action?.min_asset?.native ?? action?.min_asset?.cw20
-  const minDenom = action?.min_asset?.native?.denom ?? action?.min_asset?.cw20?.address ?? ''
-  if (!min?.amount || bare(minDenom) !== bare(e.destDenom) || !(BigInt(min.amount) > BigInt(0))) refuse('there is no minimum on what arrives')
-  if (action?.post_swap_action?.transfer?.to_address !== e.terraAddress) refuse('the swapped tokens would go to someone else')
-  if ((action?.affiliates ?? []).length > 0) refuse('it carries a fee')
-  const named = (m.memo ?? '').match(/\b(?:terra|noble|osmo|cosmos|neutron)1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{38}\b/g) ?? []
-  if (named.some(addr => addr !== e.terraAddress && addr !== e.nobleAddress)) refuse('it names an address that is not yours')
-  return {
-    msg: {
-      typeUrl: '/ibc.applications.transfer.v1.MsgTransfer',
-      value: MsgTransfer.fromPartial({
-        sourcePort: 'transfer', sourceChannel: NOBLE_TO_TERRA_CHANNEL, token: { denom: NOBLE_USDC_DENOM, amount: e.amount },
-        sender: e.nobleAddress, receiver: SKIP_ENTRY_POINT_TERRA,
-        timeoutHeight: { revisionNumber: BigInt(m.timeout_height?.revision_number ?? 0), revisionHeight: BigInt(m.timeout_height?.revision_height ?? 0) },
-        timeoutTimestamp: BigInt(m.timeout_timestamp ?? 0), memo: m.memo ?? '',
-      }),
-    },
-    minOut: String(min?.amount),
-  }
 }

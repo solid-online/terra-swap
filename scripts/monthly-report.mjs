@@ -9,11 +9,18 @@
  *
  * Without a month it reports on the previous calendar month (UTC). Writes
  * <statusDir>/reports/YYYY-MM.md and prints the same Markdown.
+ *
+ * The routing section re-prices trades with the site's own lib/route, compiled
+ * to CommonJS and found through NODE_PATH, the way the workflow runs it:
+ *   npx tsc lib/route.ts --module commonjs --target es2020 --lib es2020,dom \
+ *     --moduleResolution node --baseUrl . --rootDir . --outDir .report-lib --skipLibCheck
+ *   NODE_PATH=.report-lib node scripts/monthly-report.mjs …
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 
 const [dir = 'status-data', monthArg = '', maintArg = ''] = process.argv.slice(2)
 const now = new Date()
@@ -165,11 +172,126 @@ async function terraSwapSection() {
   return lines
 }
 
+// ─── Routing ────────────────────────────────────────────────────
+
+/** Terra Swap's router (contracts/router), on chain since 2026-09-14. */
+const ROUTER = 'terra1u2uh0jsl2u76j52e6egf09zslsns27qsmzxxzcsxdxymeax8883s9prc4l'
+/** Re-priced every month: the pairs people come for, at two sizes. */
+const BENCH_PAIRS = [['LUNA', 'USDC'], ['SOLID', 'USDC'], ['CAPA', 'USDC'], ['ROAR', 'USDC'], ['PAXG', 'USDC'], ['EURe', 'USDC'], ['USDC', 'LUNA'], ['USDC', 'SOLID']]
+const BENCH_USD = [100, 5000]
+const BENCH_SLIP = 0.01
+const assetKey = (info) => ('native_token' in info ? info.native_token.denom : info.token.contract_addr)
+
+async function routerUsage(decimals, px) {
+  const txs = await txsInMonth(`wasm._contract_address='${ROUTER}'`)
+  let swaps = 0, arrivals = 0, fromSite = 0, volume = 0, unpriced = 0
+  const wallets = new Set()
+  const byPools = new Map()
+  const seen = new Set()
+  for (const tx of txs) {
+    if (seen.has(tx.txhash)) continue
+    seen.add(tx.txhash)
+    // A swap on arrival is run by Terra's IBC hooks inside the relayer's transaction that delivers the USDC.
+    const arrival = (tx._body?.messages ?? []).some((m) => String(m['@type']).endsWith('MsgRecvPacket'))
+    const site = String(tx._body?.memo ?? '').startsWith('Terra Swap')
+    for (const ev of tx.events ?? []) {
+      if (ev.type !== 'wasm') continue
+      const at = Object.fromEntries(ev.attributes.map((a) => [a.key, a.value]))
+      if (at._contract_address !== ROUTER || at.action !== 'execute_swap_operations') continue
+      swaps++
+      if (arrival) arrivals++
+      else if (site) fromSite++
+      wallets.add(at.receiver)
+      byPools.set(at.operations, (byPools.get(at.operations) ?? 0) + 1)
+      const price = px[at.offer_asset], dec = decimals[at.offer_asset]
+      if (price > 0 && dec != null) volume += (Number(at.offer_amount) / 10 ** dec) * price
+      else unpriced++
+    }
+  }
+  const lines = [`- Swaps through Terra Swap's router (${ROUTER}) in ${month}: ${swaps}, to ${wallets.size} wallet${wallets.size === 1 ? '' : 's'}`]
+  if (swaps > 0) {
+    lines.push(
+      `- Signed from the Terra Swap interface: ${fromSite}; USDC from Noble swapped on arrival: ${arrivals}; other callers: ${swaps - fromSite - arrivals}`,
+      `- By pools crossed: ${[...byPools].sort((a, b) => Number(a[0]) - Number(b[0])).map(([n, c]) => `${n}: ${c}`).join(', ')}`,
+      `- Volume: about ${usd(volume)} at the prices on the day this report was generated${unpriced ? ` (${unpriced} swap${unpriced === 1 ? '' : 's'} in tokens without a price are not counted)` : ''}`,
+    )
+  }
+  lines.push("- Routes made only of Astroport's pools go through Astroport's own router and are not counted here.")
+  return lines
+}
+
+/** The same trades priced three ways with the site's own routing code, compiled by the workflow. */
+async function routeBenchmark(pools, px) {
+  let route
+  try {
+    route = createRequire(import.meta.url)('lib/route')
+  } catch {
+    return ["The site's routing code was not compiled where this report was generated (see .github/workflows/monthly-report.yml), so no trades were re-priced."]
+  }
+  const tokens = new Map()
+  for (const p of pools) for (const t of p.tokens) tokens.set(t.key, t)
+  const out = (q) => (q.best ? BigInt(route.planRoute(q.best, BENCH_SLIP).expectedOut) : null)
+  const rows = []
+  for (const [a, b] of BENCH_PAIRS) {
+    const from = tokens.get(a), to = tokens.get(b)
+    const price = from ? px[assetKey(from.info)] : 0
+    if (!from || !to || !(price > 0)) continue
+    const direct = pools.filter((p) => p.tokens.some((t) => t.key === a) && p.tokens.some((t) => t.key === b))
+    for (const size of BENCH_USD) {
+      const amount = ((BigInt(Math.round((size / price) * 1e6)) * 10n ** BigInt(from.decimals)) / 1_000_000n).toString()
+      const one = await route.quoteBest(direct, from, to, amount, undefined, { slip: BENCH_SLIP })
+      const two = await route.quoteBest(pools, from, to, amount, undefined, { slip: BENCH_SLIP, threeHop: false })
+      const all = await route.quoteBest(pools, from, to, amount, undefined, { slip: BENCH_SLIP, split: true })
+      if (!all.best) continue
+      const trade = route.planTrade(all.split ?? [{ quote: all.best, share: 1 }], BENCH_SLIP)
+      rows.push({ label: `${usd(size)} of ${a} → ${b}`, one: out(one), two: out(two), site: BigInt(trade.expectedOut), how: route.tradeText(trade.parts), to })
+    }
+  }
+  if (rows.length === 0) return ['No trade could be re-priced when this report was generated.']
+  const amt = (x, t) => (x == null ? '—' : (Number(x) / 10 ** t.decimals).toLocaleString('en-US', { maximumFractionDigits: 4 }))
+  const gain = (x, base) => (base == null || base === 0n ? null : (Number(x) / Number(base) - 1) * 100)
+  const signed = (g) => (g == null ? '—' : Math.abs(g) < 0.005 ? '0' : `${g > 0 ? '+' : ''}${g.toFixed(2)}%`)
+  const lines = [
+    "Re-priced when this report was generated, with the routing code the site runs (lib/route) against each pool's own simulation, before network fees, at 1% slippage. *One pool* is the best single pool for the pair on either site. *Up to two pools* is the best path through one or two pools. *The site* is what the swap page signs, which also considers paths through three pools and splitting the amount over two paths that share no pool.",
+    '',
+    '| Trade | One pool | Up to two pools | The site | vs one pool | vs up to two pools | Route |',
+    '|---|---:|---:|---:|---:|---:|---|',
+  ]
+  const vsTwo = []
+  for (const r of rows) {
+    const g2 = gain(r.site, r.two)
+    if (g2 != null) vsTwo.push(g2)
+    lines.push(`| ${r.label} | ${amt(r.one, r.to)} | ${amt(r.two, r.to)} | ${amt(r.site, r.to)} ${r.to.label} | ${signed(gain(r.site, r.one))} | ${signed(g2)} | ${r.how} |`)
+  }
+  const better = vsTwo.filter((g) => g >= 0.005)
+  lines.push('', `Paths through three pools and splits delivered more than the best path through at most two pools in ${better.length} of ${vsTwo.length} trades${better.length ? `, by ${(better.reduce((s, g) => s + g, 0) / better.length).toFixed(2)}% on average where they did` : ''}.`)
+  return lines
+}
+
+async function routingSection() {
+  const [{ dex, venue }, market] = await Promise.all([sitePools(), getJson('https://swap.terraluna.app/api/dex-market')])
+  const px = market?.px ?? {}
+  const pools = [...(dex?.pools ?? []), ...(venue?.pools ?? [])].filter((p) => !p.empty)
+  const decimals = {}
+  for (const p of pools) for (const t of p.tokens) decimals[assetKey(t.info)] = t.decimals
+  return [...(await routerUsage(decimals, px)), '', '### What the routing is worth', '', ...(await routeBenchmark(pools, px))]
+}
+
 // ─── The pools interface and Atrium ─────────────────────────────
+
+/** Both sites' pools as swap.terraluna.app serves them, fetched once for the sections that need them. */
+let poolsOnce = null
+function sitePools() {
+  poolsOnce ??= Promise.all([
+    getJson('https://swap.terraluna.app/api/dex'),
+    getJson('https://swap.terraluna.app/api/dex-venue', 120_000),
+  ]).then(([dex, venue]) => ({ dex, venue }))
+  return poolsOnce
+}
 
 async function poolsSection() {
   // Astroport's pools are listed on swap.terraluna.app since pools.terraluna.app was folded into it (2026-09-14).
-  const venue = await getJson('https://swap.terraluna.app/api/dex-venue')
+  const { venue } = await sitePools()
   if (!venue) return ['- The Astroport pool list did not answer when this report was generated.']
   const tvl = (venue.pools ?? []).reduce((s, p) => s + (p.tvlUsd ?? 0), 0)
   return [
@@ -241,6 +363,10 @@ const md = [
   '## Astroport pools',
   '',
   ...(await poolsSection()),
+  '',
+  '## Routing',
+  '',
+  ...(await routingSection()),
   '',
   '## Atrium',
   '',

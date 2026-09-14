@@ -18,7 +18,7 @@ import ElectricPulse from 'components/ElectricPulse'
 import { SPACE, RADIUS, TEXT } from 'components/tokens'
 import { isCrystalHolder } from 'lib/holders'
 import {
-  KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, assetId, sameAsset, tokenFor, toMicro, fromMicro,
+  KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, TERRA_SWAP_ROUTER, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
   lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_FACTORY, VENUE_NAME, VENUE_INCENTIVES, smart, type Venue,
   COIN_REGISTRY, ASTRO_STAKING, XASTRO_CW20, ASTRO_CONVERTER, ASTRO_CW20,
@@ -31,7 +31,7 @@ import type { LpFlow } from 'lib/dex-ledger'
 import type { PricesResponse } from 'pages/api/dex-prices'
 import type { VenueResponse } from 'pages/api/dex-venue'
 import type { PositionsResponse } from 'pages/api/positions'
-import { quoteBest, executionLegs, planRoute, planTrade, routeText, tradeText, reachable, quoteLoop, planRoutedZap, type Quotes, type Loop, type RoutedZap, type TradePlan } from 'lib/route'
+import { quoteBest, planRoute, planTrade, routeText, tradeText, reachable, quoteLoop, planRoutedZap, routerPlan, type Quotes, type Loop, type RoutedZap, type RoutePlan, type TradePlan } from 'lib/route'
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
@@ -39,8 +39,9 @@ import { useRouteSwap, useTradeSwap, useProvideLiquidity, useExitPosition, useUn
 import { useChain } from '@cosmos-kit/react'
 import { fromBech32 } from '@cosmjs/encoding'
 import type { EncodeObject } from '@cosmjs/proto-signing'
-import { ibcTransferMsg, skipDepositMsg, tradeMsgs } from 'lib/msgs'
-import { NOBLE_CHAIN_ID, NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, TERRA_CHAIN_ID, TERRA_TO_NOBLE_CHANNEL, nobleUsdcBalance, skipDepositMsgs, skipDepositRoute, skipStatus, skipTrack, type SkipRoute } from 'lib/skip'
+import { arrivalSwapMsg, ibcTransferMsg, tradeMsgs } from 'lib/msgs'
+import { NOBLE_CHAIN_ID, NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, TERRA_CHAIN_ID, TERRA_TO_NOBLE_CHANNEL, nobleUsdcBalance } from 'lib/noble'
+import { estimateFee } from 'lib/gas'
 import { INJECTIVE_CHAIN_ID, INJECTIVE_TO_TERRA_CHANNEL, TERRA_TO_INJECTIVE_CHANNEL, USDC_INJ_ON_INJECTIVE, injectiveBalance, toInjectiveAddress } from 'lib/injective'
 import { hubForToken, hubInfo, type HubInfo } from 'lib/lst'
 import { lcdFetch } from 'lib/lcd'
@@ -1338,14 +1339,39 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   const [receipt, setReceipt] = useState<{ from: string; to: string; amtIn: string; amtOut: string; fee: string; tx: string; height?: number; route?: string } | null>(null)
   const holdT = useRef<ReturnType<typeof setTimeout> | null>(null)
   const amountRef = useRef<HTMLInputElement>(null)
+  // Swap prices the trade again before the wallet opens; when it got worse, the new number is shown first (go).
+  const [checking, setChecking] = useState(false)
+  const [moved, setMoved] = useState<{ was: string; now: string } | null>(null)
+  const [netFee, setNetFee] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
 
+  /* The receive side a preset or a shared link asked for, parked until `toOptions` has been rebuilt around the new pay side. */
+  const [wantTo, setWantTo] = useState('')
+  /* The first pair is chosen once: by a shared link (?from=LUNA&to=SOLID&amount=100, see share below) when
+     there is one, otherwise by the first impression. One effect and a ref, so nothing can choose after it,
+     not even React running mount effects twice in development. The other site's pools arrive a little after
+     this site's, so a linked token only they carry is waited for. */
+  const firstPair = useRef(false)
   useEffect(() => {
-    if (fromId || !tokens.length) return
+    if (firstPair.current || fromId || !tokens.length) return
+    const q = new URLSearchParams(window.location.search)
+    const wantFrom = q.get('from'), wantTok = q.get('to')
+    const find = (v: string | null) => (v ? tokens.find(t => t.key.toLowerCase() === v.toLowerCase() || assetId(t.info) === v) : undefined)
+    const f = find(wantFrom), t = find(wantTok)
+    if (wantFrom && (!f || (wantTok && !t)) && venuePools.length === 0) return
+    firstPair.current = true
+    if (f) {
+      setFromId(assetId(f.info))
+      const amt = q.get('amount') ?? ''
+      if (/^\d{1,12}(\.\d{1,8})?$/.test(amt)) setAmount(amt)
+      if (t) setWantTo(assetId(t.info))
+      return
+    }
     // First impression: the deepest pool, LUNA on the pay side when it has one.
     const deepest = [...tradable].sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))[0]
-    const pick = deepest ? (deepest.tokens.find(t => t.key === 'LUNA') ?? deepest.tokens[0]) : tokens[0]
+    const pick = deepest ? (deepest.tokens.find(x => x.key === 'LUNA') ?? deepest.tokens[0]) : tokens[0]
     setFromId(assetId(pick.info))
-  }, [tokens, fromId, tradable])
+  }, [tokens, fromId, tradable, venuePools.length])
 
   const from = tokens.find(t => assetId(t.info) === fromId) ?? null
   // Anything reachable in one or two hops across both sites.
@@ -1366,7 +1392,6 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
      immediately; the receive side has to wait one pass for `toOptions` to be
      rebuilt around the new pay side, so it is parked here until it fits. */
   const presetSeen = useRef(0)
-  const [wantTo, setWantTo] = useState('')
   useEffect(() => {
     if (!preset || preset.n === presetSeen.current) return
     presetSeen.current = preset.n
@@ -1401,7 +1426,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   useEffect(() => {
     let alive = true
     const key = `${fromId}|${toId}|${debounced ?? ''}`
-    if (key !== quoteKey.current) { quoteKey.current = key; setQuotes(null) }
+    if (key !== quoteKey.current) { quoteKey.current = key; setQuotes(null); setMoved(null) }
     if (!from || !to || !debounced || debounced === '0') return
     quoteBest(routePools, from, to, debounced, HOME_VENUE, { slip, split: true }).then(q => { if (alive) setQuotes(q) }).catch(() => {})
     return () => { alive = false }
@@ -1418,7 +1443,33 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   const perLeg = !!trade && trade.parts.some(p => p.plan.kind === 'legs' && p.quote.legs.length > 1)
   // The quote must be for the amount on screen, not the one before the debounce caught up.
   const canSwap = !!me && !!route && !!trade && !!from && !!to && !!micro && micro === quotes?.amountMicro
-    && trade.parts.every(p => p.plan.legs.every(l => l.offerAmount !== '0') && p.plan.minOut !== '0') && minOut !== '0' && !insufficient && !swap.isLoading
+    && trade.parts.every(p => p.plan.legs.every(l => l.offerAmount !== '0') && p.plan.minOut !== '0') && minOut !== '0' && !insufficient && !swap.isLoading && !checking
+
+  // The network fee the wallet will propose, from the chain's own simulation of these exact messages (lib/gas).
+  // It needs the wallet's balances, so it is only shown with a wallet connected.
+  const tradeRef = useRef(trade)
+  tradeRef.current = trade
+  const feeKey = me && trade && micro && micro === quotes?.amountMicro && !insufficient && minOut !== '0' ? `${me}|${micro}|${slip}|${tradeText(trade.parts)}` : ''
+  useEffect(() => {
+    setNetFee(null)
+    const t = tradeRef.current
+    if (!feeKey || !t) return
+    let alive = true
+    const timer = setTimeout(() => {
+      estimateFee(me, tradeMsgs(me, t, slip)).then(f => { if (alive) setNetFee(f.uluna) }).catch(() => {})
+    }, 400)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [feeKey, me, slip])
+
+  /** A link that opens this swap filled in, and unfurls as it in chats (getServerSideProps, /api/og/swap). */
+  const share = () => {
+    if (!from || !to) return
+    const u = new URL(window.location.origin)
+    u.searchParams.set('from', from.key)
+    u.searchParams.set('to', to.key)
+    if (/^\d{1,12}(\.\d{1,8})?$/.test(amount.trim()) && Number(amount) > 0) u.searchParams.set('amount', amount.trim())
+    navigator.clipboard?.writeText(u.toString()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800) }).catch(() => {})
+  }
 
   const flip = useCallback(() => {
     if (!from || !to) return
@@ -1454,19 +1505,41 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   const egg = from && !LITE ? amountEgg(amount, from.label) : null
 
   const go = async () => {
-    if (!canSwap || !route || !trade || !from || !micro) return
+    if (!canSwap || !route || !trade || !from || !to || !micro) return
     setErr(null); setReceipt(null)
+    // The quote on screen can be a minute old. Price it again before the wallet opens: if it now delivers
+    // more than half the slippage less, show the new number and let the next press sign that.
+    let signed = trade
+    const key = quoteKey.current
+    setChecking(true)
+    try {
+      const fresh = await quoteBest(routePools, from, to, micro, HOME_VENUE, { slip, split: true })
+      if (quoteKey.current !== key) return
+      if (fresh.best) {
+        const next = planTrade(fresh.split ?? [{ quote: fresh.best, share: 1 }], slip)
+        setQuotes(fresh)
+        if (BigInt(next.expectedOut) * BigInt(20_000) < BigInt(trade.expectedOut) * BigInt(20_000 - Math.round(slip * 10_000))) {
+          setMoved({ was: trade.expectedOut, now: next.expectedOut })
+          return
+        }
+        signed = next
+      }
+    } catch {
+      // An endpoint had a bad moment. The quote on screen still carries its minimum, so that is what gets signed.
+    } finally { setChecking(false) }
+    setMoved(null)
     // The stepper: asking your wallet → broadcasting → written down.
     setPhase(1)
     const p2 = setTimeout(() => setPhase(2), 2500)
     try {
-      const r = await swap.mutateAsync({ trade, maxSpread: slip, sender: me })
+      const r = await swap.mutateAsync({ trade: signed, maxSpread: slip, sender: me })
       clearTimeout(p2); setPhase(3); setTimeout(() => setPhase(0), 2600)
       const hash = (r as { transactionHash?: string })?.transactionHash ?? 'ok'
-      if (to) setReceipt({
-        from: from.label, to: to.label, amtIn: fromMicro(micro, from.decimals, 6), amtOut: fromMicro(trade.expectedOut, to.decimals, 6),
+      const first = signed.parts[0].quote
+      setReceipt({
+        from: from.label, to: to.label, amtIn: fromMicro(micro, from.decimals, 6), amtOut: fromMicro(signed.expectedOut, to.decimals, 6),
         fee: crystal ? '0 (Crystal)' : `${fromMicro(fee, from.decimals, 6)} ${from.label}`, tx: hash, height: (r as { height?: number })?.height,
-        route: trade.parts.length > 1 || route.legs.length > 1 || route.legs[0].pool.venue !== HOME_VENUE ? tradeText(trade.parts) : undefined,
+        route: signed.parts.length > 1 || first.legs.length > 1 || first.legs[0].pool.venue !== HOME_VENUE ? tradeText(signed.parts) : undefined,
       })
       setTimeout(() => setReceipt(null), 20000)
       setTxHash(hash)
@@ -1618,6 +1691,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
           })()}
           {feeBps > 0 && <Row k='Protocol fee' v={crystal ? '0 · Crystal' : `${fromMicro(fee, from.decimals)} ${from.label}`} hi={crystal} />}
           <Row k={`Min. received (${slippage}% ${perLeg ? 'per leg' : 'slippage'})`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
+          {netFee && <Row k='Network fee' v={`≈ ${fromMicro(netFee, 6, 4)} LUNA`} />}
           {(trade.parts.length > 1 || route.legs.length > 1) && (
             <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>
               {trade.parts.length > 1
@@ -1641,6 +1715,12 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
           <button key={s} type='button' style={{ ...ghostBtn, padding: '2px 8px', color: slippage === s ? C.goldLit : C.textMuted, borderColor: slippage === s ? C.goldCore : C.divider }} onClick={() => setSlippage(s)}>{s}%</button>
         ))}
               {slippage === '3' && <span style={{ fontSize: TEXT.xs.size, color: C.korea, fontStyle: 'italic' }}>brave.</span>}
+        {from && to && (
+          <button type='button' onClick={share} title='A link that opens this swap, with its own preview card'
+            style={{ ...ghostBtn, padding: '2px 8px', marginLeft: 'auto', color: copied ? C.success : C.textMuted }}>
+            {copied ? 'link copied ✓' : 'share link'}
+          </button>
+        )}
 </div>
       <div className='terra-kbd' style={{ fontSize: '0.6rem', letterSpacing: '0.06em', color: C.textWhisper, margin: `-2px 0 ${SPACE['2']}px`, fontFamily: TERRA_FONT }}>
         ⌨ <b style={{ color: C.textMuted }}>/</b> amount · <b style={{ color: C.textMuted }}>f</b> flip · <b style={{ color: C.textMuted }}>1 2 3</b> slippage
@@ -1648,6 +1728,11 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
 
       {impact > 5 && <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'] }}>High price impact: even the best path is thin for this size. Trade smaller.</div>}
       {insufficient && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{LITE ? 'Not enough balance.' : 'Not enough minerals.'} ({from?.label})</div>}
+      {moved && to && (
+        <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'], lineHeight: 1.5 }}>
+          The price moved while this was open: the swap now gives about {fromMicro(moved.now, to.decimals, 6)} {to.label} instead of {fromMicro(moved.was, to.decimals, 6)}. Press Swap again to take the new price.
+        </div>
+      )}
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
       {txHash && !err && (
         <div style={{ fontSize: TEXT.xs.size, color: C.success, marginBottom: SPACE['2'], display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -1688,7 +1773,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
             onMouseDown={() => { holdT.current = setTimeout(() => setHolding(true), 650) }}
             onMouseUp={() => { if (holdT.current) clearTimeout(holdT.current); setHolding(false) }}
             onMouseLeave={() => { if (holdT.current) clearTimeout(holdT.current); setHolding(false) }}>
-            {swap.isLoading ? 'Confirm in wallet…' : holding ? (LITE ? 'Swapping…' : 'Deploying capital… 🫡') : impact > 5 ? (LITE ? 'Swap anyway' : 'Swap anyway · steady lads') : 'Swap'}
+            {checking ? 'Checking the price…' : swap.isLoading ? 'Confirm in wallet…' : holding ? (LITE ? 'Swapping…' : 'Deploying capital… 🫡') : impact > 5 ? (LITE ? 'Swap anyway' : 'Swap anyway · steady lads') : 'Swap'}
           </button>
         : <div className='terra-connect-cta'><WalletButton /></div>}
       {pool && from && to && (
@@ -1782,10 +1867,11 @@ const nobleTxUrl = (hash: string) => `https://www.mintscan.io/noble/tx/${hash}`
  * USDC between Noble and Terra without leaving the page.
  *
  * Into Terra: a plain IBC transfer, or, when the USDC should arrive as another
- * token, one transfer Skip Go builds that swaps on arrival through Astroport's
- * pools. That message is checked in lib/msgs before the wallet sees it.
+ * token, the same transfer carrying a call to Terra Swap's router that Terra's
+ * IBC hooks run as it lands (lib/msgs arrivalSwapMsg). If the swap cannot
+ * deliver its minimum, the transfer fails and Noble returns the USDC.
  * Out of Terra: any listed token is swapped to USDC by this site's own routing
- * and the USDC is sent to Noble in the same transaction. See lib/skip.
+ * and the USDC is sent to Noble in the same transaction. See lib/noble.
  */
 function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[]; onDone: () => void; switcher: JSX.Element }) {
   const me = useMyAddress()
@@ -1798,7 +1884,7 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
   const [nobleTo, setNobleTo] = useState('')
   const [nobleBal, setNobleBal] = useState('0')
   const [terraBal, setTerraBal] = useState('0')
-  const [quote, setQuote] = useState<{ out: string; secs: number; path: string; note?: string; route?: SkipRoute; trade?: TradePlan } | null>(null)
+  const [quote, setQuote] = useState<{ out: string; secs: number; path: string; note?: string; plan?: RoutePlan; trade?: TradePlan } | null>(null)
   const [quoteErr, setQuoteErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -1811,17 +1897,15 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
     for (const p of routePools) for (const t of p.tokens) m.set(assetId(t.info), t)
     return Array.from(m.values())
   }, [routePools])
-  /** A deposit can arrive as USDC, or as anything with an Astroport pool against USDC: Skip swaps only there. */
-  const inOptions = useMemo(() => {
-    const m = new Map<string, KnownToken>([[NOBLE_USDC, usdc]])
-    for (const p of routePools) {
-      if (p.venue !== 'astroport' || !p.tokens.some(t => assetId(t.info) === NOBLE_USDC)) continue
-      for (const t of p.tokens) m.set(assetId(t.info), t)
-    }
-    return Array.from(m.values())
-  }, [routePools, usdc])
+  /**
+   * USDC.inj is a different dollar with its own switch above, so it is never what USDC turns into here, or
+   * the other way round. Everything else this site can route USDC into or out of is offered both ways.
+   */
+  const routable = useMemo(() => reachable(routePools, usdc, allTokens).filter(t => assetId(t.info) !== USDC_INJ_DENOM), [routePools, usdc, allTokens])
+  /** A deposit can arrive as USDC, or swapped on arrival by Terra Swap's router into anything routable. */
+  const inOptions = useMemo(() => (TERRA_SWAP_ROUTER ? [usdc, ...routable] : [usdc]), [usdc, routable])
   /** Anything this site can route to USDC can leave for Noble. */
-  const outOptions = useMemo(() => [usdc, ...reachable(routePools, usdc, allTokens)], [routePools, usdc, allTokens])
+  const outOptions = useMemo(() => [usdc, ...routable], [usdc, routable])
   const options = dir === 'in' ? inOptions : outOptions
   useEffect(() => { if (!options.some(t => assetId(t.info) === tokenId)) setTokenId(NOBLE_USDC) }, [options, tokenId])
   const token = options.find(t => assetId(t.info) === tokenId) ?? usdc
@@ -1849,18 +1933,19 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
       return
     }
     if (dir === 'in') {
-      const destDenom = token.cw20 ? `cw20:${tokenId}` : tokenId
-      skipDepositRoute(debounced, destDenom).then(r => {
+      // One path and no split: the swap on arrival is a single call to the router, run inside the relayer's
+      // transaction. Kept to two pools: on 2026-09-14 a two-pool call simulated at 1.02 to 1.10M gas, and the
+      // relayer delivering Skip's hooked packets on this channel spent 1.09M of 2.18M the same day.
+      quoteBest(routePools, usdc, token, debounced, HOME_VENUE, { slip: SLIP, threeHop: false }).then(q => {
         if (!alive) return
-        if (r.txs_required !== 1 || r.required_chain_addresses.some(c => c !== NOBLE_CHAIN_ID && c !== TERRA_CHAIN_ID)) {
-          setQuoteErr('Skip Go found no single-transaction route for this. Bring USDC to Terra and swap it here.')
-          return
-        }
-        setQuote({ out: r.amount_out, secs: r.estimated_route_duration_seconds ?? 30, route: r, path: 'IBC transfer to Terra, swapped on arrival through Astroport by Skip Go', note: r.warning?.message })
-      }).catch(e => {
-        if (!alive) return
-        setQuoteErr(/no routes/i.test(String((e as Error)?.message)) ? `No Astroport pool pairs ${token.label} with USDC. Bring USDC to Terra and swap it here.` : 'Skip Go is not answering right now. Moving plain USDC still works.')
-      })
+        const plan = q.best ? routerPlan(q.best, SLIP) : null
+        if (!q.best || !plan) { setQuoteErr(`No route from USDC to ${token.label} right now. Bring USDC to Terra and swap it here.`); return }
+        setQuote({
+          out: plan.expectedOut, secs: 45, plan,
+          path: `IBC transfer to Terra, swapped on arrival by Terra Swap's router: ${routeText(q.best)}`,
+          note: `At least ${fromMicro(plan.minOut, token.decimals, 6)} ${token.label} arrives, or the swap does not happen and Noble returns the USDC to you.`,
+        })
+      }).catch(() => { if (alive) setQuoteErr('Could not price that right now.') })
     } else {
       quoteBest(routePools, token, usdc, debounced, HOME_VENUE, { slip: SLIP, split: true }).then(q => {
         if (!alive) return
@@ -1872,8 +1957,6 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
     return () => { alive = false }
   }, [dir, tokenId, token, plainUsdc, debounced, routePools, usdc])
 
-  const follow = (hash: string, chain: string, before: string, readDest: () => Promise<string>) => followIbc(hash, chain, before, readDest, setStatus)
-
   const go = async () => {
     setErr(null); setStatus(null)
     if (!micro || micro === '0' || !quote) return
@@ -1882,22 +1965,19 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
       if (dir === 'in') {
         if (!me) throw new Error('Connect your wallet first')
         if (!nobleAddr) throw new Error('Connect your wallet on Noble first')
-        let msgs: EncodeObject[]
-        if (plainUsdc) {
-          msgs = [ibcTransferMsg({ sender: nobleAddr, receiver: me, channel: NOBLE_TO_TERRA_CHANNEL, denom: NOBLE_USDC_DENOM, amount: micro })]
-        } else {
-          const built = await skipDepositMsgs(quote.route!, { [NOBLE_CHAIN_ID]: nobleAddr, [TERRA_CHAIN_ID]: me }, String(SLIP * 100))
-          const txs = built.txs ?? []
-          const tx = txs[0]?.cosmos_tx
-          if (txs.length !== 1 || tx?.chain_id !== NOBLE_CHAIN_ID || tx.msgs.length !== 1) throw new Error('Refused the transaction Skip built: it is not a single message on Noble')
-          const allowedPools = new Set(routePools.filter(p => p.venue === 'astroport').map(p => p.contract_addr))
-          msgs = [skipDepositMsg(tx.msgs[0], { nobleAddress: nobleAddr, terraAddress: me, amount: micro, destDenom: token.cw20 ? `cw20:${tokenId}` : tokenId, allowedPools }).msg]
-        }
-        const before = await queryBalance(me, token.info)
+        const msgs: EncodeObject[] = plainUsdc
+          ? [ibcTransferMsg({ sender: nobleAddr, receiver: me, channel: NOBLE_TO_TERRA_CHANNEL, denom: NOBLE_USDC_DENOM, amount: micro })]
+          : [arrivalSwapMsg({ nobleAddress: nobleAddr, terraAddress: me, amount: micro, plan: quote.plan! })]
+        const [before, nobleBefore] = await Promise.all([queryBalance(me, token.info), nobleUsdcBalance(nobleAddr)])
         const res = await nobleMsgs.mutateAsync({ msgs, memo: plainUsdc ? 'USDC to Terra' : `USDC to Terra as ${token.label}` }) as { transactionHash?: string }
         const hash = res?.transactionHash ?? ''
         setStatus({ tx: hash, chain: NOBLE_CHAIN_ID, text: `Sent on Noble. Arriving on Terra as ${token.label}…` })
-        follow(hash, NOBLE_CHAIN_ID, before, () => queryBalance(me, token.info))
+        if (hash) followIbc(before, () => queryBalance(me, token.info), setStatus, {
+          check: cameBack(() => nobleUsdcBalance(nobleAddr), nobleBefore, micro),
+          text: plainUsdc
+            ? 'It was not delivered, and the USDC is back on Noble.'
+            : `The swap into ${token.label} could not deliver its minimum, so the transfer failed and the USDC is back on Noble. Nothing was swapped.`,
+        })
       } else {
         if (!me) throw new Error('Connect your wallet first')
         if (!destination || !isNobleAddress(destination)) throw new Error('Enter a Noble address, or connect your wallet on Noble')
@@ -1906,11 +1986,14 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
           ...(plainUsdc ? [] : tradeMsgs(me, quote.trade!, SLIP)),
           ibcTransferMsg({ sender: me, receiver: destination, channel: TERRA_TO_NOBLE_CHANNEL, denom: NOBLE_USDC, amount: send }),
         ]
-        const before = await nobleUsdcBalance(destination)
+        const [before, terraBefore] = await Promise.all([nobleUsdcBalance(destination), queryBalance(me, usdc.info)])
         const res = await terraMsgs.mutateAsync({ msgs, memo: plainUsdc ? 'USDC to Noble' : `${token.label} to Noble as USDC` }) as { transactionHash?: string }
         const hash = res?.transactionHash ?? ''
         setStatus({ tx: hash, chain: TERRA_CHAIN_ID, text: 'Sent on Terra. Arriving on Noble…' })
-        follow(hash, TERRA_CHAIN_ID, before, () => nobleUsdcBalance(destination))
+        // Only a plain send can be recognised coming back: after a swap the Terra USDC balance moves for other reasons too.
+        if (hash) followIbc(before, () => nobleUsdcBalance(destination), setStatus, plainUsdc
+          ? { check: cameBack(() => queryBalance(me, usdc.info), terraBefore, send), text: 'It was not delivered, and the USDC is back in your Terra wallet.' }
+          : undefined)
       }
       setAmount('')
       onDone()
@@ -2016,7 +2099,7 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
             </button>}
 
       <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.6, marginTop: SPACE['3'] }}>
-        Plain transfers are ordinary IBC. Swaps on arrival are built by Skip Go and only go through Astroport pools listed here; this page checks the transaction before your wallet sees it. This route carries USDC issued on Noble; USDC.inj from Injective has its own switch above. Noble charges its network fee in USDC. This page adds no fee.
+        Plain transfers are ordinary IBC. A swap on arrival travels in the same transfer: Terra&apos;s IBC hooks hand the USDC to Terra Swap&apos;s router (no owner, no fee), which swaps it through pools listed here and sends the result to your Terra address. If less than the minimum would arrive, the transfer fails and Noble returns the USDC. This route carries USDC issued on Noble; USDC.inj from Injective has its own switch above. Noble charges its network fee in USDC. This page adds no fee.
       </div>
     </Card>
   )
@@ -2024,18 +2107,31 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
 
 type TransferStatus = { tx: string; chain: string; text: string; done?: boolean; failed?: boolean }
 
-/** Follow an IBC transfer until it lands: Skip's tracker, and the destination balance as a second witness. */
-function followIbc(hash: string, chain: string, before: string, readDest: () => Promise<string>, setStatus: (f: (s: TransferStatus | null) => TransferStatus | null) => void) {
-  if (!hash) return
-  skipTrack(hash, chain).catch(() => {})
+/**
+ * Whether an IBC transfer came back, read from the balance it left: once the
+ * send shows there, a rise by the whole amount is the chain returning it (a
+ * swap on arrival that could not meet its minimum, or a packet nobody relayed
+ * in time).
+ */
+function cameBack(read: () => Promise<string>, before: string, amount: string): () => Promise<boolean> {
+  let low: bigint | null = null
+  return async () => {
+    const now = BigInt((await read()) || '0')
+    if (now + BigInt(amount) <= BigInt(before || '0')) { if (low === null || now < low) low = now; return false }
+    return low !== null && now >= low + BigInt(amount)
+  }
+}
+
+/** Follow an IBC transfer until the balance it should arrive in rises, or `returned` sees it come back. */
+function followIbc(before: string, readDest: () => Promise<string>, setStatus: (f: (s: TransferStatus | null) => TransferStatus | null) => void, returned?: { check: () => Promise<boolean>; text: string }) {
   let n = 0
   const tick = async () => {
     n++
-    const [state, now] = await Promise.all([skipStatus(hash, chain).catch(() => 'STATE_PENDING'), readDest().catch(() => before)])
-    if (state === 'STATE_COMPLETED_SUCCESS' || BigInt(now || '0') > BigInt(before || '0')) { setStatus(s => s && { ...s, text: 'Arrived.', done: true }); return }
-    if (state === 'STATE_COMPLETED_ERROR' || state === 'STATE_ABANDONED') { setStatus(s => s && { ...s, text: 'It did not complete. IBC returns the tokens to where they came from; check that balance in a few minutes.', failed: true }); return }
+    const [now, back] = await Promise.all([readDest().catch(() => before), returned ? returned.check().catch(() => false) : Promise.resolve(false)])
+    if (BigInt(now || '0') > BigInt(before || '0')) { setStatus(s => s && { ...s, text: 'Arrived.', done: true }); return }
+    if (back && returned) { setStatus(s => s && { ...s, text: returned.text, failed: true }); return }
     if (n < 40) setTimeout(tick, 7000)
-    else setStatus(s => s && { ...s, text: 'Still on its way. IBC transfers usually land within a few minutes.' })
+    else setStatus(s => s && { ...s, text: 'Still on its way. IBC transfers usually land within a few minutes, and one that is not delivered goes back to where it was sent from.' })
   }
   setTimeout(tick, 6000)
 }
@@ -2098,7 +2194,7 @@ function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher:
   }, [me, token, status?.done])
 
   const turn = (d: 'in' | 'out') => { setDir(d); setAmount(''); setStatus(null); setErr(null) }
-  const follow = (hash: string, chain: string, before: string, readDest: () => Promise<string>) => followIbc(hash, chain, before, readDest, setStatus)
+  const follow = (hash: string, before: string, readDest: () => Promise<string>) => { if (hash) followIbc(before, readDest, setStatus) }
 
   const go = async () => {
     setErr(null); setStatus(null)
@@ -2114,7 +2210,7 @@ function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher:
           memo: 'USDC.inj to Terra',
         })
         setStatus({ tx: hash, chain: INJECTIVE_CHAIN_ID, text: 'Sent on Injective. Arriving on Terra as USDC.inj…' })
-        follow(hash, INJECTIVE_CHAIN_ID, before, () => queryBalance(me, token.info))
+        follow(hash, before, () => queryBalance(me, token.info))
       } else {
         if (!destination) throw new Error('Enter an Injective address (inj1… or 0x…), or connect your wallet on Injective')
         const before = await injectiveBalance(destination, USDC_INJ_ON_INJECTIVE).catch(() => '0')
@@ -2124,7 +2220,7 @@ function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher:
         }) as { transactionHash?: string }
         const hash = res?.transactionHash ?? ''
         setStatus({ tx: hash, chain: TERRA_CHAIN_ID, text: 'Sent on Terra. Arriving on Injective…' })
-        follow(hash, TERRA_CHAIN_ID, before, () => injectiveBalance(destination, USDC_INJ_ON_INJECTIVE))
+        follow(hash, before, () => injectiveBalance(destination, USDC_INJ_ON_INJECTIVE))
       }
       setAmount('')
       onDone()
@@ -2666,9 +2762,8 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
       if (useRouted && zRouted) {
         const tOut = p.tokens[zIdx === 0 ? 1 : 0]
         const keep = { info: zTok.info, amount: zRouted.keepMicro }, got = { info: tOut.info, amount: zRouted.getMicro }
-        const legs = executionLegs(zRouted.swap, 0.01)
         await zap.mutateAsync({
-          pair: p.contract_addr, legs, maxSpread: 0.01, provide: zIdx === 0 ? [keep, got] : [got, keep], slippage: 0.02, sender: me,
+          pair: p.contract_addr, route: zRouted.plan, maxSpread: 0.01, provide: zIdx === 0 ? [keep, got] : [got, keep], slippage: 0.02, sender: me,
         })
       } else if (zPlan) {
         await zap.mutateAsync({
@@ -2914,10 +3009,11 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
               </div>
               {useRouted && zRouted ? (() => {
                 const tOut = p.tokens[zIdx === 0 ? 1 : 0]
-                const legs = executionLegs(zRouted.swap, 0.01)
+                const legs = zRouted.plan.legs
+                const via = zRouted.plan.kind === 'multi' ? " in one call to Terra Swap's router" : zRouted.plan.kind === 'router' ? " in one call to Astroport's router" : ''
                 return (
                   <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6, padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${C.dividerWarm}` }}>
-                    <div>1 · swap <b style={{ color: C.goldLit }}>{fromMicro(legs[0].offerAmount, zTok.decimals, 6)} {zTok.label}</b> → at least {fromMicro(zRouted.getMicro, tOut.decimals, 6)} {tOut.label}, routed {routeText(zRouted.swap)} <span style={{ color: zRouted.impactPct > 3 ? C.alert : C.textMuted }}>({zRouted.impactPct.toFixed(2)}% impact{zPlan ? `, against ${zPlan.impact.toFixed(1)}% inside this pool` : ''})</span></div>
+                    <div>1 · swap <b style={{ color: C.goldLit }}>{fromMicro(legs[0].offerAmount, zTok.decimals, 6)} {zTok.label}</b> → at least {fromMicro(zRouted.getMicro, tOut.decimals, 6)} {tOut.label}, routed {routeText(zRouted.swap)}{via} <span style={{ color: zRouted.impactPct > 3 ? C.alert : C.textMuted }}>({zRouted.impactPct.toFixed(2)}% impact{zPlan ? `, against ${zPlan.impact.toFixed(1)}% inside this pool` : ''})</span></div>
                     <div>2 · add <b style={{ color: C.goldLit }}>{fromMicro(zRouted.keepMicro, zTok.decimals, 6)} {zTok.label}</b> + <b style={{ color: C.goldLit }}>{fromMicro(zRouted.getMicro, tOut.decimals, 6)} {tOut.label}</b></div>
                     <div style={{ color: C.textWhisper }}>Anything the swap returns above that, and any {zTok.label} not needed to match, stays in your wallet.</div>
                   </div>
@@ -3741,9 +3837,13 @@ function StatBand({ data, board }: { data: DexResponse; board: BoardResponse | n
   )
 }
 
-function Hero({ poolFeeBps, onReplay, onToast, me, right }: { poolFeeBps: number; onReplay: () => void; onToast: (m: string) => void; me?: string; right?: React.ReactNode }) {
+function Hero({ poolFeeBps, onReplay, onHome, onToast, me, right }: { poolFeeBps: number; onReplay: () => void; onHome: () => void; onToast: (m: string) => void; me?: string; right?: React.ReactNode }) {
   const clicks = useRef(0)
-  const wordmarkClick = () => {
+  // The wordmark is the way home. A modified click opens the home page in a new tab like any link; three clicks still replay the intro.
+  const wordmarkClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+    e.preventDefault()
+    onHome()
     clicks.current += 1
     if (clicks.current >= 3) { clicks.current = 0; if (!LITE) onReplay() }
     setTimeout(() => { clicks.current = 0 }, 900)
@@ -3766,13 +3866,13 @@ function Hero({ poolFeeBps, onReplay, onToast, me, right }: { poolFeeBps: number
         margin: '0 0 0.6rem', letterSpacing: '-0.02em', fontWeight: 700,
         display: 'flex', alignItems: 'baseline', gap: '0.4rem', flexWrap: 'wrap',
       }}>
-        <span className='atrium-swap-title' style={{ fontFamily: TERRA_FONT, cursor: 'default', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.28em', whiteSpace: 'nowrap' }} onClick={wordmarkClick} title='Triple-click. Trust me.'>
+        <Link href='/' className='atrium-swap-title' aria-label={`${APP_NAME} home`} style={{ fontFamily: TERRA_FONT, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.28em', whiteSpace: 'nowrap', textDecoration: 'none' }} onClick={wordmarkClick} title='Home'>
           {/* The Terra globe (terra-money/assets). Sits on the cap-height line, same size as the letters. */}
           <img src='/img/terra-globe.svg' alt='' aria-hidden width={52} height={49} draggable={false}
             style={{ width: '0.82em', height: 'auto', flex: 'none', filter: 'drop-shadow(0 2px 10px rgba(52,88,184,0.45))' }} />
           {/* Like the original lockup: "Terra" heavy, the product word light. */}
           <span><span style={{ fontWeight: 700 }}>Terra</span> <span style={{ fontWeight: 300, letterSpacing: '0' }}>{LITE ? 'Pools' : 'Swap'}</span></span>
-        </span>
+        </Link>
       </h1>
      </div>
       {right && (
@@ -4084,6 +4184,12 @@ function SwapPageInner() {
     setTab('swap')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
+  /** The wordmark goes home: the Swap tab at the top, without a shared link's or a spotlight's state in the address. */
+  const goHome = useCallback(() => {
+    setTab('swap'); setLoopFor(null); setSpotlight('')
+    try { if (window.location.search) window.history.replaceState(null, '', '/') } catch { /* sandboxed */ }
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
   const load = useCallback(async () => {
     setSyncing(true)
     try {
@@ -4222,7 +4328,7 @@ function SwapPageInner() {
         <article className='terra-article' style={{ margin: '0 auto', padding: '1.4rem 1.2rem 2rem' }}>
           {/* No "back to Atrium" row: the wallet sits on the wordmark's line instead, which buys
               a whole row above the fold. The struck-through Atrium in the h1 still tells the story. */}
-          <Hero poolFeeBps={data?.poolFeeBps ?? 30} onReplay={() => setIntro(true)} onToast={m => setToast({ msg: m })} me={me || undefined}
+          <Hero poolFeeBps={data?.poolFeeBps ?? 30} onReplay={() => setIntro(true)} onHome={goHome} onToast={m => setToast({ msg: m })} me={me || undefined}
             right={<WalletButton />} />
 
           {data && !data.live && (
@@ -4648,18 +4754,27 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const q = ctx.query.who
   const who = typeof q === 'string' && /^terra1[0-9a-z]{38,}$/.test(q) ? q : ''
   const short = who ? `${who.slice(0, 9)}…${who.slice(-4)}` : ''
+  // A shared swap (SwapPanel's "share link") unfurls as that swap. Only tokens this site names; anything else gets the generic card.
+  const known = (v: unknown) => (typeof v === 'string' ? KNOWN_TOKENS.find(t => t.key.toLowerCase() === v.toLowerCase()) : undefined)
+  const sf = known(ctx.query.from), st = known(ctx.query.to)
+  const sa = typeof ctx.query.amount === 'string' && /^\d{1,12}(\.\d{1,8})?$/.test(ctx.query.amount) && Number(ctx.query.amount) > 0 ? ctx.query.amount : ''
+  const share = !LITE && !who && sf && st && sf.key !== st.key
+    ? { query: `?from=${encodeURIComponent(sf.key)}&to=${encodeURIComponent(st.key)}${sa ? `&amount=${sa}` : ''}`, title: `Swap ${sa ? `${sa} ` : ''}${sf.label} for ${st.label} on Terra Swap` }
+    : null
   return {
     props: {
       og: {
-        title: LITE ? 'Terra Pools' : who ? `${short} on Terra Swap` : 'Terra Swap',
-        image: LITE ? `${base}/img/terra-globe-180.png` : `${base}/api/og/swap${who ? `?who=${who}` : ''}`,
+        title: LITE ? 'Terra Pools' : who ? `${short} on Terra Swap` : share ? share.title : 'Terra Swap',
+        image: LITE ? `${base}/img/terra-globe-180.png` : `${base}/api/og/swap${who ? `?who=${who}` : share ? share.query : ''}`,
         contract: '', token: '',
         description: LITE
           ? `An unofficial, open-source interface to Astroport's pool contracts on Terra. No fee, no keys, self-hostable. Not affiliated with Astroport.`
           : who
           ? `${short} is written down on the Terra Swap board. A DEX for Terra built in a night for the price of gas. Steady lads.`
+          : share
+          ? `Opens Terra Swap with this swap filled in. The route is priced across Terra Swap's and Astroport's pools when the page opens. No interface fee.`
           : 'A DEX for Terra, shipped overnight on audited pool code, with every fee handed back to the people who show up. No permission. Steady lads.',
-        url: `${base}/${who ? `?who=${who}` : ''}`,
+        url: `${base}/${who ? `?who=${who}` : share ? share.query : ''}`,
         type: 'website',
         // The Terra globe as this page's favicon (terra-money/assets); PNG for Safari/iOS home screen.
         icon: '/img/terra-globe.svg',

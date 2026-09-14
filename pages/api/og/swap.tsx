@@ -12,6 +12,7 @@
 
 // Next 13.5: ImageResponse ships from next/server (next/og arrived in 14).
 import { ImageResponse, type NextRequest } from 'next/server'
+import { KNOWN_TOKENS, assetId } from 'lib/dex'
 
 export const config = { runtime: 'edge' }
 
@@ -61,15 +62,30 @@ async function getJson<T>(url: string): Promise<T | null> {
 export default async function handler(req: NextRequest) {
   const origin = new URL(req.url).origin
   const host = new URL(req.url).host
-  const who = new URL(req.url).searchParams.get('who') || ''
+  const params = new URL(req.url).searchParams
+  const who = params.get('who') || ''
   const personal = /^terra1[0-9a-z]{38,}$/.test(who)
+  // A shared swap, ?from=LUNA&to=SOLID&amount=100: only tokens this site names get a card of their own.
+  const known = (k: string | null) => (k ? KNOWN_TOKENS.find(t => t.key.toLowerCase() === k.toLowerCase()) : undefined)
+  const sFrom = known(params.get('from')), sTo = known(params.get('to'))
+  const sAmt = /^\d{1,12}(\.\d{1,8})?$/.test(params.get('amount') ?? '') && Number(params.get('amount')) > 0 ? params.get('amount')! : ''
+  const share = !personal && sFrom && sTo && sFrom.key !== sTo.key ? { from: sFrom, to: sTo, amount: sAmt } : null
 
-  const [font, light, dex, board] = await Promise.all([
+  const [font, light, dex, board, market] = await Promise.all([
     brandFont(700),
     brandFont(300),
     getJson<{ tvlUsd: number; pools: { empty: boolean }[] }>(`${origin}/api/dex`),
     getJson<{ rows: Row[]; totalEvents: number }>(`${origin}/api/dex-leaderboard`),
+    share?.amount ? getJson<{ px: Record<string, number> }>(`${origin}/api/dex-market`) : Promise.resolve(null),
   ])
+  /** What the shared amount is worth in the other token at the reference prices, for the card only. The page prices the real route. */
+  const shareOut = (() => {
+    if (!share?.amount) return ''
+    const a = market?.px?.[assetId(share.from.info)], b = market?.px?.[assetId(share.to.info)]
+    if (!(a && a > 0 && b && b > 0)) return ''
+    const out = (Number(share.amount) * a) / b
+    return out.toLocaleString('en-US', { maximumFractionDigits: out >= 100 ? 0 : out >= 1 ? 2 : 6 })
+  })()
   const tvl = dex?.tvlUsd ?? 0
   const pools = dex?.pools.length ?? 0
   const onBoard = board?.rows.length ?? 0
@@ -97,7 +113,7 @@ export default async function handler(req: NextRequest) {
         {/* top: kicker + wordmark */}
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', fontSize: 22, letterSpacing: 8, color: BLUE, textTransform: 'uppercase' }}>
-            {personal ? 'WRITTEN DOWN · TERRA SWAP' : 'EXPERIMENTAL · DEX ON TERRA'}
+            {personal ? 'WRITTEN DOWN · TERRA SWAP' : share ? 'A SWAP ON TERRA · NO INTERFACE FEE' : 'EXPERIMENTAL · DEX ON TERRA'}
           </div>
           <div style={{ display: 'flex', alignItems: 'flex-end', marginTop: 18 }}>
             {/* The Terra globe, cap-height with the wordmark. */}
@@ -113,8 +129,20 @@ export default async function handler(req: NextRequest) {
           </div>
         </div>
 
-        {/* middle: personal card or manifesto */}
-        {me ? (
+        {/* middle: a shared swap, a personal card, or the manifesto */}
+        {share ? (
+          <div style={{ display: 'flex', flexDirection: 'column', backgroundColor: CARD, border: `2px solid ${ROYAL}`, borderRadius: 24, padding: '28px 36px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', fontSize: 64, lineHeight: 1.1, color: TEXT }}>
+              {share.amount ? <span style={{ color: GOLD, marginRight: 18 }}>{Number(share.amount).toLocaleString('en-US', { maximumFractionDigits: 8 })}</span> : null}
+              <span>{share.from.label}</span>
+              <span style={{ color: MUTED, margin: '0 22px' }}>→</span>
+              <span>{share.to.label}</span>
+            </div>
+            <div style={{ display: 'flex', fontSize: 28, color: MUTED, marginTop: 12 }}>
+              {shareOut ? `about ${shareOut} ${share.to.label} at today's reference price` : "Priced across Terra Swap's and Astroport's pools when it opens"}
+            </div>
+          </div>
+        ) : me ? (
           <div style={{ display: 'flex', alignItems: 'center', backgroundColor: CARD, border: `2px solid ${ROYAL}`, borderRadius: 24, padding: '28px 36px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', marginRight: 40 }}>
               <div style={{ display: 'flex', fontSize: 20, letterSpacing: 4, color: MUTED }}>RANK</div>

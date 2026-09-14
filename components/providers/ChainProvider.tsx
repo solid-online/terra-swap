@@ -5,7 +5,7 @@ import { customWallets, mobileWallets, WALLETCONNECT_PROJECT_ID } from 'constant
 // the entire mainnet/ directory into every visitor's bundle.
 import terra2Chain from 'chain-registry/mainnet/terra2/chain'
 import terra2Assets from 'chain-registry/mainnet/terra2/assets'
-// Noble, for moving USDC in and out (lib/skip). Also narrow imports.
+// Noble, for moving USDC in and out (lib/noble). Also narrow imports.
 import nobleChain from 'chain-registry/mainnet/noble/chain'
 import nobleAssets from 'chain-registry/mainnet/noble/assets'
 // Injective, for moving USDC.inj in and out. Its transactions are built and
@@ -17,7 +17,8 @@ import { CHAIN_CONFIGS } from 'constants/chainsConfig'
 import { GasPrice } from '@cosmjs/stargate'
 import { Chain } from '@chain-registry/types'
 import { REST_ENDPOINTS, RPC_ENDPOINTS } from 'lib/lcd'
-import { NOBLE_REST_ENDPOINTS, NOBLE_RPC_ENDPOINTS } from 'lib/skip'
+import { NOBLE_REST_ENDPOINTS, NOBLE_RPC_ENDPOINTS } from 'lib/noble'
+import { GAS_PRICE } from 'lib/gas'
 import { INJECTIVE_REST_ENDPOINTS, INJECTIVE_RPC_ENDPOINTS } from 'lib/injective'
 
 const chains = [terra2Chain, nobleChain, injectiveChain]
@@ -61,7 +62,7 @@ const signerOptionsStatic: SignerOptions = {
       case 'phoenix-1':
       case 'pisco-1':
         return {
-          gasPrice: GasPrice.fromString('0.15uluna'),
+          gasPrice: GasPrice.fromString(GAS_PRICE),
         }
     }
   },

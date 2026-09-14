@@ -187,7 +187,7 @@ export interface Quotes {
  * separate swaps delivers a little less than it quotes (planRoute), and that is
  * what the ranking compares.
  */
-export async function quoteBest(pools: PoolView[], from: KnownToken, to: KnownToken, amountMicro: string, home?: Venue, opts: { slip?: number; split?: boolean } = {}): Promise<Quotes> {
+export async function quoteBest(pools: PoolView[], from: KnownToken, to: KnownToken, amountMicro: string, home?: Venue, opts: { slip?: number; split?: boolean; threeHop?: boolean } = {}): Promise<Quotes> {
   const none: Quotes = { best: null, home: null, split: null, amountMicro }
   if (!amountMicro || amountMicro === '0') return none
   const slip = opts.slip ?? 0.01
@@ -196,7 +196,8 @@ export async function quoteBest(pools: PoolView[], from: KnownToken, to: KnownTo
     .map(path => ({ path, est: path.pools.reduce((x, p, i) => estimateHop(p, path.tokens[i], x), amount) }))
     .sort((a, b) => b.est - a.est)
   const short = rank(paths(pools, from, to))
-  const long = rank(paths3(pools, from, to))
+  // threeHop: false keeps to one or two pools: a swap on arrival over IBC stays inside a relayer's gas, and the monthly report measures three-pool paths against it.
+  const long = opts.threeHop === false ? [] : rank(paths3(pools, from, to))
   if (short.length === 0 && long.length === 0) return none
   // Three-pool paths are ranked on their own, so they add candidates instead of pushing out the best short ones.
   const pick = [...short.slice(0, SIMULATE_TOP), ...long.slice(0, SIMULATE_TOP_3HOP)].map(r => r.path)
@@ -299,16 +300,6 @@ export function executionLegs(q: Quote, slip: number): ExecLeg[] {
     prev = floor
   }
   return out
-}
-
-/**
- * The least a route returns if it succeeds with every leg at its limit. A
- * leg that would return less than the next leg offers makes the whole
- * transaction revert instead.
- */
-export function worstCaseOut(q: Quote, slip: number): string {
-  const legs = executionLegs(q, slip)
-  return legs[legs.length - 1].minReturn
 }
 
 export interface RoutePlan {
@@ -438,9 +429,11 @@ export async function quoteLoop(pools: PoolView[], drifted: PoolView, start: Kno
 
 export interface RoutedZap {
   swap: Quote
+  /** how the swap is signed (planRoute): through a router whenever it crosses more than one pool */
+  plan: RoutePlan
   /** the deposited token kept back from the swap and provided, smallest units */
   keepMicro: string
-  /** the other side provided: the swap's worst case, smallest units */
+  /** the other side provided: the least the swap lets through, smallest units */
   getMicro: string
   impactPct: number
 }
@@ -451,9 +444,11 @@ export interface RoutedZap {
  * the best path elsewhere and depositing both avoids that. With k the pool's
  * out-per-in ratio and p the outside out-per-in price, swapping
  *   s = X · k / (k + p)
- * leaves two sides that match the pool. The deposit uses the swap's worst
- * case and the matching share of what was kept, so it never asks for more
- * than the wallet holds; any remainder stays in the wallet.
+ * leaves two sides that match the pool. The swap is signed the way planRoute
+ * signs any route, so a path through several pools goes through a router and
+ * leaves no intermediate token behind. The deposit uses the swap's minimum and
+ * the matching share of what was kept, so it never asks for more than the
+ * wallet holds; what the swap returns above its minimum stays in the wallet.
  */
 export async function planRoutedZap(pools: PoolView[], target: PoolView, inIdx: 0 | 1, xMicro: string, slip: number): Promise<RoutedZap | null> {
   const tIn = target.tokens[inIdx], tOut = target.tokens[inIdx === 0 ? 1 : 0]
@@ -470,12 +465,26 @@ export async function planRoutedZap(pools: PoolView[], target: PoolView, inIdx: 
   const x = Number(xMicro) / 10 ** tIn.decimals
   const swapMicro = toMicro(((x * k) / (k + p)).toFixed(Math.min(tIn.decimals, 8)), tIn.decimals)
   if (!swapMicro || swapMicro === '0' || BigInt(swapMicro) >= BigInt(xMicro)) return null
-  const q = await quoteBest(others, tIn, tOut, swapMicro)
+  const q = await quoteBest(others, tIn, tOut, swapMicro, undefined, { slip })
   if (!q.best) return null
-  const get = BigInt(worstCaseOut(q.best, slip))
+  const plan = planRoute(q.best, slip)
+  const get = BigInt(plan.minOut)
   const matching = BigInt(Math.max(0, Math.floor(((Number(get) / 10 ** tOut.decimals) / k) * 10 ** tIn.decimals)))
   const kept = BigInt(xMicro) - BigInt(swapMicro)
   const keep = matching < kept ? matching : kept
   if (keep === BigInt(0) || get === BigInt(0)) return null
-  return { swap: q.best, keepMicro: keep.toString(), getMicro: get.toString(), impactPct: q.best.impactPct }
+  return { swap: q.best, plan, keepMicro: keep.toString(), getMicro: get.toString(), impactPct: q.best.impactPct }
+}
+
+// ─── One contract call ──────────────────────────────────────────
+
+/**
+ * A quote as a single call to Terra Swap's router, whatever its length, for a
+ * swap that has to be one contract call: a deposit swapped on arrival over IBC
+ * runs as the router's own execute (lib/msgs arrivalSwapMsg). The router
+ * checks the minimum on what reaches the receiver. Null when there is no router.
+ */
+export function routerPlan(q: Quote, slip: number): RoutePlan | null {
+  if (!TERRA_SWAP_ROUTER) return null
+  return { kind: 'multi', legs: executionLegs(q, slip), expectedOut: q.outMicro, minOut: shave(BigInt(q.outMicro), slip).toString(), leftover: [] }
 }
