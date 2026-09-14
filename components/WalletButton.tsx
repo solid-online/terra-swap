@@ -3,7 +3,7 @@
 /**
  * Connect / disconnect. A small modal lists the wallets cosmos-kit knows
  * about for this environment: browser extensions on desktop, the in-wallet
- * browser's own wallet inside Keplr Mobile or Leap, WalletConnect wallets
+ * browser's own wallet inside Keplr Mobile, WalletConnect wallets
  * on other mobile browsers (when a project id is configured).
  *
  * In a gated region the button becomes a "browse-only" pill: pages and data
@@ -14,7 +14,6 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useChainWallet } from '@cosmos-kit/react'
 import { wallets as keplrWallets } from '@cosmos-kit/keplr-extension'
-import { wallets as leapWallets } from '@cosmos-kit/leap-extension'
 import { customWallets, mobileWallets } from 'constants/wallet'
 import { defaultChain } from 'constants/chain'
 import useMyAddress from './hooks/useMyAddress'
@@ -27,7 +26,6 @@ function resolveWallets(): WalletList {
   if (typeof window === 'undefined') return customWallets
   const ua = window.navigator.userAgent.toLowerCase()
   if (ua.includes('keplrwalletmobile')) return keplrWallets as WalletList
-  if (ua.includes('leapcosmos')) return leapWallets as WalletList
   if (/android|iphone|ipad|ipod|mobile/.test(ua)) return mobileWallets.length ? mobileWallets : customWallets
   return customWallets
 }
@@ -119,7 +117,7 @@ export default function WalletButton({ className, onClick }: { className?: strin
             </div>
             <p style={{ margin: '0 0 12px', fontSize: '0.8rem', color: '#9a927f', lineHeight: 1.5 }}>Terra, phoenix-1. Nothing is stored; the wallet signs, the chain does the rest.</p>
             <div style={{ display: 'grid', gap: 8 }}>
-              {wallets.length === 0 && <div style={{ fontSize: '0.8rem', color: '#9a927f' }}>No wallet available in this browser. Open this page inside Keplr Mobile or Leap, or use a desktop browser with the extension.</div>}
+              {wallets.length === 0 && <div style={{ fontSize: '0.8rem', color: '#9a927f' }}>No wallet available in this browser. Open this page inside Keplr Mobile, or use a desktop browser with the Keplr extension.</div>}
               {wallets.map(w => <WalletRow key={w.walletName} wallet={w} onDone={() => setOpen(false)} />)}
             </div>
           </section>
