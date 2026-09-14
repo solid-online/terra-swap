@@ -56,7 +56,12 @@ export default function CommandPalette({ items, onClose }: { items: PaletteItem[
   const listRef = useRef<HTMLDivElement>(null)
   /** Phones get no keyboard hints; the palette only ever opens in the browser, so window is there. */
   const [touch] = useState(() => typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches)
-  useEffect(() => { inputRef.current?.focus() }, [])
+  // Focus goes to the search box, and back to wherever it was (the Search button, usually) on close.
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null
+    inputRef.current?.focus()
+    return () => { before?.focus?.() }
+  }, [])
 
   const list = useMemo(() => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean)
@@ -86,6 +91,7 @@ export default function CommandPalette({ items, onClose }: { items: PaletteItem[
   const pick = (item: PaletteItem) => { onClose(); item.run() }
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.preventDefault(); onClose() }
+    else if (e.key === 'Tab') { e.preventDefault(); setActive(a => (list.length ? (a + (e.shiftKey ? list.length - 1 : 1)) % list.length : 0)) }
     else if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(a + 1, Math.max(0, list.length - 1))) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(a - 1, 0)) }
     else if (e.key === 'Enter' && list[active]) { e.preventDefault(); pick(list[active]) }
