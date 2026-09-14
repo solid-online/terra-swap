@@ -19,6 +19,7 @@ import {
   type AstroExitArgs, type CreatePairArgs, type ExitArgs, type ProvideArgs, type ZapArgs,
 } from 'lib/msgs'
 import type { RoutePlan } from 'lib/route'
+import { sendInjectiveTx } from 'lib/injective'
 
 const MEMO = IS_ASTRO ? 'Terra Pools' : 'Terra Swap'
 
@@ -157,5 +158,32 @@ export function useNobleBroadcast() {
 
 export const useNobleMsgs = () => {
   const broadcast = useNobleBroadcast()
+  return useMutation(async (a: { msgs: EncodeObject[]; memo: string }) => broadcast(a.msgs, `${MEMO}: ${a.memo}`))
+}
+
+/**
+ * The same region gate for messages signed on Injective. Injective keys are
+ * Ethereum-style, which the generic signing client cannot write, so
+ * lib/injective builds the envelope, asks the wallet to sign, broadcasts, and
+ * throws if the chain refuses it. Resolves with the transaction hash.
+ */
+export function useInjectiveBroadcast() {
+  const injective = useChain('injective')
+  const { txAllowed, country } = useTxRegionGate()
+  return useCallback(async (msgs: EncodeObject[], memo: string) => {
+    if (txAllowed === false) throw new RegionRestricted(country)
+    if (!injective.address || !injective.isWalletConnected) throw new Error('Connect your wallet on Injective first')
+    try {
+      const geo = await fetch('/api/geo', { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
+      if (geo && geo.tx_allowed === false) throw new RegionRestricted(geo.country ?? country)
+    } catch (e) {
+      if (e instanceof RegionRestricted) throw e
+    }
+    return sendInjectiveTx(injective.getOfflineSignerDirect(), injective.address, msgs, memo)
+  }, [injective, txAllowed, country])
+}
+
+export const useInjectiveMsgs = () => {
+  const broadcast = useInjectiveBroadcast()
   return useMutation(async (a: { msgs: EncodeObject[]; memo: string }) => broadcast(a.msgs, `${MEMO}: ${a.memo}`))
 }

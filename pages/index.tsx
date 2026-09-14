@@ -18,7 +18,7 @@ import ElectricPulse from 'components/ElectricPulse'
 import { SPACE, RADIUS, TEXT } from 'components/tokens'
 import { isCrystalHolder } from 'lib/holders'
 import {
-  KNOWN_TOKENS, NOBLE_USDC, assetId, sameAsset, tokenFor, toMicro, fromMicro,
+  KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
   lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_NAME, VENUE_INCENTIVES, smart,
   COIN_REGISTRY, ASTRO_STAKING, XASTRO_CW20, ASTRO_CONVERTER, ASTRO_CW20,
@@ -35,12 +35,13 @@ import { quoteBest, executionLegs, planRoute, routeText, reachable, quoteLoop, p
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
-import { useRouteSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap, useLstBond, useLstUnbond, useLstWithdraw, useNobleMsgs, useTerraMsgs } from 'components/transactions/useDex'
+import { useRouteSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap, useLstBond, useLstUnbond, useLstWithdraw, useNobleMsgs, useTerraMsgs, useInjectiveMsgs } from 'components/transactions/useDex'
 import { useChain } from '@cosmos-kit/react'
 import { fromBech32 } from '@cosmjs/encoding'
 import type { EncodeObject } from '@cosmjs/proto-signing'
 import { ibcTransferMsg, routeMsgs, skipDepositMsg } from 'lib/msgs'
 import { NOBLE_CHAIN_ID, NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, TERRA_CHAIN_ID, TERRA_TO_NOBLE_CHANNEL, nobleUsdcBalance, skipDepositMsgs, skipDepositRoute, skipStatus, skipTrack, type SkipRoute } from 'lib/skip'
+import { INJECTIVE_CHAIN_ID, INJECTIVE_TO_TERRA_CHANNEL, TERRA_TO_INJECTIVE_CHANNEL, USDC_INJ_ON_INJECTIVE, injectiveBalance, toInjectiveAddress } from 'lib/injective'
 import { hubForToken, hubInfo, type HubInfo } from 'lib/lst'
 import { lcdFetch } from 'lib/lcd'
 import { TOKEN_META, tokenScore } from 'lib/tokenMeta'
@@ -1768,7 +1769,7 @@ const nobleTxUrl = (hash: string) => `https://www.mintscan.io/noble/tx/${hash}`
  * Out of Terra: any listed token is swapped to USDC by this site's own routing
  * and the USDC is sent to Noble in the same transaction. See lib/skip.
  */
-function TransferPanel({ routePools, onDone }: { routePools: PoolView[]; onDone: () => void }) {
+function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[]; onDone: () => void; switcher: JSX.Element }) {
   const me = useMyAddress()
   const noble = useChain('noble')
   const nobleMsgs = useNobleMsgs()
@@ -1853,21 +1854,7 @@ function TransferPanel({ routePools, onDone }: { routePools: PoolView[]; onDone:
     return () => { alive = false }
   }, [dir, tokenId, token, plainUsdc, debounced, routePools, usdc])
 
-  /** Follow the transfer until it lands: Skip's tracker, and the destination balance as a second witness. */
-  const follow = (hash: string, chain: string, before: string, readDest: () => Promise<string>) => {
-    if (!hash) return
-    skipTrack(hash, chain).catch(() => {})
-    let n = 0
-    const tick = async () => {
-      n++
-      const [state, now] = await Promise.all([skipStatus(hash, chain).catch(() => 'STATE_PENDING'), readDest().catch(() => before)])
-      if (state === 'STATE_COMPLETED_SUCCESS' || BigInt(now || '0') > BigInt(before || '0')) { setStatus(s => s && { ...s, text: 'Arrived.', done: true }); return }
-      if (state === 'STATE_COMPLETED_ERROR' || state === 'STATE_ABANDONED') { setStatus(s => s && { ...s, text: 'It did not complete. IBC returns the tokens to where they came from; check that balance in a few minutes.', failed: true }); return }
-      if (n < 40) setTimeout(tick, 7000)
-      else setStatus(s => s && { ...s, text: 'Still on its way. IBC transfers usually land within a few minutes.' })
-    }
-    setTimeout(tick, 6000)
-  }
+  const follow = (hash: string, chain: string, before: string, readDest: () => Promise<string>) => followIbc(hash, chain, before, readDest, setStatus)
 
   const go = async () => {
     setErr(null); setStatus(null)
@@ -1924,6 +1911,7 @@ function TransferPanel({ routePools, onDone }: { routePools: PoolView[]; onDone:
   return (
     <Card>
       <Section title='Transfer' />
+      {switcher}
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `${SPACE['2']}px 0 ${SPACE['3']}px` }}>
         Move USDC between Noble and Terra in one signature. Arriving on Terra it can land as USDC or already swapped into another token; leaving Terra, any token here is swapped to USDC on the way out.
       </p>
@@ -2010,7 +1998,212 @@ function TransferPanel({ routePools, onDone }: { routePools: PoolView[]; onDone:
             </button>}
 
       <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.6, marginTop: SPACE['3'] }}>
-        Plain transfers are ordinary IBC. Swaps on arrival are built by Skip Go and only go through Astroport pools listed here; this page checks the transaction before your wallet sees it. Only USDC issued on Noble is supported. Noble charges its network fee in USDC. This page adds no fee.
+        Plain transfers are ordinary IBC. Swaps on arrival are built by Skip Go and only go through Astroport pools listed here; this page checks the transaction before your wallet sees it. This route carries USDC issued on Noble; USDC.inj from Injective has its own switch above. Noble charges its network fee in USDC. This page adds no fee.
+      </div>
+    </Card>
+  )
+}
+
+type TransferStatus = { tx: string; chain: string; text: string; done?: boolean; failed?: boolean }
+
+/** Follow an IBC transfer until it lands: Skip's tracker, and the destination balance as a second witness. */
+function followIbc(hash: string, chain: string, before: string, readDest: () => Promise<string>, setStatus: (f: (s: TransferStatus | null) => TransferStatus | null) => void) {
+  if (!hash) return
+  skipTrack(hash, chain).catch(() => {})
+  let n = 0
+  const tick = async () => {
+    n++
+    const [state, now] = await Promise.all([skipStatus(hash, chain).catch(() => 'STATE_PENDING'), readDest().catch(() => before)])
+    if (state === 'STATE_COMPLETED_SUCCESS' || BigInt(now || '0') > BigInt(before || '0')) { setStatus(s => s && { ...s, text: 'Arrived.', done: true }); return }
+    if (state === 'STATE_COMPLETED_ERROR' || state === 'STATE_ABANDONED') { setStatus(s => s && { ...s, text: 'It did not complete. IBC returns the tokens to where they came from; check that balance in a few minutes.', failed: true }); return }
+    if (n < 40) setTimeout(tick, 7000)
+    else setStatus(s => s && { ...s, text: 'Still on its way. IBC transfers usually land within a few minutes.' })
+  }
+  setTimeout(tick, 6000)
+}
+
+const injectiveTxUrl = (hash: string) => `https://www.mintscan.io/injective/tx/${hash}`
+
+/** Which dollar to move: USDC on Noble, or USDC.inj on Injective. Two separate tokens, never swapped for each other here. */
+function TransferPanel({ routePools, onDone }: { routePools: PoolView[]; onDone: () => void }) {
+  const [net, setNet] = useState<'noble' | 'injective'>('noble')
+  const switcher = (
+    <div role='tablist' aria-label='Which USDC to move' style={{ display: 'flex', flexWrap: 'wrap', gap: SPACE['2'], marginTop: SPACE['2'] }}>
+      {([['noble', 'USDC · Noble'], ['injective', 'USDC.inj · Injective']] as const).map(([k, text]) => (
+        <button key={k} type='button' role='tab' aria-selected={net === k} onClick={() => setNet(k)}
+          style={{ ...ghostBtn, padding: '4px 12px', color: net === k ? C.goldLit : C.textMuted, borderColor: net === k ? C.goldCore : C.divider }}>
+          {text}
+        </button>
+      ))}
+    </div>
+  )
+  return net === 'noble'
+    ? <NobleTransfer routePools={routePools} onDone={onDone} switcher={switcher} />
+    : <InjectiveTransfer onDone={onDone} switcher={switcher} />
+}
+
+/**
+ * USDC.inj between Injective and Terra: ordinary IBC both ways, nothing
+ * swapped. It leaves Injective as Circle's USDC and arrives on Terra as
+ * USDC.inj, a token of its own that this site never exchanges for, or counts
+ * as, USDC from Noble.
+ */
+function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher: JSX.Element }) {
+  const me = useMyAddress()
+  const injective = useChain('injective')
+  const injectiveMsgs = useInjectiveMsgs()
+  const terraMsgs = useTerraMsgs()
+  const [dir, setDir] = useState<'in' | 'out'>('in')
+  const [amount, setAmount] = useState('')
+  const [injTo, setInjTo] = useState('')
+  const [injBal, setInjBal] = useState('0')
+  const [injGas, setInjGas] = useState<string | null>(null)
+  const [terraBal, setTerraBal] = useState('0')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [status, setStatus] = useState<TransferStatus | null>(null)
+  const token = useMemo(() => tokenFor({ native_token: { denom: USDC_INJ_DENOM } }), [])
+  const micro = toMicro(amount, 6)
+  const injAddr = injective.address ?? ''
+  const typed = injTo.trim()
+  const typedAddr = typed ? toInjectiveAddress(typed) : null
+  const destination = typed ? typedAddr ?? '' : injAddr
+
+  useEffect(() => {
+    if (!injAddr) { setInjBal('0'); setInjGas(null); return }
+    injectiveBalance(injAddr, USDC_INJ_ON_INJECTIVE).then(setInjBal).catch(() => {})
+    injectiveBalance(injAddr, 'inj').then(setInjGas).catch(() => {})
+  }, [injAddr, status?.done])
+  useEffect(() => {
+    if (!me) { setTerraBal('0'); return }
+    queryBalance(me, token.info).then(setTerraBal).catch(() => {})
+  }, [me, token, status?.done])
+
+  const turn = (d: 'in' | 'out') => { setDir(d); setAmount(''); setStatus(null); setErr(null) }
+  const follow = (hash: string, chain: string, before: string, readDest: () => Promise<string>) => followIbc(hash, chain, before, readDest, setStatus)
+
+  const go = async () => {
+    setErr(null); setStatus(null)
+    if (!micro || micro === '0') return
+    setBusy(true)
+    try {
+      if (!me) throw new Error('Connect your wallet first')
+      if (dir === 'in') {
+        if (!injAddr) throw new Error('Connect your wallet on Injective first')
+        const before = await queryBalance(me, token.info)
+        const hash = await injectiveMsgs.mutateAsync({
+          msgs: [ibcTransferMsg({ sender: injAddr, receiver: me, channel: INJECTIVE_TO_TERRA_CHANNEL, denom: USDC_INJ_ON_INJECTIVE, amount: micro })],
+          memo: 'USDC.inj to Terra',
+        })
+        setStatus({ tx: hash, chain: INJECTIVE_CHAIN_ID, text: 'Sent on Injective. Arriving on Terra as USDC.inj…' })
+        follow(hash, INJECTIVE_CHAIN_ID, before, () => queryBalance(me, token.info))
+      } else {
+        if (!destination) throw new Error('Enter an Injective address (inj1… or 0x…), or connect your wallet on Injective')
+        const before = await injectiveBalance(destination, USDC_INJ_ON_INJECTIVE).catch(() => '0')
+        const res = await terraMsgs.mutateAsync({
+          msgs: [ibcTransferMsg({ sender: me, receiver: destination, channel: TERRA_TO_INJECTIVE_CHANNEL, denom: USDC_INJ_DENOM, amount: micro })],
+          memo: 'USDC.inj to Injective',
+        }) as { transactionHash?: string }
+        const hash = res?.transactionHash ?? ''
+        setStatus({ tx: hash, chain: TERRA_CHAIN_ID, text: 'Sent on Terra. Arriving on Injective…' })
+        follow(hash, TERRA_CHAIN_ID, before, () => injectiveBalance(destination, USDC_INJ_ON_INJECTIVE))
+      }
+      setAmount('')
+      onDone()
+    } catch (e) {
+      setErr(humanizeTxError(e))
+    } finally { setBusy(false) }
+  }
+
+  const fromBal = dir === 'in' ? injBal : terraBal
+  const insufficient = !!micro && BigInt(micro) > BigInt(fromBal || '0')
+  const noGas = dir === 'in' && !!injAddr && injGas === '0'
+  const needInjective = dir === 'in' || !typed
+  const canGo = !!me && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!injAddr && !noGas : !!destination)
+  const injIcon = <TokenIcon label='INJ' size={40} />
+  const terraIcon = <img src='/img/terra-globe.svg' alt='' width={46} height={46} />
+
+  return (
+    <Card>
+      <Section title='Transfer' />
+      {switcher}
+      <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `${SPACE['2']}px 0 ${SPACE['3']}px` }}>
+        Move USDC.inj, Circle&apos;s USDC as issued on Injective, between Injective and Terra in one signature. It is ordinary IBC both ways and nothing is swapped: on Terra it stays USDC.inj, a token of its own with its own pools.
+      </p>
+      <div style={{ margin: `0 0 ${SPACE['3']}px` }}>
+        <ElectricPulse
+          caption='IBC'
+          active={busy || (!!status && !status.done && !status.failed)}
+          onSwap={() => turn(dir === 'in' ? 'out' : 'in')}
+          left={dir === 'in' ? injIcon : terraIcon}
+          right={dir === 'in' ? terraIcon : injIcon}
+          leftLabel={dir === 'in' ? 'From · Injective' : 'From · Terra'}
+          rightLabel={dir === 'in' ? 'To · Terra' : 'To · Injective'}
+        />
+      </div>
+      <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
+        {(['in', 'out'] as const).map(d => (
+          <button key={d} type='button' onClick={() => turn(d)}
+            style={{ ...ghostBtn, padding: '4px 12px', color: dir === d ? C.goldLit : C.textMuted, borderColor: dir === d ? C.goldCore : C.divider }}>
+            {d === 'in' ? 'Injective → Terra' : 'Terra → Injective'}
+          </button>
+        ))}
+      </div>
+
+      <label style={label}>{dir === 'in' ? 'From Injective' : 'From Terra'}</label>
+      <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['2'] }}>
+        <input style={field} type='number' min='0' step='any' placeholder='0.0' value={amount} onChange={e => setAmount(e.target.value)} />
+        <div style={{ ...select, display: 'flex', alignItems: 'center', gap: 8, color: C.textPrimary }}><TokenIcon label='USDC.inj' size={20} /><b>USDC.inj</b></div>
+      </div>
+      <div style={{ ...rowStyle, marginBottom: SPACE['3'] }}>
+        <span>{dir === 'in' ? (injAddr ? `On Injective: ${fromMicro(injBal, 6)} USDC.inj` : 'Injective not connected') : `Balance ${fromMicro(terraBal, 6)} USDC.inj`}</span>
+        {Number(fromBal) > 0 && (dir === 'out' || injAddr) && (
+          // Injective takes its fee in INJ, so all of the USDC.inj can go.
+          <button type='button' style={{ ...ghostBtn, padding: '2px 8px' }} onClick={() => setAmount(fromMicro(fromBal, 6, 6).replace(/,/g, ''))}>max</button>
+        )}
+      </div>
+
+      {dir === 'out' && (
+        <>
+          <label style={label}>To this Injective address</label>
+          <div style={{ marginBottom: SPACE['3'] }}>
+            <input style={{ ...field, width: '100%', boxSizing: 'border-box' }} placeholder={injAddr || 'inj1… or 0x…'} value={injTo} onChange={e => setInjTo(e.target.value)} spellCheck={false} autoComplete='off' />
+            {typed && !typedAddr && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginTop: 4 }}>That is not an Injective address.</div>}
+            {typedAddr && /^0x/i.test(typed) && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Goes to {typedAddr}, the same Injective account as that 0x address.</div>}
+            {typedAddr && typedAddr !== injAddr && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Sending to someone else&apos;s address, or an exchange? Check that it accepts USDC on Injective arriving over IBC.</div>}
+            {!typed && injAddr && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Your wallet&apos;s Injective address.</div>}
+          </div>
+        </>
+      )}
+
+      {!!micro && micro !== '0' && (
+        <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: 'rgba(0,0,0,0.22)', borderRadius: 10, marginBottom: SPACE['3'] }}>
+          <Row k={dir === 'in' ? 'You receive on Terra' : 'You receive on Injective'} v={`${fromMicro(micro, 6, 6)} USDC.inj`} hi />
+          <Row k='How' v={dir === 'in' ? 'IBC transfer from Injective to Terra' : 'IBC transfer from Terra to Injective'} />
+          <Row k='Time' v='about 30 seconds' />
+          <Row k='Network fee' v={dir === 'in' ? 'a little INJ, on Injective' : 'a little LUNA, on Terra'} />
+        </div>
+      )}
+
+      {noGas && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>This Injective wallet has no INJ. Injective charges its network fee in INJ, so it needs a little first.</div>}
+      {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
+      {status && (
+        <div style={{ fontSize: TEXT.xs.size, color: status.failed ? C.alert : status.done ? C.success : C.textSecondary, marginBottom: SPACE['2'], lineHeight: 1.6 }}>
+          {status.done ? '✓ ' : ''}{status.text}{' '}
+          {status.tx && <a href={status.chain === INJECTIVE_CHAIN_ID ? injectiveTxUrl(status.tx) : finderTx(status.tx)} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>View tx →</a>}
+        </div>
+      )}
+
+      {!me
+        ? <div className='terra-connect-cta'><WalletButton /></div>
+        : needInjective && !injAddr
+          ? <button type='button' style={primaryBtn} onClick={() => { injective.connect().catch(() => {}) }}>Connect your wallet on Injective</button>
+          : <button type='button' style={{ ...primaryBtn, opacity: canGo ? 1 : 0.5 }} disabled={!canGo} onClick={go}>
+              {busy ? 'Confirm in wallet…' : insufficient ? `Not enough USDC.inj${dir === 'in' ? ' on Injective' : ''}` : dir === 'in' ? 'Move to Terra' : 'Move to Injective'}
+            </button>}
+
+      <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.6, marginTop: SPACE['3'] }}>
+        Ordinary IBC over the channel between Injective and Terra, in both directions. Injective charges its network fee in INJ. This page adds no fee.
       </div>
     </Card>
   )
