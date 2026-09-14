@@ -38,6 +38,14 @@ cargo update -p zeroize --precise 1.8.1
 cargo update -p base64ct --precise 1.6.0
 ```
 
+## 2–4 in one go
+
+`./deploy.sh <key-name>` does steps 2 to 4 below with a check after each:
+the artifact's checksum, the key's LUNA for gas, the stored code's checksum on
+chain, instantiation with no admin, and the router's factory list. It asks for
+the keyring passphrase once and prints the router address at the end. Run it
+where `terrad` holds the key; it only needs the script and the wasm next to it.
+
 ## 2. Store
 
 ```bash
