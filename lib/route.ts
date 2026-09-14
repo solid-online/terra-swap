@@ -10,6 +10,14 @@
  * drifted, flow from the Astroport interface goes through it, which is also
  * what pulls it back to market.
  *
+ * Audited 2026-09-14 against an exhaustive simulation of every path, Skip Go,
+ * and real holders' simulated transactions: the one- and two-pool choice was
+ * already the best in every case, but two things were missing. Paths through
+ * three pools (CAPA, ROAR and SOLID to USDC gained 0.15 to 1.5%, usually via
+ * LUNA → ampLUNA → USDC), and splitting a large amount over two paths that
+ * share no pool ($5,000 gained 0.6 to 2.2% on LUNA, SOLID, PAXG and EURe).
+ * Both are considered now, and quotes are ranked by what reaches the wallet.
+ *
  * A route made only of Astroport's pools goes through Astroport's router, which
  * carries each swap's full return into the next and checks one minimum at the
  * end. A route through Terra Swap's pools, which that router cannot reach, is
@@ -24,8 +32,15 @@ import {
 
 /** Pools under this much liquidity are never routed through. */
 const MIN_TVL_USD = 5
-/** Paths simulated exactly per quote, on top of the best home-only one. */
+/** A three-pool path only uses pools at least this deep. There are few of them, and they are the ones that can win. */
+const MIN_TVL_3HOP_USD = 1000
+/** Paths simulated exactly per quote: the best few through one or two pools, the best through three, and the best home-only one. */
 const SIMULATE_TOP = 3
+const SIMULATE_TOP_3HOP = 2
+/** Below this price impact on the best path, splitting cannot pay for itself. */
+const SPLIT_MIN_IMPACT_PCT = 0.15
+/** A split is only offered when it delivers at least this much more than the best single path, in basis points. */
+const SPLIT_MIN_GAIN_BP = 5
 
 export interface Leg {
   pool: PoolView
@@ -41,7 +56,7 @@ export interface Leg {
 export interface Quote {
   legs: Leg[]
   outMicro: string
-  /** price impact compounded across legs, % */
+  /** price impact, %: estimated from the pools' spreads when simulated, measured by probeImpact for the quotes that get shown and signed */
   impactPct: number
 }
 
@@ -93,9 +108,29 @@ function paths(pools: PoolView[], from: KnownToken, to: KnownToken): Path[] {
   return out
 }
 
-/** Every token reachable from `from` in one or two hops. */
+/** Three pools through two intermediate tokens, each hop through the deepest pool for its pair. */
+function paths3(pools: PoolView[], from: KnownToken, to: KnownToken): Path[] {
+  const deep = usable(pools).filter(p => (p.tvlUsd ?? 0) >= MIN_TVL_3HOP_USD)
+  const deepest = (a: KnownToken, b: KnownToken) => deep.filter(q => has(q, a) && has(q, b)).sort((x, y) => (y.tvlUsd ?? 0) - (x.tvlUsd ?? 0))[0]
+  const neighbours = (t: KnownToken) => {
+    const m = new Map<string, KnownToken>()
+    for (const p of deep) { if (!has(p, t)) continue; const o = otherSide(p, t); if (o) m.set(assetId(o.info), o) }
+    return Array.from(m.values())
+  }
+  const out: Path[] = []
+  for (const m1 of neighbours(from)) {
+    for (const m2 of neighbours(to)) {
+      if (sameAsset(m1.info, m2.info) || sameAsset(m1.info, to.info) || sameAsset(m2.info, from.info)) continue
+      const a = deepest(from, m1), b = deepest(m1, m2), c = deepest(m2, to)
+      if (a && b && c) out.push({ pools: [a, b, c], tokens: [from, m1, m2, to] })
+    }
+  }
+  return out
+}
+
+/** Every token reachable from `from` through one, two or three pools. */
 export function reachable(pools: PoolView[], from: KnownToken, tokens: KnownToken[]): KnownToken[] {
-  return tokens.filter(t => !sameAsset(t.info, from.info) && paths(pools, from, t).length > 0)
+  return tokens.filter(t => !sameAsset(t.info, from.info) && (paths(pools, from, t).length > 0 || paths3(pools, from, t).length > 0))
 }
 
 /** Rough output of one hop in display units, for ranking only. The numbers shown come from simulations. */
@@ -125,35 +160,113 @@ async function simulatePath(path: Path, amountMicro: string): Promise<Quote | nu
   return { legs, outMicro: offer, impactPct: (1 - keep) * 100 }
 }
 
-const byOutDesc = (a: Quote, b: Quote) => {
-  const x = BigInt(a.outMicro), y = BigInt(b.outMicro)
-  return x === y ? 0 : x > y ? -1 : 1
+export interface SplitPart {
+  quote: Quote
+  /** share of the input amount, 0..1 */
+  share: number
 }
 
 export interface Quotes {
+  /** the best single path, by what reaches the wallet */
   best: Quote | null
   /** the best path that stays on this site's own pools, for the comparison */
   home: Quote | null
+  /** two paths that share no pool, when splitting the amount between them delivers more than `best` (asked for with split) */
+  split: SplitPart[] | null
+  /** the input amount these quotes are for, smallest units */
+  amountMicro: string
 }
 
-/** Rank every path cheaply, simulate the best few exactly, return the winner. */
-export async function quoteBest(pools: PoolView[], from: KnownToken, to: KnownToken, amountMicro: string, home?: Venue): Promise<Quotes> {
-  if (!amountMicro || amountMicro === '0') return { best: null, home: null }
-  const all = paths(pools, from, to)
-  if (all.length === 0) return { best: null, home: null }
+/**
+ * Rank every path cheaply, simulate the best few exactly, return the winner.
+ * `slip` is the slippage the trade will be signed with: a route signed as
+ * separate swaps delivers a little less than it quotes (planRoute), and that is
+ * what the ranking compares.
+ */
+export async function quoteBest(pools: PoolView[], from: KnownToken, to: KnownToken, amountMicro: string, home?: Venue, opts: { slip?: number; split?: boolean } = {}): Promise<Quotes> {
+  const none: Quotes = { best: null, home: null, split: null, amountMicro }
+  if (!amountMicro || amountMicro === '0') return none
+  const slip = opts.slip ?? 0.01
   const amount = Number(amountMicro) / 10 ** from.decimals
-  const ranked = all
+  const rank = (ps: Path[]) => ps
     .map(path => ({ path, est: path.pools.reduce((x, p, i) => estimateHop(p, path.tokens[i], x), amount) }))
     .sort((a, b) => b.est - a.est)
-  const pick = ranked.slice(0, SIMULATE_TOP).map(r => r.path)
-  const homeOnly = home ? ranked.find(r => r.path.pools.every(p => p.venue === home))?.path : undefined
+  const short = rank(paths(pools, from, to))
+  const long = rank(paths3(pools, from, to))
+  if (short.length === 0 && long.length === 0) return none
+  // Three-pool paths are ranked on their own, so they add candidates instead of pushing out the best short ones.
+  const pick = [...short.slice(0, SIMULATE_TOP), ...long.slice(0, SIMULATE_TOP_3HOP)].map(r => r.path)
+  const homeOnly = home ? short.find(r => r.path.pools.every(p => p.venue === home))?.path : undefined
   if (homeOnly && !pick.includes(homeOnly)) pick.push(homeOnly)
   const quotes = (await Promise.all(pick.map(p => simulatePath(p, amountMicro)))).filter((q): q is Quote => q !== null)
-  quotes.sort(byOutDesc)
+  const delivered = (q: Quote) => BigInt(planRoute(q, slip).expectedOut)
+  quotes.sort((a, b) => { const x = delivered(a), y = delivered(b); return x === y ? 0 : x > y ? -1 : 1 })
+  const best = quotes[0] ?? null
+  if (best) best.impactPct = await probeImpact(best)
   return {
-    best: quotes[0] ?? null,
+    best,
     home: home ? quotes.find(q => q.legs.every(l => l.pool.venue === home)) ?? null : null,
+    split: best && opts.split ? await bestSplit(quotes, amountMicro, slip) : null,
+    amountMicro,
   }
+}
+
+const pathOf = (q: Quote): Path => ({ pools: q.legs.map(l => l.pool), tokens: [q.legs[0].offer, ...q.legs.map(l => l.ask)] })
+
+/**
+ * Price impact as the trade feels it: the rate for the whole amount against
+ * the rate for a thousandth of it through the same pools, so the fees cancel.
+ * A concentrated pool's simulation reports almost no spread even when the
+ * trade moves it: on 2026-09-14 $5,000 of wBTC to USDC read 0.00% from the
+ * spread and delivered 3.2% less per wBTC than a small trade, $50,000 22%.
+ * Falls back to the spread estimate when the thousandth rounds to nothing.
+ */
+async function probeImpact(q: Quote): Promise<number> {
+  const inMicro = BigInt(q.legs[0].offerMicro)
+  const sliver = inMicro / BigInt(1000)
+  if (sliver < BigInt(1000)) return q.impactPct
+  const probe = await simulatePath(pathOf(q), sliver.toString())
+  if (!probe) return q.impactPct
+  const full = Number(q.outMicro) / Number(inMicro)
+  const small = Number(probe.outMicro) / Number(sliver)
+  return small > 0 ? Math.max(0, (1 - full / small) * 100) : q.impactPct
+}
+
+/**
+ * The amount split over the best path and the best other path that shares no
+ * pool with it. Even a deep pool moves against a large trade, and two paths
+ * that each move less can deliver more than one that moves a lot. The share is
+ * searched on the pools' own simulations, coarse then fine. Null unless the
+ * split beats the best single path by SPLIT_MIN_GAIN_BP.
+ */
+async function bestSplit(quotes: Quote[], amountMicro: string, slip: number): Promise<SplitPart[] | null> {
+  const a = quotes[0]
+  if (!a || a.impactPct < SPLIT_MIN_IMPACT_PCT) return null
+  const used = new Set(a.legs.map(l => l.pool.contract_addr))
+  const b = quotes.slice(1).find(q => q.legs.every(l => !used.has(l.pool.contract_addr)))
+  if (!b) return null
+  const total = BigInt(amountMicro)
+  const single = BigInt(planRoute(a, slip).expectedOut)
+  const found: { best: { parts: SplitPart[]; out: bigint; per: number } | null } = { best: null }
+  const tried = new Set<number>()
+  const consider = async (share: number) => {
+    const per = Math.round(share * 1000)
+    if (per <= 0 || per >= 1000 || tried.has(per)) return
+    tried.add(per)
+    const aMicro = (total * BigInt(per)) / BigInt(1000)
+    const bMicro = total - aMicro
+    if (aMicro === BigInt(0) || bMicro === BigInt(0)) return
+    const [qa, qb] = await Promise.all([simulatePath(pathOf(a), aMicro.toString()), simulatePath(pathOf(b), bMicro.toString())])
+    if (!qa || !qb) return
+    const out = BigInt(planRoute(qa, slip).expectedOut) + BigInt(planRoute(qb, slip).expectedOut)
+    if (!found.best || out > found.best.out) found.best = { parts: [{ quote: qa, share: per / 1000 }, { quote: qb, share: 1 - per / 1000 }], out, per }
+  }
+  await Promise.all([0.9, 0.75, 0.6, 0.45, 0.3].map(consider))
+  if (found.best) { const s = found.best.per / 1000; await Promise.all([s - 0.075, s + 0.075].map(consider)) }
+  const win = found.best
+  if (!win || win.out * BigInt(10_000) < single * BigInt(10_000 + SPLIT_MIN_GAIN_BP)) return null
+  await Promise.all(win.parts.map(async p => { p.quote.impactPct = await probeImpact(p.quote) }))
+  return [...win.parts].sort((x, y) => y.share - x.share)
 }
 
 const shave = (x: bigint, slip: number) => (x * BigInt(Math.round((1 - slip) * 10_000))) / BigInt(10_000)
@@ -232,6 +345,39 @@ export function planRoute(q: Quote, slip: number): RoutePlan {
 /** "SOLID → LUNA (Terra Swap) → USDC (Astroport)" */
 export function routeText(q: Quote): string {
   return [q.legs[0].offer.label, ...q.legs.map(l => `${l.ask.label} (${VENUE_NAME[l.pool.venue]})`)].join(' → ')
+}
+
+export interface TradePlan {
+  /** one part for a single path, two for a split, each signed the way planRoute decides */
+  parts: (SplitPart & { plan: RoutePlan })[]
+  expectedOut: string
+  /** the sum of the parts' minimums; each part enforces its own */
+  minOut: string
+  leftover: { token: KnownToken; micro: string }[]
+  /** price impact weighted by what each part delivers, % */
+  impactPct: number
+}
+
+/** A single path or a split, as it gets signed. */
+export function planTrade(parts: SplitPart[], slip: number): TradePlan {
+  const planned = parts.map(p => ({ ...p, plan: planRoute(p.quote, slip) }))
+  const sum = (pick: (x: (typeof planned)[number]) => string) => planned.reduce((s, x) => s + BigInt(pick(x)), BigInt(0)).toString()
+  const out = planned.reduce((s, x) => s + Number(x.plan.expectedOut), 0)
+  return {
+    parts: planned,
+    expectedOut: sum(x => x.plan.expectedOut),
+    minOut: sum(x => x.plan.minOut),
+    leftover: planned.flatMap(x => x.plan.leftover),
+    impactPct: out > 0 ? planned.reduce((s, x) => s + x.quote.impactPct * Number(x.plan.expectedOut), 0) / out : 0,
+  }
+}
+
+/** "70% LUNA → ampLUNA (Astroport) → USDC (Astroport) · 30% LUNA → USDC (Astroport)" */
+export function tradeText(parts: SplitPart[]): string {
+  if (parts.length === 1) return routeText(parts[0].quote)
+  // Round the first share and give the rest to the second, so the two always add up to 100.
+  const first = Math.round(parts[0].share * 100)
+  return parts.map((p, i) => `${i === 0 ? first : 100 - first}% ${routeText(p.quote)}`).join(' · ')
 }
 
 // ─── Closing a gap in one transaction ───────────────────────────

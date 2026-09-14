@@ -31,15 +31,15 @@ import type { LpFlow } from 'lib/dex-ledger'
 import type { PricesResponse } from 'pages/api/dex-prices'
 import type { VenueResponse } from 'pages/api/dex-venue'
 import type { PositionsResponse } from 'pages/api/positions'
-import { quoteBest, executionLegs, planRoute, routeText, reachable, quoteLoop, planRoutedZap, type Quotes, type Loop, type RoutedZap, type RoutePlan } from 'lib/route'
+import { quoteBest, executionLegs, planRoute, planTrade, routeText, tradeText, reachable, quoteLoop, planRoutedZap, type Quotes, type Loop, type RoutedZap, type TradePlan } from 'lib/route'
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
-import { useRouteSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap, useLstBond, useLstUnbond, useLstWithdraw, useNobleMsgs, useTerraMsgs, useInjectiveMsgs } from 'components/transactions/useDex'
+import { useRouteSwap, useTradeSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap, useLstBond, useLstUnbond, useLstWithdraw, useNobleMsgs, useTerraMsgs, useInjectiveMsgs } from 'components/transactions/useDex'
 import { useChain } from '@cosmos-kit/react'
 import { fromBech32 } from '@cosmjs/encoding'
 import type { EncodeObject } from '@cosmjs/proto-signing'
-import { ibcTransferMsg, routeMsgs, skipDepositMsg } from 'lib/msgs'
+import { ibcTransferMsg, skipDepositMsg, tradeMsgs } from 'lib/msgs'
 import { NOBLE_CHAIN_ID, NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, TERRA_CHAIN_ID, TERRA_TO_NOBLE_CHANNEL, nobleUsdcBalance, skipDepositMsgs, skipDepositRoute, skipStatus, skipTrack, type SkipRoute } from 'lib/skip'
 import { INJECTIVE_CHAIN_ID, INJECTIVE_TO_TERRA_CHANNEL, TERRA_TO_INJECTIVE_CHANNEL, USDC_INJ_ON_INJECTIVE, injectiveBalance, toInjectiveAddress } from 'lib/injective'
 import { hubForToken, hubInfo, type HubInfo } from 'lib/lst'
@@ -1315,7 +1315,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   arbs?: ArbPlan[]; preset?: SwapPreset | null; onTakeArb?: (p: ArbPlan) => void
 }) {
   const me = useMyAddress()
-  const swap = useRouteSwap()
+  const swap = useTradeSwap()
   const tradable = useMemo(() => pools.filter(p => !p.empty), [pools])
   // Both sites' pools. A swap takes whichever path pays best (lib/route).
   const routePools = useMemo(() => [...tradable, ...venuePools.filter(p => !p.empty)], [tradable, venuePools])
@@ -1392,8 +1392,10 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
 
   const micro = from ? toMicro(amount, from.decimals) : null
   const debounced = useDebounced(micro, 350)
-  // Quote every path on both sites. A background refresh of the pools
-  // re-quotes quietly; only a new pair or amount clears the number shown.
+  const slip = Math.min(0.5, Math.max(0.001, Number(slippage) / 100 || 0.01))
+  // Quote every path on both sites, and a split over two paths when that pays.
+  // A background refresh of the pools re-quotes quietly; only a new pair or
+  // amount clears the number shown.
   const [quotes, setQuotes] = useState<Quotes | null>(null)
   const quoteKey = useRef('')
   useEffect(() => {
@@ -1401,22 +1403,22 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
     const key = `${fromId}|${toId}|${debounced ?? ''}`
     if (key !== quoteKey.current) { quoteKey.current = key; setQuotes(null) }
     if (!from || !to || !debounced || debounced === '0') return
-    quoteBest(routePools, from, to, debounced, HOME_VENUE).then(q => { if (alive) setQuotes(q) }).catch(() => {})
+    quoteBest(routePools, from, to, debounced, HOME_VENUE, { slip, split: true }).then(q => { if (alive) setQuotes(q) }).catch(() => {})
     return () => { alive = false }
-  }, [routePools, from, to, fromId, toId, debounced])
+  }, [routePools, from, to, fromId, toId, debounced, slip])
   const route = quotes?.best ?? null
 
   const fee = '0'
-  const impact = route ? route.impactPct : 0
   const insufficient = !!micro && BigInt(micro) + BigInt(fee) > BigInt(balance || '0')
-  const slip = Math.min(0.5, Math.max(0.001, Number(slippage) / 100 || 0.01))
-  // How a route is signed decides what arrives: through Astroport's router the quote itself, as separate swaps a little less.
-  const plan = route ? planRoute(route, slip) : null
-  const sim = plan ? { ret: plan.expectedOut } : null
-  const minOut = plan?.minOut ?? '0'
+  // How a trade is signed decides what arrives: through Astroport's router the quote itself, as separate swaps a little less.
+  const trade: TradePlan | null = useMemo(() => (quotes?.best ? planTrade(quotes.split ?? [{ quote: quotes.best, share: 1 }], slip) : null), [quotes, slip])
+  const impact = trade ? trade.impactPct : 0
+  const sim = trade ? { ret: trade.expectedOut } : null
+  const minOut = trade?.minOut ?? '0'
+  const perLeg = !!trade && trade.parts.some(p => p.plan.kind === 'legs' && p.quote.legs.length > 1)
   // The quote must be for the amount on screen, not the one before the debounce caught up.
-  const canSwap = !!me && !!route && !!plan && !!from && !!to && !!micro && micro === route.legs[0].offerMicro
-    && plan.legs.every(l => l.offerAmount !== '0') && minOut !== '0' && !insufficient && !swap.isLoading
+  const canSwap = !!me && !!route && !!trade && !!from && !!to && !!micro && micro === quotes?.amountMicro
+    && trade.parts.every(p => p.plan.legs.every(l => l.offerAmount !== '0') && p.plan.minOut !== '0') && minOut !== '0' && !insufficient && !swap.isLoading
 
   const flip = useCallback(() => {
     if (!from || !to) return
@@ -1452,19 +1454,19 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   const egg = from && !LITE ? amountEgg(amount, from.label) : null
 
   const go = async () => {
-    if (!canSwap || !route || !plan || !from || !micro) return
+    if (!canSwap || !route || !trade || !from || !micro) return
     setErr(null); setReceipt(null)
     // The stepper: asking your wallet → broadcasting → written down.
     setPhase(1)
     const p2 = setTimeout(() => setPhase(2), 2500)
     try {
-      const r = await swap.mutateAsync({ plan, maxSpread: slip, sender: me })
+      const r = await swap.mutateAsync({ trade, maxSpread: slip, sender: me })
       clearTimeout(p2); setPhase(3); setTimeout(() => setPhase(0), 2600)
       const hash = (r as { transactionHash?: string })?.transactionHash ?? 'ok'
       if (to) setReceipt({
-        from: from.label, to: to.label, amtIn: fromMicro(micro, from.decimals, 6), amtOut: fromMicro(plan.expectedOut, to.decimals, 6),
+        from: from.label, to: to.label, amtIn: fromMicro(micro, from.decimals, 6), amtOut: fromMicro(trade.expectedOut, to.decimals, 6),
         fee: crystal ? '0 (Crystal)' : `${fromMicro(fee, from.decimals, 6)} ${from.label}`, tx: hash, height: (r as { height?: number })?.height,
-        route: route.legs.length > 1 || route.legs[0].pool.venue !== HOME_VENUE ? routeText(route) : undefined,
+        route: trade.parts.length > 1 || route.legs.length > 1 || route.legs[0].pool.venue !== HOME_VENUE ? tradeText(trade.parts) : undefined,
       })
       setTimeout(() => setReceipt(null), 20000)
       setTxHash(hash)
@@ -1589,33 +1591,47 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
         <TokenSelect value={toId} onChange={setToId} options={toOptions} />
       </div>
 
-      {route && from && to && (
+      {route && trade && from && to && (
         <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: 'rgba(0,0,0,0.22)', borderRadius: 10, marginBottom: SPACE['3'] }}>
-          <Row k='Route' v={routeText(route)} />
+          <Row k={trade.parts.length > 1 ? 'Split' : 'Route'} v={tradeText(trade.parts)} />
+          {trade.parts.length > 1 && (() => {
+            // What splitting is worth, against the best single path.
+            const gain = (Number(trade.expectedOut) / Math.max(1, Number(planRoute(route, slip).expectedOut)) - 1) * 100
+            return gain > 0.01 ? <Row k='vs one path' v={`+${gain.toFixed(2)}% more ${to.label}`} hi /> : null
+          })()}
           {(() => {
             // What routing is worth, measured against this site's own pools alone.
-            if (!route.legs.some(l => l.pool.venue !== HOME_VENUE)) return null
+            if (!trade.parts.some(p => p.quote.legs.some(l => l.pool.venue !== HOME_VENUE))) return null
             const home = quotes?.home
             if (!home) return <Row k={`${VENUE_NAME[HOME_VENUE]} alone`} v='no path for this pair' />
-            const gain = (Number(route.outMicro) / Math.max(1, Number(home.outMicro)) - 1) * 100
+            const gain = (Number(trade.expectedOut) / Math.max(1, Number(planRoute(home, slip).expectedOut)) - 1) * 100
             return gain > 0.05 ? <Row k={`vs ${VENUE_NAME[HOME_VENUE]} alone`} v={`+${gain >= 100 ? gain.toFixed(0) : gain.toFixed(1)}% more ${to.label}`} hi /> : null
           })()}
           <Row k='Rate' v={`1 ${from.label} ≈ ${fromMicro((Number(sim?.ret ?? route.outMicro) / Math.max(1, Number(micro))) * 10 ** from.decimals, to.decimals)} ${to.label}`} />
           <Row k='Price impact' v={`${impact.toFixed(2)}%`} hi={impact > 3} />
-          <Row k={route.legs.length > 1 ? 'Pool fees' : 'Pool fee'} v={route.legs.map(l => poolFeeTextFor(l.pool)).join(' · ')} />
+          {(() => {
+            const used = new Map<string, PoolView>()
+            for (const p of trade.parts) for (const l of p.quote.legs) used.set(l.pool.contract_addr, l.pool)
+            const list = Array.from(used.values())
+            // Pools with the same fee say it once: three Astroport pools with dynamic fees are one line, not three.
+            return <Row k={list.length > 1 ? 'Pool fees' : 'Pool fee'} v={Array.from(new Set(list.map(poolFeeTextFor))).join(' · ')} />
+          })()}
           {feeBps > 0 && <Row k='Protocol fee' v={crystal ? '0 · Crystal' : `${fromMicro(fee, from.decimals)} ${from.label}`} hi={crystal} />}
-          <Row k={`Min. received (${slippage}% ${plan?.kind === 'legs' && route.legs.length > 1 ? 'per leg' : 'slippage'})`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
-          {plan && route.legs.length > 1 && (
+          <Row k={`Min. received (${slippage}% ${perLeg ? 'per leg' : 'slippage'})`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
+          {(trade.parts.length > 1 || route.legs.length > 1) && (
             <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>
-              {plan.kind === 'router'
-                ? <>One transaction through Astroport&apos;s router: each swap&apos;s full return goes into the next, and it reverts if less than the minimum arrives.</>
-                : <>One transaction, {route.legs.length} swaps. Each swap after the first spends the least the one before it can return, so if any leg would land past its limit, all of it reverts.{plan.leftover.length > 0 && <> At the quoted prices about {plan.leftover.map(x => `${fromMicro(x.micro, x.token.decimals, 6)} ${x.token.label}`).join(' and ')} stays in your wallet.</>}</>}
+              {trade.parts.length > 1
+                ? <>One transaction, the amount split over two paths that share no pool, so neither moves its pools as far as one path would. Each part carries its own minimum, and if either would land short, all of it reverts.</>
+                : trade.parts[0].plan.kind === 'router'
+                  ? <>One transaction through Astroport&apos;s router: each swap&apos;s full return goes into the next, and it reverts if less than the minimum arrives.</>
+                  : <>One transaction, {route.legs.length} swaps. Each swap after the first spends the least the one before it can return, so if any leg would land past its limit, all of it reverts.</>}
+              {trade.leftover.length > 0 && <> At the quoted prices about {trade.leftover.map(x => `${fromMicro(x.micro, x.token.decimals, 6)} ${x.token.label}`).join(' and ')} stays in your wallet.</>}
             </div>
           )}
         </div>
       )}
 
-      {from && to && <HubAlternative from={from} to={to} micro={micro} swapOut={plan?.expectedOut ?? null} blocked={insufficient} onDone={onDone} />}
+      {from && to && <HubAlternative from={from} to={to} micro={micro} swapOut={trade?.expectedOut ?? null} blocked={insufficient} onDone={onDone} />}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], marginBottom: SPACE['3'], fontSize: TEXT.xs.size, color: C.textMuted }}>
         <span>Slippage</span>
@@ -1780,7 +1796,7 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
   const [nobleTo, setNobleTo] = useState('')
   const [nobleBal, setNobleBal] = useState('0')
   const [terraBal, setTerraBal] = useState('0')
-  const [quote, setQuote] = useState<{ out: string; secs: number; path: string; note?: string; route?: SkipRoute; plan?: RoutePlan } | null>(null)
+  const [quote, setQuote] = useState<{ out: string; secs: number; path: string; note?: string; route?: SkipRoute; trade?: TradePlan } | null>(null)
   const [quoteErr, setQuoteErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -1844,11 +1860,11 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
         setQuoteErr(/no routes/i.test(String((e as Error)?.message)) ? `No Astroport pool pairs ${token.label} with USDC. Bring USDC to Terra and swap it here.` : 'Skip Go is not answering right now. Moving plain USDC still works.')
       })
     } else {
-      quoteBest(routePools, token, usdc, debounced, HOME_VENUE).then(q => {
+      quoteBest(routePools, token, usdc, debounced, HOME_VENUE, { slip: SLIP, split: true }).then(q => {
         if (!alive) return
         if (!q.best) { setQuoteErr(`No route from ${token.label} to USDC right now.`); return }
-        const plan = planRoute(q.best, SLIP)
-        setQuote({ out: plan.minOut, secs: 60, plan, path: `${routeText(q.best)}, then IBC transfer to Noble`, note: `The swap should give about ${fromMicro(plan.expectedOut, 6)} USDC. At least ${fromMicro(plan.minOut, 6)} is sent to Noble, and anything above that stays in your Terra wallet as USDC.` })
+        const trade = planTrade(q.split ?? [{ quote: q.best, share: 1 }], SLIP)
+        setQuote({ out: trade.minOut, secs: 60, trade, path: `${tradeText(trade.parts)}, then IBC transfer to Noble`, note: `The swap should give about ${fromMicro(trade.expectedOut, 6)} USDC. At least ${fromMicro(trade.minOut, 6)} is sent to Noble, and anything above that stays in your Terra wallet as USDC.` })
       }).catch(() => { if (alive) setQuoteErr('Could not price that right now.') })
     }
     return () => { alive = false }
@@ -1883,9 +1899,9 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
       } else {
         if (!me) throw new Error('Connect your wallet first')
         if (!destination || !isNobleAddress(destination)) throw new Error('Enter a Noble address, or connect your wallet on Noble')
-        const send = plainUsdc ? micro : quote.plan!.minOut
+        const send = plainUsdc ? micro : quote.trade!.minOut
         const msgs = [
-          ...(plainUsdc ? [] : routeMsgs(me, quote.plan!, SLIP)),
+          ...(plainUsdc ? [] : tradeMsgs(me, quote.trade!, SLIP)),
           ibcTransferMsg({ sender: me, receiver: destination, channel: TERRA_TO_NOBLE_CHANNEL, denom: NOBLE_USDC, amount: send }),
         ]
         const before = await nobleUsdcBalance(destination)

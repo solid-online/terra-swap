@@ -15,10 +15,10 @@ import { useWallet } from 'components/providers/WalletProvider'
 import { useTxRegionGate, RegionRestricted } from 'components/RegionGate'
 import { DEX_FACTORY, IS_ASTRO } from 'lib/dex'
 import {
-  astroExitMsgs, bondMsg, claimMsg, createPairMsg, exitMsgs, provideMsgs, queueUnbondMsg, routeMsgs, stakeMsg, unstakeMsg, withdrawUnbondedMsg, zapMsgs,
+  astroExitMsgs, bondMsg, claimMsg, createPairMsg, exitMsgs, provideMsgs, queueUnbondMsg, routeMsgs, stakeMsg, tradeMsgs, unstakeMsg, withdrawUnbondedMsg, zapMsgs,
   type AstroExitArgs, type CreatePairArgs, type ExitArgs, type ProvideArgs, type ZapArgs,
 } from 'lib/msgs'
-import type { RoutePlan } from 'lib/route'
+import type { RoutePlan, TradePlan } from 'lib/route'
 import { sendInjectiveTx } from 'lib/injective'
 
 const MEMO = IS_ASTRO ? 'Terra Pools' : 'Terra Swap'
@@ -59,6 +59,14 @@ export const useRouteSwap = () => {
   const broadcast = useDexBroadcast()
   return useMutation(async (a: RouteSwapArgs) =>
     broadcast(routeMsgs(a.sender, a.plan, a.maxSpread), `${MEMO}: ${a.memo ?? (a.plan.legs.length > 1 ? 'routed swap' : 'swap')}`))
+}
+
+/** A single path or a split over two (lib/route planTrade), in one transaction. */
+export const useTradeSwap = () => {
+  const broadcast = useDexBroadcast()
+  return useMutation(async (a: { trade: TradePlan; maxSpread: number; sender: string; memo?: string }) =>
+    broadcast(tradeMsgs(a.sender, a.trade, a.maxSpread),
+      `${MEMO}: ${a.memo ?? (a.trade.parts.length > 1 ? 'split swap' : a.trade.parts[0].quote.legs.length > 1 ? 'routed swap' : 'swap')}`))
 }
 
 export const useExitPosition = () => {

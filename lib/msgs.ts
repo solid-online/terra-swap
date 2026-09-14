@@ -21,7 +21,7 @@ import { MsgTransfer } from 'cosmjs-types/ibc/applications/transfer/v1/tx'
 import { toUtf8 } from '@cosmjs/encoding'
 import { ASTRO_ROUTER, NOBLE_USDC, type Asset, type AssetInfo } from 'lib/dex'
 import { NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, SKIP_ENTRY_POINT_TERRA } from 'lib/skip'
-import type { ExecLeg, RoutePlan } from 'lib/route'
+import type { ExecLeg, RoutePlan, TradePlan } from 'lib/route'
 
 type Coin = { denom: string; amount: string }
 
@@ -91,6 +91,16 @@ export function routeMsgs(sender: string, plan: RoutePlan, maxSpread: number): E
   return plan.kind === 'router'
     ? [routerMsg(sender, plan.legs.map(l => ({ offer: l.offerInfo, ask: l.askInfo })), plan.legs[0].offerAmount, plan.minOut)]
     : legMsgs(sender, plan.legs, maxSpread)
+}
+
+/**
+ * A single path or a split (lib/route planTrade) in one transaction: each
+ * part's messages in turn, each part with its own minimum. The parts share no
+ * pool, so one cannot move the price the other gets.
+ */
+export function tradeMsgs(sender: string, trade: TradePlan, maxSpread: number): EncodeObject[] {
+  if (trade.parts.length === 0) throw new Error('Nothing to trade')
+  return trade.parts.flatMap(p => routeMsgs(sender, p.plan, maxSpread))
 }
 
 // ─── Liquidity ──────────────────────────────────────────────────

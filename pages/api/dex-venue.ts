@@ -11,7 +11,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import {
   AWAY_VENUE, VENUE_FACTORY, knownPairs, queryPairsOf, queryPool, toPoolView, refineSpot,
-  annotateValues, marketPrices, type PoolView, type Venue,
+  annotateValues, marketPrices, usdPrices, type PoolView, type Venue,
 } from 'lib/dex'
 
 export interface VenueResponse { venue: Venue; pools: PoolView[]; at: number }
@@ -25,7 +25,10 @@ async function build(): Promise<VenueResponse> {
   const views = await Promise.all(pairs.map(async p => toPoolView(p, await queryPool(p.contract_addr), AWAY_VENUE)))
   const pools = views.filter(p => !p.empty)
   await refineSpot(pools)
-  annotateValues(pools, await marketPrices())
+  // Astroport's markets set the price wherever they have one. A token they have no deep market for
+  // (USDC.inj on 2026-09-14) is priced from these pools instead; without a dollar depth its pools
+  // were never routed, so on the pools site USDC.inj could not be swapped at all.
+  annotateValues(pools, { ...usdPrices(pools), ...(await marketPrices()) })
   return { venue: AWAY_VENUE, pools, at: Date.now() }
 }
 
