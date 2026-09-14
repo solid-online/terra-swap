@@ -1,24 +1,35 @@
 # Checks swap.terraluna.app (Terra Swap's and Astroport's pools) and atrium.markets every
-# 10 minutes from GitHub's machines and appends the result to
-# uptime/YYYY-MM.jsonl on the `status` branch. See scripts/uptime-check.mjs.
+# 10 minutes from GitHub's machines and appends each result to uptime/YYYY-MM.jsonl on
+# the `status` branch. See scripts/uptime-check.mjs.
+#
+# GitHub starts scheduled workflows when it has capacity, not on the minute: the
+# `*/10` schedule this workflow began with ran three times on its first day
+# (2026-09-14), so the log said almost nothing. Now one run keeps watch for close to
+# the six hours a job may last, checking on every 10-minute mark and pushing each
+# result as it goes, and then starts the next run itself. The hourly schedule only
+# restarts the chain if a handover ever fails. Runs share one concurrency group, so
+# they never overlap: a run started while another watches waits its turn. To stop
+# the checks, disable this workflow in the Actions tab.
 name: uptime
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
-  group: status-branch
+  group: uptime
   cancel-in-progress: false
 
 jobs:
-  check:
+  watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Six hours is the most a job may run; the watch below ends before that and hands over.
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,17 +41,33 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Check the sites
-        run: node scripts/uptime-check.mjs status-data
-      - name: Write it down
-        working-directory: status-data
+      - name: Check every 10 minutes and write each result down
+        env:
+          WATCH_MINUTES: '340'
         run: |
-          git config user.name "terra-swap-status"
-          git config user.email "terra-swap-status@users.noreply.github.com"
-          git add uptime
-          git commit -q -m "uptime $(date -u +%Y-%m-%dT%H:%MZ)" || exit 0
-          for i in 1 2 3; do
-            git pull -q --rebase origin status && git push -q origin HEAD:status && exit 0
-            sleep 5
+          git -C status-data config user.name "terra-swap-status"
+          git -C status-data config user.email "terra-swap-status@users.noreply.github.com"
+          end=$(( $(date +%s) + WATCH_MINUTES * 60 ))
+          while :; do
+            node scripts/uptime-check.mjs status-data || echo "check did not complete"
+            (
+              cd status-data
+              git add uptime
+              git commit -q -m "uptime $(date -u +%Y-%m-%dT%H:%MZ)" || exit 0
+              for i in 1 2 3; do
+                git pull -q --rebase origin status && git push -q origin HEAD:status && exit 0
+                sleep 5
+              done
+              echo "could not push this result; the next one carries it"
+            )
+            now=$(date +%s)
+            next=$(( (now / 600 + 1) * 600 ))
+            if [ "$next" -ge "$end" ]; then break; fi
+            sleep $(( next - now ))
           done
-          exit 1
+      - name: Hand over to the next run
+        # Not after a cancel: cancelling a run is how someone stops the chain by hand.
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run uptime.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}"
