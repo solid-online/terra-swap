@@ -4233,12 +4233,16 @@ function Hero({ poolFeeBps, onReplay, onHome, onToast, me, right }: { poolFeeBps
 
 function IntroSplash({ onDone }: { onDone: () => void }) {
   const [leaving, setLeaving] = useState(false)
-  const dismiss = () => { setLeaving(true); setTimeout(onDone, 620) }
+  // The parent passes a fresh onDone on every render and re-renders all the time while data arrives;
+  // keyed on it, the timers restarted with each render and the splash could stay up for many seconds.
+  const done = useRef(onDone)
+  done.current = onDone
+  const dismiss = () => { setLeaving(true); setTimeout(() => done.current(), 620) }
   useEffect(() => {
     const t1 = setTimeout(() => setLeaving(true), 1500)
-    const t2 = setTimeout(onDone, 2100)
+    const t2 = setTimeout(() => done.current(), 2100)
     return () => { clearTimeout(t1); clearTimeout(t2) }
-  }, [onDone])
+  }, [])
   return (
     <div
       onClick={dismiss}
@@ -4441,17 +4445,8 @@ function SwapPageInner() {
     }
   }, [board, me, data])
 
-  // Retro-Terra load splash: once per browser session, skipped for anyone who
-  // asked their OS to reduce motion.
-  useEffect(() => {
-    if (LITE) return
-    try {
-      const seen = sessionStorage.getItem('terraswap_intro_v1')
-      const rm = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      if (!seen && !rm) setIntro(true)
-      sessionStorage.setItem('terraswap_intro_v1', '1')
-    } catch { /* private mode: just skip the splash */ }
-  }, [])
+  // The retro-Terra splash no longer plays on arrival: a first visit opens on the swap itself, the way the
+  // community asked ("swap should be visible upon load"). It is still there as a replay from the wordmark.
 
   // Market reference arrives on the side; the page never waits for it.
   const marketRef = useRef<Record<string, number> | null>(null)
