@@ -8,14 +8,19 @@
  *
  * They go to Astroport's own contracts (pairs on either factory, the
  * factories, the incentives contract, the router, the first ASTRO staking and
- * the ASTRO converter) and to the liquid staking hubs in lib/lst. None sends
- * anything anywhere else, and none takes a fee.
+ * the ASTRO converter), to the liquid staking hubs in lib/lst, and over IBC
+ * between Noble and Terra. One is built by Skip Go's API rather than here, the
+ * swap-on-arrival deposit, and skipDepositMsg takes it apart and checks it
+ * before any wallet sees it. None sends anything anywhere else, and none
+ * takes a fee.
  */
 
 import type { EncodeObject } from '@cosmjs/proto-signing'
 import { MsgExecuteContract } from 'cosmjs-types/cosmwasm/wasm/v1/tx'
+import { MsgTransfer } from 'cosmjs-types/ibc/applications/transfer/v1/tx'
 import { toUtf8 } from '@cosmjs/encoding'
-import { ASTRO_ROUTER, type Asset, type AssetInfo } from 'lib/dex'
+import { ASTRO_ROUTER, NOBLE_USDC, type Asset, type AssetInfo } from 'lib/dex'
+import { NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, SKIP_ENTRY_POINT_TERRA } from 'lib/skip'
 import type { ExecLeg, RoutePlan } from 'lib/route'
 
 type Coin = { denom: string; amount: string }
@@ -250,3 +255,99 @@ export const queueUnbondMsg = (a: { token: string; hub: string; amount: string; 
 /** Collect every finished redemption this wallet has at a hub. */
 export const withdrawUnbondedMsg = (a: { hub: string; sender: string }): EncodeObject =>
   exec(a.sender, a.hub, { withdraw_unbonded: {} })
+
+// ─── IBC between Noble and Terra ────────────────────────────────
+
+const ZERO_HEIGHT = { revisionNumber: BigInt(0), revisionHeight: BigInt(0) }
+
+/** An ICS-20 transfer. If it is not relayed within the timeout, the tokens return to the sender. */
+export function ibcTransferMsg(a: { sender: string; receiver: string; channel: string; denom: string; amount: string; memo?: string; timeoutMinutes?: number }): EncodeObject {
+  const timeoutTimestamp = BigInt(Date.now() + (a.timeoutMinutes ?? 10) * 60_000) * BigInt(1_000_000)
+  return {
+    typeUrl: '/ibc.applications.transfer.v1.MsgTransfer',
+    value: MsgTransfer.fromPartial({
+      sourcePort: 'transfer', sourceChannel: a.channel, token: { denom: a.denom, amount: a.amount },
+      sender: a.sender, receiver: a.receiver, timeoutHeight: ZERO_HEIGHT, timeoutTimestamp, memo: a.memo ?? '',
+    }),
+  }
+}
+
+export interface SkipDepositExpect {
+  nobleAddress: string
+  terraAddress: string
+  /** USDC on Noble, smallest units, exactly as entered */
+  amount: string
+  /** the Terra token asked for, as Skip writes it: uluna, ibc/…, or cw20:terra1… */
+  destDenom: string
+  /** Astroport pools this site lists. A deposit may only swap through these. */
+  allowedPools: ReadonlySet<string>
+}
+
+interface SkipTransferJson {
+  source_port?: string; source_channel?: string; token?: { denom?: string; amount?: string }
+  sender?: string; receiver?: string; memo?: string; timeout_timestamp?: string | number
+  timeout_height?: { revision_number?: string | number; revision_height?: string | number }
+}
+interface SkipMemoJson {
+  wasm?: { contract?: string; msg?: { swap_and_action?: {
+    user_swap?: { swap_exact_asset_in?: { swap_venue_name?: string; operations?: { pool: string; denom_in: string; denom_out: string }[] } }
+    min_asset?: { native?: { denom?: string; amount?: string }; cw20?: { address?: string; amount?: string } }
+    post_swap_action?: { transfer?: { to_address?: string } }
+    affiliates?: unknown[]
+  } } }
+}
+
+/**
+ * The one message Skip Go builds for a deposit, taken apart before any wallet
+ * sees it. It has to be an IBC transfer of exactly the USDC entered, from this
+ * wallet's Noble address over Noble's channel to Terra, to Skip's entry point.
+ * Its memo has to swap only through Astroport pools this site lists, start
+ * from Noble USDC, end in the token asked for with a minimum set, carry no
+ * fee, and send the result to this wallet's own Terra address, naming no
+ * other address anywhere. Anything else throws and nothing is signed.
+ */
+export function skipDepositMsg(raw: { msg: string; msg_type_url: string }, e: SkipDepositExpect): { msg: EncodeObject; minOut: string } {
+  const refuse = (why: string): never => { throw new Error(`Refused the transaction Skip built: ${why}`) }
+  if (raw.msg_type_url !== '/ibc.applications.transfer.v1.MsgTransfer') refuse(`unexpected message type ${raw.msg_type_url}`)
+  let m: SkipTransferJson = {}
+  try { m = JSON.parse(raw.msg) as SkipTransferJson } catch { refuse('the message is unreadable') }
+  if (m.source_port !== 'transfer' || m.source_channel !== NOBLE_TO_TERRA_CHANNEL) refuse('it uses another IBC channel')
+  if (m.sender !== e.nobleAddress) refuse('it is not sent from your Noble address')
+  if (m.token?.denom !== NOBLE_USDC_DENOM || m.token?.amount !== e.amount) refuse('the amount or token differs from what you entered')
+  if (m.receiver !== SKIP_ENTRY_POINT_TERRA) refuse("it does not go to Skip's entry point on Terra")
+  let memo: SkipMemoJson = {}
+  try { memo = JSON.parse(m.memo ?? '') as SkipMemoJson } catch { refuse('the memo is unreadable') }
+  if (memo.wasm?.contract !== SKIP_ENTRY_POINT_TERRA) refuse('the memo calls another contract')
+  const action = memo.wasm?.msg?.swap_and_action
+  const swap = action?.user_swap?.swap_exact_asset_in
+  if (!action || !swap || swap.swap_venue_name !== 'terra-astroport') refuse('the swap is not on Astroport')
+  const ops = swap?.operations ?? []
+  // Skip writes a cw20 as "cw20:terra1…" in routes but as the bare contract address inside the swap steps.
+  const bare = (d?: string) => (d ?? '').replace(/^cw20:/, '')
+  if (ops.length === 0) refuse('there is no swap in it')
+  if (bare(ops[0].denom_in) !== NOBLE_USDC) refuse('the swap does not start from Noble USDC')
+  if (bare(ops[ops.length - 1].denom_out) !== bare(e.destDenom)) refuse('the swap ends in a different token')
+  ops.forEach((op, i) => {
+    if (!e.allowedPools.has(op.pool)) refuse(`pool ${op.pool} is not one this site lists`)
+    if (i > 0 && bare(op.denom_in) !== bare(ops[i - 1].denom_out)) refuse('the swap steps do not connect')
+  })
+  const min = action?.min_asset?.native ?? action?.min_asset?.cw20
+  const minDenom = action?.min_asset?.native?.denom ?? action?.min_asset?.cw20?.address ?? ''
+  if (!min?.amount || bare(minDenom) !== bare(e.destDenom) || !(BigInt(min.amount) > BigInt(0))) refuse('there is no minimum on what arrives')
+  if (action?.post_swap_action?.transfer?.to_address !== e.terraAddress) refuse('the swapped tokens would go to someone else')
+  if ((action?.affiliates ?? []).length > 0) refuse('it carries a fee')
+  const named = (m.memo ?? '').match(/\b(?:terra|noble|osmo|cosmos|neutron)1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{38}\b/g) ?? []
+  if (named.some(addr => addr !== e.terraAddress && addr !== e.nobleAddress)) refuse('it names an address that is not yours')
+  return {
+    msg: {
+      typeUrl: '/ibc.applications.transfer.v1.MsgTransfer',
+      value: MsgTransfer.fromPartial({
+        sourcePort: 'transfer', sourceChannel: NOBLE_TO_TERRA_CHANNEL, token: { denom: NOBLE_USDC_DENOM, amount: e.amount },
+        sender: e.nobleAddress, receiver: SKIP_ENTRY_POINT_TERRA,
+        timeoutHeight: { revisionNumber: BigInt(m.timeout_height?.revision_number ?? 0), revisionHeight: BigInt(m.timeout_height?.revision_height ?? 0) },
+        timeoutTimestamp: BigInt(m.timeout_timestamp ?? 0), memo: m.memo ?? '',
+      }),
+    },
+    minOut: String(min?.amount),
+  }
+}

@@ -5,14 +5,18 @@ import { customWallets, mobileWallets, WALLETCONNECT_PROJECT_ID } from 'constant
 // the entire mainnet/ directory into every visitor's bundle.
 import terra2Chain from 'chain-registry/mainnet/terra2/chain'
 import terra2Assets from 'chain-registry/mainnet/terra2/assets'
+// Noble, for moving USDC in and out (lib/skip). Also narrow imports.
+import nobleChain from 'chain-registry/mainnet/noble/chain'
+import nobleAssets from 'chain-registry/mainnet/noble/assets'
 import { EndpointOptions, SignerOptions } from '@cosmos-kit/core'
 import { CHAIN_CONFIGS } from 'constants/chainsConfig'
 import { GasPrice } from '@cosmjs/stargate'
 import { Chain } from '@chain-registry/types'
 import { REST_ENDPOINTS, RPC_ENDPOINTS } from 'lib/lcd'
+import { NOBLE_REST_ENDPOINTS, NOBLE_RPC_ENDPOINTS } from 'lib/skip'
 
-const chains = [terra2Chain]
-const assets = [terra2Assets]
+const chains = [terra2Chain, nobleChain]
+const assets = [terra2Assets, nobleAssets]
 
 // ─── Module-level frozen constants ─────────────────────────────
 //
@@ -34,12 +38,15 @@ const endpointOptionsStatic: { endpoints: EndpointOptions['endpoints']; isLazy: 
         ? { rpc: RPC_ENDPOINTS, rest: REST_ENDPOINTS, isLazy: false }
         : { rpc: [config.rpc], rest: [config.lcd] },
     }),
-    {},
+    { noble: { rpc: NOBLE_RPC_ENDPOINTS, rest: NOBLE_REST_ENDPOINTS, isLazy: false } },
   ),
   isLazy: true,
 }
 
 const signerOptionsStatic: SignerOptions = {
+  // Noble charges its network fee in USDC.
+  //@ts-ignore
+  signingStargate: (chain: Chain) => (chain.chain_id === 'noble-1' ? { gasPrice: GasPrice.fromString('0.1uusdc') } : undefined),
   //@ts-ignore
   signingCosmwasm: (chain: Chain) => {
     switch (chain.chain_id) {

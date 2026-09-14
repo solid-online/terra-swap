@@ -14,10 +14,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import useMyAddress from 'components/hooks/useMyAddress'
 import WalletButton from 'components/WalletButton'
 import { WalletName } from 'components/WalletName'
+import ElectricPulse from 'components/ElectricPulse'
 import { SPACE, RADIUS, TEXT } from 'components/tokens'
 import { isCrystalHolder } from 'lib/holders'
 import {
-  KNOWN_TOKENS, assetId, sameAsset, tokenFor, toMicro, fromMicro,
+  KNOWN_TOKENS, NOBLE_USDC, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
   lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_NAME, VENUE_INCENTIVES, smart,
   COIN_REGISTRY, ASTRO_STAKING, XASTRO_CW20, ASTRO_CONVERTER, ASTRO_CW20,
@@ -30,15 +31,22 @@ import type { LpFlow } from 'lib/dex-ledger'
 import type { PricesResponse } from 'pages/api/dex-prices'
 import type { VenueResponse } from 'pages/api/dex-venue'
 import type { PositionsResponse } from 'pages/api/positions'
-import { quoteBest, executionLegs, planRoute, routeText, reachable, quoteLoop, planRoutedZap, type Quotes, type Loop, type RoutedZap } from 'lib/route'
+import { quoteBest, executionLegs, planRoute, routeText, reachable, quoteLoop, planRoutedZap, type Quotes, type Loop, type RoutedZap, type RoutePlan } from 'lib/route'
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
-import { useRouteSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap, useLstBond, useLstUnbond, useLstWithdraw } from 'components/transactions/useDex'
+import { useRouteSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap, useLstBond, useLstUnbond, useLstWithdraw, useNobleMsgs, useTerraMsgs } from 'components/transactions/useDex'
+import { useChain } from '@cosmos-kit/react'
+import { fromBech32 } from '@cosmjs/encoding'
+import type { EncodeObject } from '@cosmjs/proto-signing'
+import { ibcTransferMsg, routeMsgs, skipDepositMsg } from 'lib/msgs'
+import { NOBLE_CHAIN_ID, NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, TERRA_CHAIN_ID, TERRA_TO_NOBLE_CHANNEL, nobleUsdcBalance, skipDepositMsgs, skipDepositRoute, skipStatus, skipTrack, type SkipRoute } from 'lib/skip'
 import { hubForToken, hubInfo, type HubInfo } from 'lib/lst'
+import { lcdFetch } from 'lib/lcd'
+import { TOKEN_META, tokenScore } from 'lib/tokenMeta'
 import { humanizeTxError } from 'lib/errors'
 
-type Tab = 'swap' | 'pools' | 'positions' | 'create' | 'board'
+type Tab = 'swap' | 'pools' | 'positions' | 'transfer' | 'create' | 'board'
 
 // The classic Terra brand face is Gotham (terra.money served "Gotham A/B"
 // from Hoefler & Co's cloud.typography in 2020–21; the wordmark is Gotham
@@ -175,18 +183,210 @@ function PairIcons({ a, b, size = 22 }: { a: string; b: string; size?: number })
 }
 
 /** A native <select> (works everywhere, including iOS) with the chosen token's mark laid over its left edge. */
+type TokenOption = { key: string; label: string; info: Parameters<typeof assetId>[0]; decimals?: number; cw20?: boolean }
+
+/**
+ * Prices and liquidity per token, published once by the page for every token
+ * picker, so the picker can rank by depth and value balances without each
+ * one re-reading the pools.
+ */
+let tokenData: { px: Record<string, number> | null; liquidity: Map<string, number> } = { px: null, liquidity: new Map() }
+const tokenDataListeners = new Set<() => void>()
+function publishTokenData(next: typeof tokenData) {
+  tokenData = next
+  tokenDataListeners.forEach(f => f())
+}
+function useTokenData() {
+  const [, bump] = useState(0)
+  useEffect(() => {
+    const f = () => bump(n => n + 1)
+    tokenDataListeners.add(f)
+    return () => { tokenDataListeners.delete(f) }
+  }, [])
+  return tokenData
+}
+/** Half of each pool's value counts toward each of its two tokens. */
+function liquidityByToken(pools: PoolView[]): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const p of pools) {
+    if (!p.tvlUsd) continue
+    for (const t of p.tokens) m.set(assetId(t.info), (m.get(assetId(t.info)) ?? 0) + p.tvlUsd / 2)
+  }
+  return m
+}
+
+/** Every listed token this wallet holds: native balances in one read, cw20s one query each. */
+const balanceCache = new Map<string, { at: number; v: Record<string, string> }>()
+async function walletBalances(addr: string, options: ReadonlyArray<TokenOption>): Promise<Record<string, string>> {
+  const hit = balanceCache.get(addr)
+  if (hit && Date.now() - hit.at < 20_000) return hit.v
+  const out: Record<string, string> = {}
+  try {
+    const r = await lcdFetch(`/cosmos/bank/v1beta1/balances/${addr}?pagination.limit=300`)
+    if (r.ok) for (const c of ((await r.json())?.balances ?? []) as { denom: string; amount: string }[]) out[c.denom] = c.amount
+  } catch { /* balances are a nicety; the picker works without them */ }
+  await Promise.all(options.filter(t => 'token' in t.info).map(async t => {
+    const id = assetId(t.info)
+    const b = await queryCw20Balance(id, addr)
+    if (b !== '0') out[id] = b
+  }))
+  balanceCache.set(addr, { at: Date.now(), v: out })
+  return out
+}
+
+const RECENT_KEY = 'terra_recent_tokens'
+function readRecent(): string[] {
+  try { const v = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); return Array.isArray(v) ? v.filter(x => typeof x === 'string') : [] } catch { return [] }
+}
+function rememberToken(id: string) {
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify([id, ...readRecent().filter(x => x !== id)].slice(0, 6))) } catch { /* private mode */ }
+}
+const compactUsd = (n: number) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : n >= 1 ? `$${Math.round(n)}` : n > 0 ? `$${n.toFixed(2)}` : '')
+
+/**
+ * Picking a token by looking for it, not by scrolling a list: search by
+ * ticker, name, chain, what it is ("bitcoin", "gold", "staked") or a pasted
+ * address. Tokens you hold come first with their value, then the rest by how
+ * much liquidity stands behind them, so the ones you can actually trade are
+ * at the top. Tokens that share a name (USDC and USDC.inj) always say where
+ * they come from.
+ */
+function TokenPicker({ options, value, onPick, onClose }: {
+  options: ReadonlyArray<TokenOption>; value: string; onPick: (id: string) => void; onClose: () => void
+}) {
+  const me = useMyAddress()
+  const { px, liquidity } = useTokenData()
+  const [q, setQ] = useState('')
+  const [active, setActive] = useState(0)
+  const [bal, setBal] = useState<Record<string, string>>({})
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { inputRef.current?.focus() }, [])
+  useEffect(() => {
+    if (!me) return
+    let alive = true
+    walletBalances(me, options).then(b => { if (alive) setBal(b) }).catch(() => {})
+    return () => { alive = false }
+  }, [me, options])
+
+  const decimalsOf = (t: TokenOption) => t.decimals ?? tokenFor(t.info).decimals
+  const held = (t: TokenOption) => Number(bal[assetId(t.info)] ?? 0) / 10 ** decimalsOf(t)
+  const usdHeld = (t: TokenOption) => { const p = px?.[assetId(t.info)]; return p ? held(t) * p : 0 }
+  const liq = (t: TokenOption) => liquidity.get(assetId(t.info)) ?? 0
+  /** Tokens sharing a name with another listed token, so each can say which one it is not. */
+  const namesakes = useMemo(() => {
+    const byName = new Map<string, string[]>()
+    for (const t of options) { const n = TOKEN_META[t.key]?.name ?? t.label; byName.set(n, [...(byName.get(n) ?? []), t.label]) }
+    return byName
+  }, [options])
+
+  const rank = (score: number) => (score >= 90 ? 2 : score >= 40 ? 1 : 0)
+  const list = useMemo(() => {
+    const rows = options
+      .map(t => ({ t, score: tokenScore({ key: t.key, label: t.label, id: assetId(t.info) }, q) }))
+      .filter(r => r.score > 0)
+    return q.trim()
+      // An exact ticker or address goes first; among the other real matches, the deepest market wins.
+      ? rows.sort((a, b) => rank(b.score) - rank(a.score) || liq(b.t) - liq(a.t)).map(r => r.t)
+      : rows.map(r => r.t).sort((a, b) => Number(held(b) > 0) - Number(held(a) > 0) || usdHeld(b) - usdHeld(a) || liq(b) - liq(a))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options, q, bal, px, liquidity])
+  useEffect(() => { setActive(0) }, [q])
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>(`[data-row="${active}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [active])
+
+  const popular = useMemo(() => [...options].sort((a, b) => liq(b) - liq(a)).slice(0, 5),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+    [options, liquidity])
+  const recent = useMemo(() => readRecent().map(id => options.find(t => assetId(t.info) === id)).filter((t): t is TokenOption => !!t).slice(0, 5), [options])
+  const pick = (t: TokenOption) => { rememberToken(assetId(t.info)); onPick(assetId(t.info)) }
+  const looksLikeAddress = /^(terra1|ibc\/|factory\/|cw20:)/i.test(q.trim())
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); onClose() }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(a + 1, Math.max(0, list.length - 1))) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(a - 1, 0)) }
+    else if (e.key === 'Enter' && list[active]) { e.preventDefault(); pick(list[active]) }
+  }
+  const chip = (t: TokenOption) => (
+    <button key={t.key} type='button' onClick={() => pick(t)} style={{ ...ghostBtn, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, color: C.textPrimary }}>
+      <TokenIcon label={t.label} size={16} />{t.label}
+    </button>
+  )
+
+  return (
+    <div role='dialog' aria-modal='true' aria-label='Select a token' onKeyDown={onKey} onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
+      style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(3,5,12,0.62)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}>
+      <div style={{ width: 'min(460px, 100%)', maxHeight: 'min(680px, 88vh)', display: 'flex', flexDirection: 'column', background: C.surfaceElev, border: `1px solid ${C.divider}`, borderRadius: 16, boxShadow: '0 24px 60px rgba(0,0,0,0.55)', overflow: 'hidden' }}>
+        <div style={{ padding: `${SPACE['3']}px ${SPACE['3']}px ${SPACE['2']}px` }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: SPACE['2'] }}>
+            <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>Select a token</b>
+            <button type='button' onClick={onClose} aria-label='Close' style={{ ...ghostBtn, marginLeft: 'auto', padding: '2px 9px' }}>esc</button>
+          </div>
+          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder='Name, ticker, chain, or paste an address'
+            style={{ ...field, width: '100%', boxSizing: 'border-box' }} spellCheck={false} autoComplete='off' />
+          {!q.trim() && (
+            <div style={{ marginTop: SPACE['2'], display: 'grid', gap: 6 }}>
+              {recent.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>Recent</span>{recent.map(chip)}</div>}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>Deepest</span>{popular.map(chip)}</div>
+              <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>Try &ldquo;bitcoin&rdquo;, &ldquo;gold&rdquo;, &ldquo;euro&rdquo;, &ldquo;staked luna&rdquo; or &ldquo;from noble&rdquo;.</div>
+            </div>
+          )}
+        </div>
+        <div ref={listRef} role='listbox' style={{ overflowY: 'auto', padding: `0 ${SPACE['2']}px ${SPACE['2']}px`, borderTop: `1px solid ${C.divider}` }}>
+          {list.length === 0 && (
+            <div style={{ padding: SPACE['3'], fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6 }}>
+              {looksLikeAddress ? 'That address is not one of the listed tokens here. Unlisted tokens are not offered, so a look-alike cannot slip in.' : 'No listed token matches that.'}
+            </div>
+          )}
+          {list.map((t, i) => {
+            const id = assetId(t.info)
+            const meta = TOKEN_META[t.key]
+            const h = held(t), usd = usdHeld(t), depth = liq(t)
+            const others = (namesakes.get(meta?.name ?? t.label) ?? []).filter(l => l !== t.label)
+            const twin = others.length > 0
+            return (
+              <div key={id} data-row={i} role='option' aria-selected={id === value} onMouseEnter={() => setActive(i)} onClick={() => pick(t)}
+                style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], padding: '9px 10px', marginTop: 4, borderRadius: 10, cursor: 'pointer', background: i === active ? C.surface : 'transparent', border: `1px solid ${id === value ? C.goldCore : 'transparent'}` }}>
+                <TokenIcon label={t.label} size={30} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                    <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>{t.label}</b>
+                    <span style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>{meta?.name ?? ''}</span>
+                  </div>
+                  <div style={{ fontSize: TEXT.xs.size, color: twin ? C.goldLit : C.textWhisper }}>{meta?.origin ?? (('token' in t.info) ? 'Terra, cw20' : '')}{twin ? ` · a different token from ${others.join(' and ')}` : ''}</div>
+                </div>
+                <div style={{ textAlign: 'right', fontSize: TEXT.xs.size, fontVariantNumeric: 'tabular-nums' }}>
+                  {h > 0
+                    ? <><div style={{ color: C.textPrimary }}>{fmtAmount(h)}</div><div style={{ color: C.textMuted }}>{compactUsd(usd)}</div></>
+                    : depth > 0 ? <div style={{ color: C.textWhisper }}>{compactUsd(depth)} liquidity</div> : null}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** The button that opens TokenPicker. Same props the old native select took. */
 function TokenSelect({ value, onChange, options, style }: {
   value: string; onChange: (v: string) => void
-  options: ReadonlyArray<{ key: string; label: string; info: Parameters<typeof assetId>[0] }>
+  options: ReadonlyArray<TokenOption>
   style?: React.CSSProperties
 }) {
+  const [open, setOpen] = useState(false)
   const cur = options.find(t => assetId(t.info) === value)
   return (
     <div style={{ position: 'relative', display: 'flex', ...style }}>
-      {cur && <TokenIcon label={cur.label} size={20} style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', zIndex: 1 }} />}
-      <select style={{ ...select, width: '100%', paddingLeft: cur ? 38 : undefined }} value={value} onChange={e => onChange(e.target.value)}>
-        {options.map(t => <option key={t.key} value={assetId(t.info)}>{t.label}</option>)}
-      </select>
+      <button type='button' onClick={() => setOpen(true)} aria-haspopup='dialog' aria-label={cur ? `Token: ${cur.label}. Change` : 'Select a token'}
+        style={{ ...select, width: '100%', display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', color: C.textPrimary }}>
+        {cur ? <><TokenIcon label={cur.label} size={20} /><span style={{ fontWeight: 700 }}>{cur.label}</span></> : <span style={{ color: C.textMuted }}>Select</span>}
+        <span aria-hidden style={{ marginLeft: 'auto', color: C.textMuted, fontSize: '0.8em' }}>▾</span>
+      </button>
+      {open && <TokenPicker options={options} value={value} onPick={v => { onChange(v); setOpen(false) }} onClose={() => setOpen(false)} />}
     </div>
   )
 }
@@ -1359,7 +1559,12 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
       {egg && <div style={{ fontSize: TEXT.xs.size, color: C.goldLit, fontStyle: 'italic', margin: `-4px 0 ${SPACE['2']}px` }}>✦ {egg}</div>}
 
       <div className='terra-flip-row' style={{ display: 'flex', justifyContent: 'center', margin: `-2px 0 ${SPACE['2']}px` }}>
-        <button
+        {/* While a swap is being signed and sent, the current runs between the two tokens. */}
+        {(phase === 1 || phase === 2) && from && to ? (
+          <div style={{ width: '100%', maxWidth: 300 }}>
+            <ElectricPulse compact active left={<TokenIcon label={from.label} size={24} />} right={<TokenIcon label={to.label} size={24} />} />
+          </div>
+        ) : <button
           type='button'
           onClick={flip}
           disabled={!from || !to}
@@ -1372,7 +1577,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
             color: C.goldLit, fontSize: '1rem', lineHeight: 1, fontFamily: 'inherit',
             transition: 'transform 0.35s ease, border-color 0.2s, color 0.2s',
           }}
-        >⇅</button>
+        >⇅</button>}
       </div>
 
       <label className='terra-label' style={label}>You receive</label>
@@ -1546,6 +1751,268 @@ function HubAlternative({ from, to, micro, swapOut, blocked, onDone }: {
         </div>
       )}
     </div>
+  )
+}
+
+// ─── Moving USDC between Noble and Terra ────────────────────────
+
+const isNobleAddress = (a: string) => { try { const { prefix, data } = fromBech32(a); return prefix === 'noble' && data.length === 20 } catch { return false } }
+const nobleTxUrl = (hash: string) => `https://www.mintscan.io/noble/tx/${hash}`
+
+/**
+ * USDC between Noble and Terra without leaving the page.
+ *
+ * Into Terra: a plain IBC transfer, or, when the USDC should arrive as another
+ * token, one transfer Skip Go builds that swaps on arrival through Astroport's
+ * pools. That message is checked in lib/msgs before the wallet sees it.
+ * Out of Terra: any listed token is swapped to USDC by this site's own routing
+ * and the USDC is sent to Noble in the same transaction. See lib/skip.
+ */
+function TransferPanel({ routePools, onDone }: { routePools: PoolView[]; onDone: () => void }) {
+  const me = useMyAddress()
+  const noble = useChain('noble')
+  const nobleMsgs = useNobleMsgs()
+  const terraMsgs = useTerraMsgs()
+  const [dir, setDir] = useState<'in' | 'out'>('in')
+  const [amount, setAmount] = useState('')
+  const [tokenId, setTokenId] = useState(NOBLE_USDC)
+  const [nobleTo, setNobleTo] = useState('')
+  const [nobleBal, setNobleBal] = useState('0')
+  const [terraBal, setTerraBal] = useState('0')
+  const [quote, setQuote] = useState<{ out: string; secs: number; path: string; note?: string; route?: SkipRoute; plan?: RoutePlan } | null>(null)
+  const [quoteErr, setQuoteErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [status, setStatus] = useState<{ tx: string; chain: string; text: string; done?: boolean; failed?: boolean } | null>(null)
+  const SLIP = 0.01
+
+  const usdc = useMemo(() => tokenFor({ native_token: { denom: NOBLE_USDC } }), [])
+  const allTokens = useMemo(() => {
+    const m = new Map<string, KnownToken>()
+    for (const p of routePools) for (const t of p.tokens) m.set(assetId(t.info), t)
+    return Array.from(m.values())
+  }, [routePools])
+  /** A deposit can arrive as USDC, or as anything with an Astroport pool against USDC: Skip swaps only there. */
+  const inOptions = useMemo(() => {
+    const m = new Map<string, KnownToken>([[NOBLE_USDC, usdc]])
+    for (const p of routePools) {
+      if (p.venue !== 'astroport' || !p.tokens.some(t => assetId(t.info) === NOBLE_USDC)) continue
+      for (const t of p.tokens) m.set(assetId(t.info), t)
+    }
+    return Array.from(m.values())
+  }, [routePools, usdc])
+  /** Anything this site can route to USDC can leave for Noble. */
+  const outOptions = useMemo(() => [usdc, ...reachable(routePools, usdc, allTokens)], [routePools, usdc, allTokens])
+  const options = dir === 'in' ? inOptions : outOptions
+  useEffect(() => { if (!options.some(t => assetId(t.info) === tokenId)) setTokenId(NOBLE_USDC) }, [options, tokenId])
+  const token = options.find(t => assetId(t.info) === tokenId) ?? usdc
+  const plainUsdc = tokenId === NOBLE_USDC
+  const micro = toMicro(amount, dir === 'in' ? 6 : token.decimals)
+  const debounced = useDebounced(micro, 400)
+  const nobleAddr = noble.address ?? ''
+  const destination = dir === 'out' ? (nobleTo.trim() || nobleAddr) : ''
+
+  useEffect(() => {
+    if (!nobleAddr) { setNobleBal('0'); return }
+    nobleUsdcBalance(nobleAddr).then(setNobleBal).catch(() => {})
+  }, [nobleAddr, status?.done])
+  useEffect(() => {
+    if (!me) { setTerraBal('0'); return }
+    queryBalance(me, dir === 'in' ? usdc.info : token.info).then(setTerraBal).catch(() => {})
+  }, [me, dir, token, usdc, status?.done])
+
+  useEffect(() => {
+    let alive = true
+    setQuote(null); setQuoteErr(null)
+    if (!debounced || debounced === '0') return
+    if (plainUsdc) {
+      setQuote({ out: debounced, secs: 30, path: dir === 'in' ? 'IBC transfer from Noble to Terra' : 'IBC transfer from Terra to Noble' })
+      return
+    }
+    if (dir === 'in') {
+      const destDenom = token.cw20 ? `cw20:${tokenId}` : tokenId
+      skipDepositRoute(debounced, destDenom).then(r => {
+        if (!alive) return
+        if (r.txs_required !== 1 || r.required_chain_addresses.some(c => c !== NOBLE_CHAIN_ID && c !== TERRA_CHAIN_ID)) {
+          setQuoteErr('Skip Go found no single-transaction route for this. Bring USDC to Terra and swap it here.')
+          return
+        }
+        setQuote({ out: r.amount_out, secs: r.estimated_route_duration_seconds ?? 30, route: r, path: 'IBC transfer to Terra, swapped on arrival through Astroport by Skip Go', note: r.warning?.message })
+      }).catch(e => {
+        if (!alive) return
+        setQuoteErr(/no routes/i.test(String((e as Error)?.message)) ? `No Astroport pool pairs ${token.label} with USDC. Bring USDC to Terra and swap it here.` : 'Skip Go is not answering right now. Moving plain USDC still works.')
+      })
+    } else {
+      quoteBest(routePools, token, usdc, debounced, HOME_VENUE).then(q => {
+        if (!alive) return
+        if (!q.best) { setQuoteErr(`No route from ${token.label} to USDC right now.`); return }
+        const plan = planRoute(q.best, SLIP)
+        setQuote({ out: plan.minOut, secs: 60, plan, path: `${routeText(q.best)}, then IBC transfer to Noble`, note: `The swap should give about ${fromMicro(plan.expectedOut, 6)} USDC. At least ${fromMicro(plan.minOut, 6)} is sent to Noble, and anything above that stays in your Terra wallet as USDC.` })
+      }).catch(() => { if (alive) setQuoteErr('Could not price that right now.') })
+    }
+    return () => { alive = false }
+  }, [dir, tokenId, token, plainUsdc, debounced, routePools, usdc])
+
+  /** Follow the transfer until it lands: Skip's tracker, and the destination balance as a second witness. */
+  const follow = (hash: string, chain: string, before: string, readDest: () => Promise<string>) => {
+    if (!hash) return
+    skipTrack(hash, chain).catch(() => {})
+    let n = 0
+    const tick = async () => {
+      n++
+      const [state, now] = await Promise.all([skipStatus(hash, chain).catch(() => 'STATE_PENDING'), readDest().catch(() => before)])
+      if (state === 'STATE_COMPLETED_SUCCESS' || BigInt(now || '0') > BigInt(before || '0')) { setStatus(s => s && { ...s, text: 'Arrived.', done: true }); return }
+      if (state === 'STATE_COMPLETED_ERROR' || state === 'STATE_ABANDONED') { setStatus(s => s && { ...s, text: 'It did not complete. IBC returns the tokens to where they came from; check that balance in a few minutes.', failed: true }); return }
+      if (n < 40) setTimeout(tick, 7000)
+      else setStatus(s => s && { ...s, text: 'Still on its way. IBC transfers usually land within a few minutes.' })
+    }
+    setTimeout(tick, 6000)
+  }
+
+  const go = async () => {
+    setErr(null); setStatus(null)
+    if (!micro || micro === '0' || !quote) return
+    setBusy(true)
+    try {
+      if (dir === 'in') {
+        if (!me) throw new Error('Connect your wallet first')
+        if (!nobleAddr) throw new Error('Connect your wallet on Noble first')
+        let msgs: EncodeObject[]
+        if (plainUsdc) {
+          msgs = [ibcTransferMsg({ sender: nobleAddr, receiver: me, channel: NOBLE_TO_TERRA_CHANNEL, denom: NOBLE_USDC_DENOM, amount: micro })]
+        } else {
+          const built = await skipDepositMsgs(quote.route!, { [NOBLE_CHAIN_ID]: nobleAddr, [TERRA_CHAIN_ID]: me }, String(SLIP * 100))
+          const txs = built.txs ?? []
+          const tx = txs[0]?.cosmos_tx
+          if (txs.length !== 1 || tx?.chain_id !== NOBLE_CHAIN_ID || tx.msgs.length !== 1) throw new Error('Refused the transaction Skip built: it is not a single message on Noble')
+          const allowedPools = new Set(routePools.filter(p => p.venue === 'astroport').map(p => p.contract_addr))
+          msgs = [skipDepositMsg(tx.msgs[0], { nobleAddress: nobleAddr, terraAddress: me, amount: micro, destDenom: token.cw20 ? `cw20:${tokenId}` : tokenId, allowedPools }).msg]
+        }
+        const before = await queryBalance(me, token.info)
+        const res = await nobleMsgs.mutateAsync({ msgs, memo: plainUsdc ? 'USDC to Terra' : `USDC to Terra as ${token.label}` }) as { transactionHash?: string }
+        const hash = res?.transactionHash ?? ''
+        setStatus({ tx: hash, chain: NOBLE_CHAIN_ID, text: `Sent on Noble. Arriving on Terra as ${token.label}…` })
+        follow(hash, NOBLE_CHAIN_ID, before, () => queryBalance(me, token.info))
+      } else {
+        if (!me) throw new Error('Connect your wallet first')
+        if (!destination || !isNobleAddress(destination)) throw new Error('Enter a Noble address, or connect your wallet on Noble')
+        const send = plainUsdc ? micro : quote.plan!.minOut
+        const msgs = [
+          ...(plainUsdc ? [] : routeMsgs(me, quote.plan!, SLIP)),
+          ibcTransferMsg({ sender: me, receiver: destination, channel: TERRA_TO_NOBLE_CHANNEL, denom: NOBLE_USDC, amount: send }),
+        ]
+        const before = await nobleUsdcBalance(destination)
+        const res = await terraMsgs.mutateAsync({ msgs, memo: plainUsdc ? 'USDC to Noble' : `${token.label} to Noble as USDC` }) as { transactionHash?: string }
+        const hash = res?.transactionHash ?? ''
+        setStatus({ tx: hash, chain: TERRA_CHAIN_ID, text: 'Sent on Terra. Arriving on Noble…' })
+        follow(hash, TERRA_CHAIN_ID, before, () => nobleUsdcBalance(destination))
+      }
+      setAmount('')
+      onDone()
+    } catch (e) {
+      const text = String((e as Error)?.message ?? e)
+      setErr(dir === 'in' && /retrieve account|account .*not found|does not exist/i.test(text) ? 'This wallet has no account on Noble yet. It needs some USDC there first.' : humanizeTxError(e))
+    } finally { setBusy(false) }
+  }
+
+  const needNoble = dir === 'in' || !nobleTo.trim()
+  const fromBal = dir === 'in' ? nobleBal : terraBal
+  const fromDecimals = dir === 'in' ? 6 : token.decimals
+  const insufficient = !!micro && BigInt(micro) > BigInt(fromBal || '0')
+  const canGo = !!me && !!quote && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!nobleAddr : !!destination && isNobleAddress(destination))
+
+  return (
+    <Card>
+      <Section title='Transfer' />
+      <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `${SPACE['2']}px 0 ${SPACE['3']}px` }}>
+        Move USDC between Noble and Terra in one signature. Arriving on Terra it can land as USDC or already swapped into another token; leaving Terra, any token here is swapped to USDC on the way out.
+      </p>
+      <div style={{ margin: `0 0 ${SPACE['3']}px` }}>
+        <ElectricPulse
+          caption='IBC'
+          active={busy || (!!status && !status.done && !status.failed)}
+          onSwap={() => { setDir(d => (d === 'in' ? 'out' : 'in')); setAmount(''); setStatus(null); setErr(null) }}
+          left={dir === 'in' ? <TokenIcon label='USDC' size={40} /> : <img src='/img/terra-globe.svg' alt='' width={46} height={46} />}
+          right={dir === 'in' ? <img src='/img/terra-globe.svg' alt='' width={46} height={46} /> : <TokenIcon label='USDC' size={40} />}
+          leftLabel={dir === 'in' ? 'From · Noble' : 'From · Terra'}
+          rightLabel={dir === 'in' ? 'To · Terra' : 'To · Noble'}
+        />
+      </div>
+      <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
+        {(['in', 'out'] as const).map(d => (
+          <button key={d} type='button' onClick={() => { setDir(d); setAmount(''); setStatus(null); setErr(null) }}
+            style={{ ...ghostBtn, padding: '4px 12px', color: dir === d ? C.goldLit : C.textMuted, borderColor: dir === d ? C.goldCore : C.divider }}>
+            {d === 'in' ? 'Noble → Terra' : 'Terra → Noble'}
+          </button>
+        ))}
+      </div>
+
+      <label style={label}>{dir === 'in' ? 'From Noble' : 'From Terra'}</label>
+      <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['2'] }}>
+        <input style={field} type='number' min='0' step='any' placeholder='0.0' value={amount} onChange={e => setAmount(e.target.value)} />
+        {dir === 'in'
+          ? <div style={{ ...select, display: 'flex', alignItems: 'center', gap: 8, color: C.textPrimary }}><TokenIcon label='USDC' size={20} /><b>USDC</b></div>
+          : <TokenSelect value={tokenId} onChange={setTokenId} options={outOptions} />}
+      </div>
+      <div style={{ ...rowStyle, marginBottom: SPACE['3'] }}>
+        <span>{dir === 'in' ? (nobleAddr ? `On Noble: ${fromMicro(nobleBal, 6)} USDC` : 'Noble not connected') : `Balance ${fromMicro(terraBal, fromDecimals)} ${token.label}`}</span>
+        {Number(fromBal) > 0 && (dir === 'out' || nobleAddr) && (
+          <button type='button' style={{ ...ghostBtn, padding: '2px 8px' }} onClick={() => {
+            // Noble charges its network fee in USDC, so leave a little behind when moving all of it.
+            const keep = dir === 'in' ? BigInt(50_000) : BigInt(0)
+            const max = BigInt(fromBal) > keep ? BigInt(fromBal) - keep : BigInt(0)
+            setAmount(fromMicro(max.toString(), fromDecimals, 6).replace(/,/g, ''))
+          }}>max</button>
+        )}
+      </div>
+
+      <label style={label}>{dir === 'in' ? 'Arrive on Terra as' : 'To this Noble address'}</label>
+      {dir === 'in'
+        ? <div style={{ display: 'flex', marginBottom: SPACE['3'] }}><TokenSelect value={tokenId} onChange={setTokenId} options={inOptions} style={{ flex: 1 }} /></div>
+        : (
+          <div style={{ marginBottom: SPACE['3'] }}>
+            <input style={{ ...field, width: '100%', boxSizing: 'border-box' }} placeholder={nobleAddr || 'noble1…'} value={nobleTo} onChange={e => setNobleTo(e.target.value)} spellCheck={false} autoComplete='off' />
+            {nobleTo.trim() && !isNobleAddress(nobleTo.trim()) && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginTop: 4 }}>That is not a Noble address.</div>}
+            {nobleTo.trim() && isNobleAddress(nobleTo.trim()) && nobleTo.trim() !== nobleAddr && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Sending to someone else&apos;s address, or an exchange? Check that it accepts USDC on Noble.</div>}
+            {!nobleTo.trim() && nobleAddr && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Your wallet&apos;s Noble address.</div>}
+          </div>
+        )}
+
+      {(quote || quoteErr) && (
+        <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: 'rgba(0,0,0,0.22)', borderRadius: 10, marginBottom: SPACE['3'] }}>
+          {quoteErr
+            ? <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6 }}>{quoteErr}</div>
+            : quote && (
+              <>
+                <Row k={dir === 'in' ? 'You receive on Terra' : plainUsdc ? 'You receive on Noble' : 'At least, on Noble'} v={`${fromMicro(quote.out, dir === 'in' ? token.decimals : 6, 6)} ${dir === 'in' ? token.label : 'USDC'}`} hi />
+                <Row k='How' v={quote.path} />
+                <Row k='Time' v={`about ${quote.secs < 90 ? `${quote.secs} seconds` : `${Math.round(quote.secs / 60)} minutes`}`} />
+                {quote.note && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>{quote.note}</div>}
+              </>
+            )}
+        </div>
+      )}
+
+      {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
+      {status && (
+        <div style={{ fontSize: TEXT.xs.size, color: status.failed ? C.alert : status.done ? C.success : C.textSecondary, marginBottom: SPACE['2'], lineHeight: 1.6 }}>
+          {status.done ? '✓ ' : ''}{status.text}{' '}
+          {status.tx && <a href={status.chain === NOBLE_CHAIN_ID ? nobleTxUrl(status.tx) : finderTx(status.tx)} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>View tx →</a>}
+        </div>
+      )}
+
+      {!me
+        ? <div className='terra-connect-cta'><WalletButton /></div>
+        : needNoble && !nobleAddr
+          ? <button type='button' style={primaryBtn} onClick={() => { noble.connect().catch(() => {}) }}>Connect your wallet on Noble</button>
+          : <button type='button' style={{ ...primaryBtn, opacity: canGo ? 1 : 0.5 }} disabled={!canGo} onClick={go}>
+              {busy ? 'Confirm in wallet…' : insufficient ? `Not enough ${dir === 'in' ? 'USDC on Noble' : token.label}` : dir === 'in' ? 'Move to Terra' : 'Move to Noble'}
+            </button>}
+
+      <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.6, marginTop: SPACE['3'] }}>
+        Plain transfers are ordinary IBC. Swaps on arrival are built by Skip Go and only go through Astroport pools listed here; this page checks the transaction before your wallet sees it. Only USDC issued on Noble is supported. Noble charges its network fee in USDC. This page adds no fee.
+      </div>
+    </Card>
   )
 }
 
@@ -3335,6 +3802,8 @@ function SwapPageInner() {
     return () => { alive = false; clearInterval(iv) }
   }, [])
   const routePoolsAll = useMemo(() => [...(data?.pools ?? []).filter(p => !p.empty), ...venuePools], [data, venuePools])
+  // Every token picker ranks by these.
+  useEffect(() => { publishTokenData({ px: marketPx, liquidity: liquidityByToken(routePoolsAll) }) }, [marketPx, routePoolsAll])
   /** "Take it" opens the round trip in one transaction. The one-sided trade stays as the fallback. */
   const [loopFor, setLoopFor] = useState<ArbPlan | null>(null)
   const [preset, setPreset] = useState<SwapPreset | null>(null)
@@ -3502,7 +3971,7 @@ function SwapPageInner() {
           {data?.live && (
             <>
               <div className='terra-tabs' style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
-                {tabBtn('swap', 'Swap')}{tabBtn('pools', `Pools · ${data.pools.length}`)}{tabBtn('positions', 'Positions')}
+                {tabBtn('swap', 'Swap')}{tabBtn('pools', `Pools · ${data.pools.length}`)}{tabBtn('positions', 'Positions')}{tabBtn('transfer', 'Transfer')}
                 {tabBtn('create', 'Open a pool')}{!LITE && tabBtn('board', `Board${board?.rows.length ? ` · ${board.rows.length}` : ''}`)}
                 {/* Terra Predict lives next door, same domain. Not part of Astroport mode. */}
                 {!LITE && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, marginLeft: 'auto', whiteSpace: 'nowrap' }}>Predict ↗</Link>}
@@ -3526,6 +3995,7 @@ function SwapPageInner() {
                     </div>
               )}
               {tab === 'positions' && <PositionsPanel onDone={refresh} />}
+              {tab === 'transfer' && <TransferPanel routePools={routePoolsAll} onDone={refresh} />}
               {tab === 'create' && <CreatePanel pools={data.pools} marketPx={marketPx} onDone={refresh} onCreated={() => setTab('pools')} onParty={setParty} />}
               {tab === 'board' && <Leaderboard board={board} me={me} onGoSwap={() => setTab('swap')} height={data.height} crystal={crystal} spotlight={spotlight} />}
               <div style={{ marginTop: SPACE['3'] }} />

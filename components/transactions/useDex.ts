@@ -9,6 +9,7 @@
 
 import { useCallback } from 'react'
 import { useMutation } from 'react-query'
+import { useChain } from '@cosmos-kit/react'
 import type { EncodeObject } from '@cosmjs/proto-signing'
 import { useWallet } from 'components/providers/WalletProvider'
 import { useTxRegionGate, RegionRestricted } from 'components/RegionGate'
@@ -124,4 +125,37 @@ export const useLstUnbond = () => {
 export const useLstWithdraw = () => {
   const broadcast = useDexBroadcast()
   return useMutation(async (a: { hub: string; sender: string }) => broadcast([withdrawUnbondedMsg(a)], `${MEMO}: withdraw unstaked LUNA`))
+}
+
+/** Messages already built and checked in lib/msgs, signed on Terra. */
+export const useTerraMsgs = () => {
+  const broadcast = useDexBroadcast()
+  return useMutation(async (a: { msgs: EncodeObject[]; memo: string }) => broadcast(a.msgs, `${MEMO}: ${a.memo}`))
+}
+
+/** The same region gate and on-chain success check as useDexBroadcast, for messages signed on Noble. */
+export function useNobleBroadcast() {
+  const noble = useChain('noble')
+  const { txAllowed, country } = useTxRegionGate()
+  return useCallback(async (msgs: EncodeObject[], memo: string) => {
+    if (txAllowed === false) throw new RegionRestricted(country)
+    if (!noble.address || !noble.isWalletConnected) throw new Error('Connect your wallet on Noble first')
+    try {
+      const geo = await fetch('/api/geo', { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
+      if (geo && geo.tx_allowed === false) throw new RegionRestricted(geo.country ?? country)
+    } catch (e) {
+      if (e instanceof RegionRestricted) throw e
+    }
+    const client = await noble.getSigningStargateClient()
+    const res = await client.signAndBroadcast(noble.address, msgs, 'auto', memo)
+    if (res && typeof res.code === 'number' && res.code !== 0) {
+      throw new Error(res.rawLog || `Transaction failed on Noble (code ${res.code})`)
+    }
+    return res
+  }, [noble, txAllowed, country])
+}
+
+export const useNobleMsgs = () => {
+  const broadcast = useNobleBroadcast()
+  return useMutation(async (a: { msgs: EncodeObject[]; memo: string }) => broadcast(a.msgs, `${MEMO}: ${a.memo}`))
 }
