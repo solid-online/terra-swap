@@ -3491,7 +3491,7 @@ const PCL_DEFAULTS = {
   repeg_profit_threshold: '0.000002', min_price_scale_delta: '0.000146', ma_half_time: 600,
 }
 
-function CreatePanel({ pools, marketPx, onDone, onCreated, onParty }: { pools: PoolView[]; marketPx?: Record<string, number> | null; onDone: () => void; onCreated: () => void; onParty: (x: Party) => void }) {
+function CreatePanel({ pools, marketPx, onDone, onCreated, onBack, onParty }: { pools: PoolView[]; marketPx?: Record<string, number> | null; onDone: () => void; onCreated: () => void; onBack?: () => void; onParty: (x: Party) => void }) {
   const me = useMyAddress()
   const create = useCreatePair()
   // Both factories from one page since pools.terraluna.app was folded into this one (2026-09-14).
@@ -3552,7 +3552,11 @@ function CreatePanel({ pools, marketPx, onDone, onCreated, onParty }: { pools: P
   }
   return (
     <Card>
-      <Section title='Open a pool' />
+      {/* Opening a pool lives inside Pools; the way back is where people look for it, beside the title. */}
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: SPACE['2'] }}>
+        <Section title='Open a pool' />
+        {onBack && <button type='button' onClick={onBack} style={{ background: 'transparent', border: 'none', color: C.textMuted, cursor: 'pointer', fontFamily: 'inherit', fontSize: TEXT.xs.size, padding: 0 }}>← All pools</button>}
+      </div>
       <div style={{ display: 'flex', gap: SPACE['2'], margin: `${SPACE['2']}px 0 0`, flexWrap: 'wrap' }}>
         {(['terraswap', 'astroport'] as const).map(v => (
           <button key={v} type='button' onClick={() => setVenue(v)} style={{ ...ghostBtn, padding: '3px 10px', color: venue === v ? C.goldLit : C.textMuted, borderColor: venue === v ? C.goldCore : C.divider }}>
@@ -4846,7 +4850,7 @@ function SwapPageInner() {
               {tab === 'positions' && <PositionsPanel onDone={refresh} flows={me ? board?.flows : undefined} />}
               {tab === 'history' && <HistoryPanel pools={allPools} />}
               {tab === 'transfer' && <TransferPanel key={bridgeNet} initialNet={bridgeNet} routePools={routePoolsAll} onDone={refresh} />}
-              {tab === 'create' && <CreatePanel pools={allPools}marketPx={marketPx} onDone={refresh} onCreated={() => setTab('pools')} onParty={setParty} />}
+              {tab === 'create' && <CreatePanel pools={allPools} marketPx={marketPx} onDone={refresh} onCreated={() => setTab('pools')} onBack={() => setTab('pools')} onParty={setParty} />}
               {tab === 'board' && <Leaderboard board={board} me={me} onGoSwap={() => setTab('swap')} height={data.height} crystal={crystal} spotlight={spotlight} />}
               <div style={{ marginTop: SPACE['3'] }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: SPACE['3'], fontSize: TEXT.xs.size, color: C.textWhisper }}>
