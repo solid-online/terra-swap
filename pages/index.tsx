@@ -16,6 +16,8 @@ import WalletButton from 'components/WalletButton'
 import { WalletName } from 'components/WalletName'
 import ElectricPulse from 'components/ElectricPulse'
 import LstBoard from 'components/LstBoard'
+import CommandPalette, { type PaletteItem } from 'components/CommandPalette'
+import { isPredictLive } from 'lib/predict'
 import { SPACE, RADIUS, TEXT } from 'components/tokens'
 import { isCrystalHolder } from 'lib/holders'
 import {
@@ -54,6 +56,13 @@ import { TOKEN_META, tokenScore } from 'lib/tokenMeta'
 import { humanizeTxError } from 'lib/errors'
 
 type Tab = 'swap' | 'pools' | 'positions' | 'history' | 'transfer' | 'create' | 'board'
+
+/**
+ * Each section has an address (?tab=bridge, ?tab=portfolio…), so any of them can be linked to and survives
+ * a reload. Named for what people call them; the keys inside stay as they were. Swap is the page itself.
+ */
+const TAB_PARAM: Record<Tab, string> = { swap: '', pools: 'pools', positions: 'portfolio', history: 'history', transfer: 'bridge', create: 'open-pool', board: 'board' }
+const PARAM_TAB: Record<string, Tab> = { pools: 'pools', portfolio: 'positions', positions: 'positions', history: 'history', bridge: 'transfer', transfer: 'transfer', 'open-pool': 'create', create: 'create', board: 'board' }
 
 // The classic Terra brand face is Gotham (terra.money served "Gotham A/B"
 // from Hoefler & Co's cloud.typography in 2020–21; the wordmark is Gotham
@@ -824,7 +833,7 @@ const cancelKey = () => { if (keyGate.t) { clearTimeout(keyGate.t); keyGate.t = 
 const sound = (kind: SoundKind) => { try { window.dispatchEvent(new CustomEvent('terra:sound', { detail: kind })) } catch { /* ssr */ } }
 
 function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
-  const rows: [string, string][] = [['/', 'jump to the amount'], ['f', 'flip the pair'], ['1 · 2 · 3', 'slippage 0.5 / 1 / 3 %'], ['p', 'deploy capital (a game)'], ['k', 'make him say something'], ['t', '2020 mode, twelve seconds'], ['v', 'tv mode · lunatic news 24'], ['m', 'minimap'], ['?', 'this'], ['esc', 'close this']]
+  const rows: [string, string][] = [['⌘K', 'search everything'], ['/', 'jump to the amount'], ['f', 'flip the pair'], ['1 · 2 · 3', 'slippage 0.5 / 1 / 3 %'], ['p', 'deploy capital (a game)'], ['k', 'make him say something'], ['t', '2020 mode, twelve seconds'], ['v', 'tv mode · lunatic news 24'], ['m', 'minimap'], ['?', 'this'], ['esc', 'close this']]
   return (
     <div className='terra-party' onClick={onClose} role='presentation' style={{ cursor: 'default' }}>
       <div onClick={e => e.stopPropagation()} style={{
@@ -1582,7 +1591,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
               color: crystal ? C.success : C.textMuted,
               border: `1px solid ${crystal ? C.success : C.divider}`,
             }}>
-              {feeBps === 0 ? (LITE ? `No interface fee · pool fee ${poolFeeText(pool, poolFeeBps)}` : `No protocol fee · pool fee ${poolFeeBps / 100}% to LPs`) : crystal ? '✦ Crystal · 0 protocol fee' : `Protocol fee ${feeBps / 100}% · Crystal holders 0`}
+              {feeBps === 0 ? (LITE ? `No interface fee · pool fee ${poolFeeText(pool, poolFeeBps)}` : 'Best route on Terra · no interface fee') : crystal ? '✦ Crystal · 0 protocol fee' : `Protocol fee ${feeBps / 100}% · Crystal holders 0`}
             </span>
           )
           const total = totalUsd(arbs!)
@@ -2065,7 +2074,7 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
 
   return (
     <Card>
-      <Section title='Transfer' />
+      <Section title='Bridge' />
       {switcher}
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `${SPACE['2']}px 0 ${SPACE['3']}px` }}>
         Move {net.label} between {net.name} and Terra in one signature. Arriving on Terra it can land as {net.label} or already swapped into another token; leaving Terra, any token here is swapped to {net.label} on the way out.
@@ -2193,8 +2202,8 @@ function followIbc(before: string, readDest: () => Promise<string>, setStatus: (
 const injectiveTxUrl = (hash: string) => `https://www.mintscan.io/injective/tx/${hash}`
 
 /** Which token to move: USDC on Noble, ATOM on the Cosmos Hub, or USDC.inj on Injective. The two dollars are separate tokens, never swapped for each other here. */
-function TransferPanel({ routePools, onDone }: { routePools: PoolView[]; onDone: () => void }) {
-  const [net, setNet] = useState<'noble' | 'cosmoshub' | 'injective'>('noble')
+function TransferPanel({ routePools, onDone, initialNet = 'noble' }: { routePools: PoolView[]; onDone: () => void; initialNet?: 'noble' | 'cosmoshub' | 'injective' }) {
+  const [net, setNet] = useState<'noble' | 'cosmoshub' | 'injective'>(initialNet)
   const switcher = (
     <div role='tablist' aria-label='Which token to move' style={{ display: 'flex', flexWrap: 'wrap', gap: SPACE['2'], marginTop: SPACE['2'] }}>
       {([['noble', 'USDC · Noble'], ['cosmoshub', 'ATOM · Cosmos Hub'], ['injective', 'USDC.inj · Injective']] as const).map(([k, text]) => (
@@ -2330,7 +2339,7 @@ function InjectiveTransfer({ routePools, onDone, switcher }: { routePools: PoolV
 
   return (
     <Card>
-      <Section title='Transfer' />
+      <Section title='Bridge' />
       {switcher}
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `${SPACE['2']}px 0 ${SPACE['3']}px` }}>
         Move USDC.inj, Circle&apos;s USDC as issued on Injective, between Injective and Terra in one signature. On Terra it is USDC.inj, a token of its own with its own pools; arriving, it can stay USDC.inj or be swapped into another token, never into USDC from Noble.
@@ -4061,6 +4070,68 @@ function Minimap({ pools, board, revealed, onJump }: { pools: PoolView[]; board:
   )
 }
 
+type ExploreKey = 'swap' | 'bridge' | 'pools' | 'portfolio' | 'history' | 'lst' | 'gap' | 'search'
+
+/**
+ * Everything the site does, one card each, straight under the product. Most
+ * people come to swap; this is how they find the rest without reading the
+ * footer. Each card says what you get in a line and opens the part it names.
+ * Facts only: no rates, no promises.
+ */
+function Explore({ pools, gaps, onGo }: { pools: number; gaps: number; onGo: (k: ExploreKey) => void }) {
+  const cards: { k: ExploreKey | 'verify' | 'stats'; icon: string; title: string; body: string; cta: string; muted?: boolean }[] = [
+    { k: 'bridge', icon: '🌉', title: 'Bring money in', body: 'USDC from Noble, ATOM from the Cosmos Hub or USDC.inj from Injective, already swapped into another token when it lands.', cta: 'Bridge' },
+    { k: 'pools', icon: '💧', title: 'Provide liquidity', body: `${pools} pools with liquidity on Terra Swap and Astroport. Add both sides or zap in with one token, and see what each pool paid its providers.`, cta: 'Pools' },
+    { k: 'portfolio', icon: '🧾', title: 'Everything you hold', body: 'Every position on both sites, staked LP included, closed in one signature. Your history shows each quote beside what arrived.', cta: 'Portfolio' },
+    { k: 'lst', icon: '🥩', title: 'Liquid staking against the hubs', body: 'When redeeming ampLUNA or bLUNA at its hub pays more than selling in a pool, and by how much.', cta: 'See the rates' },
+    { k: 'gap', icon: '⚡', title: gaps ? `${gaps} pool${gaps === 1 ? '' : 's'} off the market` : 'Pools off the market', body: 'A pool that drifted from the market, with the round trip that closes the gap in one transaction.', cta: gaps ? 'Close one' : 'None right now', muted: !gaps },
+    { k: 'verify', icon: '✓', title: 'No owner, no admin, no cut', body: "Nobody can change Terra Swap's pools or take a cut. Check every contract from your own browser.", cta: 'Verify' },
+    { k: 'stats', icon: '📊', title: 'The numbers', body: 'Liquidity, what the pools paid their providers, what routing adds, and uptime, read from the chain.', cta: 'Stats' },
+    { k: 'search', icon: '⌕', title: 'Find anything', body: 'Any token to buy or sell, any pool, any part of the site, one search away. ⌘K from anywhere.', cta: 'Search' },
+  ]
+  const card: React.CSSProperties = {
+    display: 'grid', gridTemplateRows: 'auto 1fr auto', gap: 6, textAlign: 'left', padding: '12px 14px', borderRadius: 14,
+    background: 'rgba(17,23,41,0.72)', border: `1px solid ${C.divider}`, color: C.textSecondary, fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'none',
+  }
+  const inner = (c: (typeof cards)[number]) => (
+    <>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span aria-hidden style={{ fontSize: '1.05rem', width: 22, textAlign: 'center', color: C.goldLit }}>{c.icon}</span>
+        <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>{c.title}</b>
+      </span>
+      <span className='terra-explore-body' style={{ fontSize: TEXT.xs.size, lineHeight: 1.55, color: C.textMuted }}>{c.body}</span>
+      <span style={{ fontSize: TEXT.xs.size, fontWeight: 700, color: c.muted ? C.textWhisper : C.goldLit }}>{c.cta}{c.muted ? '' : ' →'}</span>
+    </>
+  )
+  return (
+    <section aria-labelledby='explore-title' style={{ marginTop: SPACE['4'] }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', columnGap: SPACE['2'], rowGap: 2, marginBottom: SPACE['2'] }}>
+        <h2 id='explore-title' style={{ fontFamily: TERRA_FONT, fontSize: TEXT.md.size, margin: 0, color: C.textPrimary }}>Beyond the swap</h2>
+        <span style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>every route runs through Terra Swap&apos;s and Astroport&apos;s pools, with no interface fee</span>
+      </div>
+      <div className='terra-explore' style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: SPACE['2'] }}>
+        {cards.map(c => (c.k === 'verify' || c.k === 'stats')
+          ? <Link key={c.k} href={`/${c.k}`} className='terra-explore-card' style={card}>{inner(c)}</Link>
+          : <button key={c.k} type='button' className='terra-explore-card' onClick={() => onGo(c.k as ExploreKey)} disabled={c.muted} style={{ ...card, cursor: c.muted ? 'default' : 'pointer' }}>{inner(c)}</button>)}
+      </div>
+    </section>
+  )
+}
+
+/** Positions and History are one place, Portfolio: what you hold now, and what you did. */
+function PortfolioSwitch({ view, onView }: { view: 'positions' | 'history'; onView: (v: 'positions' | 'history') => void }) {
+  return (
+    <div role='tablist' aria-label='Portfolio' style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['2'] }}>
+      {([['positions', 'Positions'], ['history', 'History']] as const).map(([k, text]) => (
+        <button key={k} type='button' role='tab' aria-selected={view === k} onClick={() => onView(k)}
+          style={{ ...ghostBtn, padding: '3px 12px', borderRadius: 999, color: view === k ? C.goldLit : C.textMuted, borderColor: view === k ? C.goldCore : C.divider }}>
+          {text}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function StatBand({ data, board }: { data: DexResponse; board: BoardResponse | null }) {
   // APM, because he would want to know: moves in the last hour of blocks (≈580 at 6.2 s), per minute.
   const apm = (() => { const h = data.height || 0; const n = (board?.recent ?? []).filter(e => h - e.height <= 580).length; return (n / 60).toFixed(n ? 2 : 1) })()
@@ -4253,13 +4324,29 @@ function SwapPageInner() {
     return () => window.removeEventListener('keydown', on)
   }, [])
 
-  // A shared link lands on the person it is about: ?who=terra1… opens the board on their row.
+  // A shared link lands where it points: ?tab=bridge opens that section, ?who=terra1… opens the board on their row.
+  const tabFromUrl = useRef(false)
   useEffect(() => {
     try {
-      const who = new URLSearchParams(window.location.search).get('who') || ''
+      const params = new URLSearchParams(window.location.search)
+      const linked = PARAM_TAB[params.get('tab') ?? '']
+      if (linked && !(LITE && linked === 'board')) setTab(linked)
+      const who = params.get('who') || ''
       if (!LITE && /^terra1[0-9a-z]{38,}$/.test(who)) { setSpotlight(who); setTab('board') }
     } catch { /* ssr */ }
+    tabFromUrl.current = true
   }, [])
+  // …and the address follows the section, once the one it asked for has been opened.
+  useEffect(() => {
+    if (!tabFromUrl.current) return
+    try {
+      const u = new URL(window.location.href)
+      const want = TAB_PARAM[tab]
+      if ((u.searchParams.get('tab') ?? '') === want) return
+      if (want) u.searchParams.set('tab', want); else u.searchParams.delete('tab')
+      window.history.replaceState(window.history.state, '', `${u.pathname}${u.search}${u.hash}`)
+    } catch { /* sandboxed */ }
+  }, [tab])
   useEffect(() => {
     if (!spotlight || tab !== 'board' || !board) return
     const el = document.getElementById(`row-${spotlight}`)
@@ -4390,24 +4477,32 @@ function SwapPageInner() {
     return [...own, ...venuePools.filter(p => !seen.has(p.contract_addr))]
   }, [data, venuePools])
   const [venueFilter, setVenueFilter] = useState<'all' | Venue>('all')
+  /** Find a pool by any of its tokens: "luna", "sol usdc". Every word has to match. */
+  const [poolQuery, setPoolQuery] = useState('')
 
   /* SOLID pairs first, then deepest first. That is the book people came for,
      and depth is the only thing that decides whether a trade is worth making.
      Empty pools sink to the bottom without being asked to. */
   const sortedPools = useMemo(() => {
     const solidFirst = (p: PoolView) => (!LITE && p.tokens.some(t => t.key === 'SOLID') ? 0 : 1)
+    const words = poolQuery.toLowerCase().split(/[\s/]+/).filter(Boolean)
+    const matches = (p: PoolView) => {
+      const hay = `${p.label} ${p.tokens.map(t => `${t.key} ${TOKEN_META[t.key]?.name ?? ''}`).join(' ')}`.toLowerCase()
+      return words.every(w => hay.includes(w))
+    }
     return allPools
-      .filter(p => venueFilter === 'all' || p.venue === venueFilter)
+      .filter(p => (venueFilter === 'all' || p.venue === venueFilter) && matches(p))
       .sort((a, b) => solidFirst(a) - solidFirst(b) || (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))
-  }, [allPools, venueFilter])
+  }, [allPools, venueFilter, poolQuery])
 
   /* Anyone can open a pool, so most of them are empty shells someone made to
-     see what happened. Showing fifteen of those buries the five that matter. */
+     see what happened. Showing fifteen of those buries the five that matter.
+     A search looks through all of them. */
   const DUST_USD = 10
   const [showDust, setShowDust] = useState(false)
   const visiblePools = useMemo(
-    () => (showDust ? sortedPools : sortedPools.filter(p => (p.tvlUsd ?? 0) >= DUST_USD)),
-    [sortedPools, showDust],
+    () => (showDust || poolQuery.trim() ? sortedPools : sortedPools.filter(p => (p.tvlUsd ?? 0) >= DUST_USD)),
+    [sortedPools, showDust, poolQuery],
   )
   const dustCount = sortedPools.length - sortedPools.filter(p => (p.tvlUsd ?? 0) >= DUST_USD).length
 
@@ -4450,6 +4545,74 @@ function SwapPageInner() {
     try { if (window.location.search) window.history.replaceState(null, '', '/') } catch { /* sandboxed */ }
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
+
+  // ── Finding things: the search palette, and the ways into each part of the site ──
+  const [palette, setPalette] = useState(false)
+  const [bridgeNet, setBridgeNet] = useState<'noble' | 'cosmoshub' | 'injective'>('noble')
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(p => !p) }
+    }
+    window.addEventListener('keydown', on)
+    return () => window.removeEventListener('keydown', on)
+  }, [])
+  const openTab = useCallback((t: Tab) => { setTab(t); window.scrollTo({ top: 0, behavior: 'smooth' }) }, [])
+  const openBridge = useCallback((net: 'noble' | 'cosmoshub' | 'injective') => { setBridgeNet(net); openTab('transfer') }, [openTab])
+  /** Open the Pools tab on something in it, clearing whatever would hide it. */
+  const openInPools = useCallback((elementId: string, dust = false) => {
+    setVenueFilter('all'); setPoolQuery(''); if (dust) setShowDust(true)
+    setTab('pools')
+    setTimeout(() => document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: elementId === 'lst' ? 'start' : 'center' }), 150)
+  }, [])
+  /** A swap with the pair filled in and the amount left to the person. */
+  const openSwap = useCallback((fromId: string, toId: string) => {
+    setLoopFor(null)
+    setPreset({ fromId, toId, amount: '', n: Date.now() })
+    openTab('swap')
+  }, [openTab])
+  const paletteItems = useMemo<PaletteItem[]>(() => {
+    const icon = (e: string) => <span>{e}</span>
+    const items: PaletteItem[] = [
+      { id: 'do-bridge-noble', group: 'Do', label: 'Bring USDC in from Noble', hint: 'arrives as USDC, or already swapped into another token', keywords: 'bridge deposit transfer ibc noble usdc move in', icon: icon('🌉'), run: () => openBridge('noble') },
+      { id: 'do-bridge-hub', group: 'Do', label: 'Bring ATOM in from the Cosmos Hub', hint: 'arrives as ATOM, or already swapped into another token', keywords: 'bridge deposit transfer ibc cosmos hub atom move in', icon: icon('⚛️'), run: () => openBridge('cosmoshub') },
+      { id: 'do-bridge-inj', group: 'Do', label: 'Bring USDC.inj in from Injective', hint: 'arrives as USDC.inj, or already swapped into another token', keywords: 'bridge deposit transfer ibc injective usdc.inj move in', icon: icon('🌊'), run: () => openBridge('injective') },
+      { id: 'do-lst', group: 'Do', label: 'Liquid staking against the hubs', hint: 'when redeeming ampLUNA or bLUNA at its hub beats selling in the pool', keywords: 'lst stake unstake redeem mint ampluna bluna eris backbone hub', icon: icon('🥩'), run: () => openInPools('lst') },
+      ...(arbs[0] ? [{ id: 'do-gap', group: 'Do', label: 'Close the biggest gap', hint: `${arbs[0].pool.label} is ${arbs[0].off.toFixed(1)}× off the market`, keywords: 'arbitrage arb drift gap off market', icon: icon('⚡'), run: () => takeArb(arbs[0]) }] : []),
+      { id: 'do-open-pool', group: 'Do', label: 'Open a pool', hint: "on Terra Swap's or Astroport's factory, one signature", keywords: 'create new pair pool list token factory', icon: icon('🏗️'), run: () => openTab('create') },
+      { id: 'do-keys', group: 'Do', label: 'Keyboard shortcuts', hint: '⌘K search · / amount · f flip the pair', keywords: 'keys hotkeys keyboard', icon: icon('⌨️'), run: () => setShortcuts(true) },
+      { id: 'go-swap', group: 'Go to', label: 'Swap', hint: "the best route through Terra Swap's and Astroport's pools", keywords: 'trade exchange buy sell convert', icon: icon('🔀'), run: () => openTab('swap') },
+      { id: 'go-pools', group: 'Go to', label: 'Pools', hint: `${allPools.length} pools on both sites: add, zap in, remove`, keywords: 'liquidity lp provide add remove zap fees', icon: icon('💧'), run: () => openTab('pools') },
+      { id: 'go-bridge', group: 'Go to', label: 'Bridge', hint: 'USDC from Noble, ATOM from the Cosmos Hub, USDC.inj from Injective, and back', keywords: 'transfer ibc deposit withdraw move chains', icon: icon('🌉'), run: () => openTab('transfer') },
+      { id: 'go-positions', group: 'Go to', label: 'Portfolio', hint: 'every position on both sites, staked LP included, and a way out of each', keywords: 'positions lp exit withdraw staked rewards claim holdings', icon: icon('🧾'), run: () => openTab('positions') },
+      { id: 'go-history', group: 'Go to', label: 'History', hint: 'your swaps, liquidity and transfers, each quote beside what arrived', keywords: 'transactions receipts activity past', icon: icon('🕘'), run: () => openTab('history') },
+      ...(!LITE ? [{ id: 'go-board', group: 'Go to', label: 'Board', hint: 'who was here first, and what they did', keywords: 'leaderboard points badges ranks', icon: icon('🏆'), run: () => openTab('board') }] : []),
+      { id: 'page-stats', group: 'Pages', label: 'Stats', hint: 'liquidity, fees paid to providers, liquid staking, routing and uptime', keywords: 'analytics numbers volume tvl uptime data', icon: icon('📊'), run: () => { window.location.href = '/stats' } },
+      { id: 'page-verify', group: 'Pages', label: 'Verify the contracts', hint: 'no owner, no admin, no fee: checked from your own browser', keywords: 'security audit renounced keys checksum trust safe', icon: icon('✓'), run: () => { window.location.href = '/verify' } },
+      { id: 'page-source', group: 'Pages', label: 'Source code', hint: 'MIT licensed; anyone can run their own copy', keywords: 'github open source code repository', icon: icon('⌥'), run: () => { window.open('https://github.com/solid-online/terra-swap', '_blank', 'noopener') } },
+    ]
+    const tokens = new Map<string, KnownToken>()
+    for (const p of routePoolsAll) for (const t of p.tokens) tokens.set(assetId(t.info), t)
+    const lunaId = 'uluna'
+    for (const t of Array.from(tokens.values())) {
+      const id = assetId(t.info)
+      const meta = TOKEN_META[t.key]
+      const words = `${t.key} ${meta?.name ?? ''} ${meta?.origin ?? ''} ${(meta?.tags ?? []).join(' ')}`
+      items.push({ id: `buy-${id}`, group: 'Tokens', label: `Buy ${t.label}`, hint: meta?.name ?? t.label, keywords: `${words} get swap into`, icon: <TokenIcon label={t.label} size={20} />, run: () => openSwap(id === lunaId ? NOBLE_USDC : lunaId, id) })
+      items.push({ id: `sell-${id}`, group: 'Tokens', label: `Sell ${t.label}`, hint: meta?.name ?? t.label, keywords: `${words} swap out of`, icon: <TokenIcon label={t.label} size={20} />, run: () => openSwap(id, id === NOBLE_USDC ? lunaId : NOBLE_USDC) })
+    }
+    // Deepest first, so a tie on the name goes to the pool worth trading in.
+    for (const p of allPools.filter(p => !p.empty && (p.tvlUsd ?? 0) >= 1).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))) {
+      items.push({
+        id: `pool-${p.contract_addr}`, group: 'Pools', label: `${p.label} pool`,
+        hint: `${VENUE_NAME[p.venue]}${p.tvlUsd != null ? ` · $${Math.round(p.tvlUsd).toLocaleString('en-US')} liquidity` : ''}`,
+        keywords: `${p.tokens.map(t => `${t.key} ${TOKEN_META[t.key]?.name ?? ''}`).join(' ')} liquidity add remove`,
+        icon: <PairIcons a={p.tokens[0].label} b={p.tokens[1].label} size={16} />,
+        run: () => openInPools(`pool-${p.contract_addr}`, (p.tvlUsd ?? 0) < DUST_USD),
+      })
+    }
+    return items
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allPools, routePoolsAll, arbs, openBridge, openInPools, openSwap, openTab, takeArb])
   const load = useCallback(async () => {
     setSyncing(true)
     try {
@@ -4526,17 +4689,15 @@ function SwapPageInner() {
     if (lastFifty.current === -1) { lastFifty.current = bucket; return }
     if (bucket > lastFifty.current) { lastFifty.current = bucket; setToast({ msg: `${bucket * 50} moves. Spawn more Overlords.` }) }
   }, [board?.totalEvents])
-  // Welcome back: how much moved while you were away. Once per visit.
+  // Welcome back: how much moved while you were away. Said quietly on the board strip, not in a toast over the product on arrival.
   const greeted = useRef(false)
+  const [awayMoves, setAwayMoves] = useState(0)
   useEffect(() => {
     if (greeted.current || !board?.live) return
     greeted.current = true
     try {
       const seen = Number(localStorage.getItem('terraswap_seen_moves') || '0')
-      if (seen > 0 && board.totalEvents > seen) {
-        const d = board.totalEvents - seen
-        setToast({ msg: `Welcome back. ${d} move${d === 1 ? '' : 's'} happened while you were gone.` })
-      }
+      if (seen > 0 && board.totalEvents > seen) setAwayMoves(board.totalEvents - seen)
       localStorage.setItem('terraswap_seen_moves', String(board.totalEvents))
     } catch { /* private mode */ }
   }, [board])
@@ -4548,12 +4709,13 @@ function SwapPageInner() {
     return s < 5 ? 'just now' : s < 60 ? `${s}s ago` : `${Math.round(s / 60)}m ago`
   })()
 
-  const tabBtn = (t: Tab, txt: string) => (
-    <button type='button' onClick={() => setTab(t)} style={{
-      ...ghostBtn, padding: '0.45rem 0.9rem',
-      color: tab === t ? C.goldLit : C.textMuted,
-      borderColor: tab === t ? C.goldCore : C.divider,
-      background: tab === t ? 'rgba(255,216,61,0.06)' : 'transparent',
+  /** A tab button. `on` covers a tab that owns more than one section (Pools opens a pool, Portfolio holds History). */
+  const tabBtn = (t: Tab, txt: React.ReactNode, on = tab === t) => (
+    <button type='button' onClick={() => setTab(t)} aria-current={on ? 'page' : undefined} style={{
+      ...ghostBtn, padding: '0.45rem 0.9rem', whiteSpace: 'nowrap',
+      color: on ? C.goldLit : C.textMuted,
+      borderColor: on ? C.goldCore : C.divider,
+      background: on ? 'rgba(255,216,61,0.06)' : 'transparent',
     }}>{txt}</button>
   )
 
@@ -4573,6 +4735,7 @@ function SwapPageInner() {
       {!LITE && mapOn && data?.live && <Minimap pools={data.pools} board={board} revealed={revealed} onJump={c => { setTab('pools'); setTimeout(() => document.getElementById(`pool-${c}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120) }} />}
       {ledgerOpen && <LedgerOverlay board={board} pools={data?.pools ?? []} onClose={() => setLedgerOpen(false)} />}
       {toast && <Toast msg={toast.msg} href={toast.href} onDone={clearToast} />}
+      {palette && <CommandPalette items={paletteItems} onClose={() => setPalette(false)} />}
       {/* Opaque Terra ground that sits ABOVE the Atrium cathedral backdrop
           (its layers cap at z-index 0), so this surface is pure retro Terra. */}
       <div style={{
@@ -4597,11 +4760,22 @@ function SwapPageInner() {
 
           {data?.live && (
             <>
-              <div className='terra-tabs' style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
-                {tabBtn('swap', 'Swap')}{tabBtn('pools', `Pools · ${allPools.length}`)}{tabBtn('positions', 'Positions')}{tabBtn('history', 'History')}{tabBtn('transfer', 'Transfer')}
-                {tabBtn('create', 'Open a pool')}{!LITE && tabBtn('board', `Board${board?.rows.length ? ` · ${board.rows.length}` : ''}`)}
-                {/* Terra Predict lives next door, same domain. Not part of Astroport mode. */}
-                {!LITE && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, marginLeft: 'auto', whiteSpace: 'nowrap' }}>Predict ↗</Link>}
+              {/* Five places, named for what people come to do. Opening a pool lives in Pools, History in Portfolio,
+                  and everything else, tokens and pools included, is one search away. */}
+              <div className='terra-tabs' style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'], alignItems: 'center' }}>
+                {tabBtn('swap', 'Swap')}
+                {tabBtn('pools', <>Pools<span className='terra-tab-count'> · {allPools.length}</span></>, tab === 'pools' || tab === 'create')}
+                {tabBtn('transfer', 'Bridge')}
+                {tabBtn('positions', 'Portfolio', tab === 'positions' || tab === 'history')}
+                {!LITE && tabBtn('board', <>Board{board?.rows.length ? <span className='terra-tab-count'> · {board.rows.length}</span> : null}</>)}
+                {/* Terra Predict lives next door, once it is live. A link to "not live yet" is a dead end. */}
+                {!LITE && isPredictLive() && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, whiteSpace: 'nowrap' }}>Predict ↗</Link>}
+                <button type='button' onClick={() => setPalette(true)} title='Search tokens, pools and everything this site does (⌘K)' aria-label='Search everything'
+                  className='terra-search-btn' style={{ ...ghostBtn, padding: '0.45rem 0.8rem', marginLeft: 'auto', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  <span aria-hidden style={{ color: C.goldLit }}>⌕</span>
+                  <span className='terra-search-label'>Search</span>
+                  <kbd className='terra-kbd-hint' style={{ fontFamily: 'inherit', fontSize: '0.62rem', color: C.textWhisper, border: `1px solid ${C.divider}`, borderRadius: 5, padding: '0 5px' }}>⌘K</kbd>
+                </button>
               </div>
               {tab === 'swap' && loopFor && <LoopPanel plan={loopFor} pools={routePoolsAll} onClose={() => setLoopFor(null)} onOneSided={oneSided} onDone={refresh} />}
               {tab === 'swap' && <SwapPanel pools={data.pools} venuePools={venuePools} crystal={crystal} feeBps={data.feeBps} poolFeeBps={data.poolFeeBps} onDone={refresh} arbs={arbs} preset={preset} onTakeArb={takeArb} />}
@@ -4610,8 +4784,15 @@ function SwapPageInner() {
                   ? <Empty title='No pools yet' body={LITE ? 'Could not read the pool list. Try again in a moment.' : 'Open the first one. One signature, gas only. Your name goes to the top of the board and everyone sees it was you.'} />
                   : <div style={{ display: 'grid', gap: SPACE['3'] }}>
                     {/* ampLUNA and bLUNA in the pools against their hubs; "swap" opens the trade in the Swap tab, which offers the hub when it is the better side. */}
-                    <LstBoard onTrade={(fromId, toId, amount) => { setPreset({ fromId, toId, amount, n: Date.now() }); setTab('swap'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
                     <div style={{ display: 'grid', gap: SPACE['2'] }}>
+                      <div style={{ display: 'flex', gap: SPACE['2'], flexWrap: 'wrap', alignItems: 'center' }}>
+                        <input value={poolQuery} onChange={e => setPoolQuery(e.target.value)} aria-label='Find a pool'
+                          placeholder='Find a pool: LUNA, SOLID USDC…' spellCheck={false} autoComplete='off'
+                          style={{ ...field, flex: '1 1 200px', minWidth: 0, padding: '0.45rem 0.75rem', fontSize: TEXT.sm.size }} />
+                        <button type='button' onClick={() => setTab('create')} style={{ ...ghostBtn, padding: '0.45rem 0.9rem', color: C.goldLit, borderColor: C.goldCore, whiteSpace: 'nowrap' }}>
+                          + Open a pool
+                        </button>
+                      </div>
                       <div style={{ display: 'flex', gap: SPACE['2'], flexWrap: 'wrap' }}>
                         {(['all', 'terraswap', 'astroport'] as const).map(v => (
                           <button key={v} type='button' onClick={() => { setVenueFilter(v); setShowDust(false) }}
@@ -4620,12 +4801,23 @@ function SwapPageInner() {
                           </button>
                         ))}
                       </div>
+                      {poolQuery.trim() && visiblePools.length === 0 && (
+                        <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6 }}>
+                          No pool here holds that. <button type='button' onClick={() => setTab('create')} style={{ background: 'transparent', border: 'none', color: C.goldLit, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit', padding: 0 }}>Open one</button>, it takes one signature.
+                        </div>
+                      )}
                       {venueFilter !== 'terraswap' && allPools.some(p => p.venue === 'astroport') && (
                         <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5 }}>
                           Astroport&apos;s pools are its own contracts, reached here directly: swaps, deposits and withdrawals go straight to them. Not affiliated with Astroport.
                         </div>
                       )}
                     </div>
+                    {visiblePools.length > 0 && !poolQuery.trim() && (
+                      <div id='lst' style={{ scrollMarginTop: 12 }}>
+                        {/* ampLUNA and bLUNA in the pools against their hubs; "swap" opens the trade in the Swap tab, which offers the hub when it is the better side. */}
+                        <LstBoard onTrade={(fromId, toId, amount) => { setPreset({ fromId, toId, amount, n: Date.now() }); openTab('swap') }} />
+                      </div>
+                    )}
                     {visiblePools.map(p => <div key={p.contract_addr} id={`pool-${p.contract_addr}`}><PoolRow p={p} routePools={routePoolsAll} onDone={refresh} onParty={setParty} act={board?.poolActivity?.[p.contract_addr]} height={data.height} firstHand={board?.firstHands?.[p.contract_addr]} crystal={crystal} badge={(() => {
                     const deepest = allPools.reduce((b, q) => ((q.tvlUsd ?? 0) > (b?.tvlUsd ?? 0) ? q : b), null as PoolView | null)
                     const counts = board?.poolActivity ?? {}
@@ -4639,9 +4831,10 @@ function SwapPageInner() {
                     )}
                     </div>
               )}
+              {(tab === 'positions' || tab === 'history') && <PortfolioSwitch view={tab} onView={setTab} />}
               {tab === 'positions' && <PositionsPanel onDone={refresh} flows={me ? board?.flows : undefined} />}
               {tab === 'history' && <HistoryPanel pools={allPools} />}
-              {tab === 'transfer' && <TransferPanel routePools={routePoolsAll} onDone={refresh} />}
+              {tab === 'transfer' && <TransferPanel key={bridgeNet} initialNet={bridgeNet} routePools={routePoolsAll} onDone={refresh} />}
               {tab === 'create' && <CreatePanel pools={allPools}marketPx={marketPx} onDone={refresh} onCreated={() => setTab('pools')} onParty={setParty} />}
               {tab === 'board' && <Leaderboard board={board} me={me} onGoSwap={() => setTab('swap')} height={data.height} crystal={crystal} spotlight={spotlight} />}
               <div style={{ marginTop: SPACE['3'] }} />
@@ -4670,7 +4863,7 @@ function SwapPageInner() {
                       {r.badges[0]?.emoji}<WalletName address={r.address} head={6} tail={4} /><span style={{ color: C.goldLit, fontVariantNumeric: 'tabular-nums' }}>{r.points}</span>
                     </span>
                   ))}
-                  <span style={{ marginLeft: 'auto', color: C.emberLit, fontWeight: 600 }}>The board →</span>
+                  <span style={{ marginLeft: 'auto', color: C.emberLit, fontWeight: 600, whiteSpace: 'nowrap' }}>{awayMoves > 0 ? `${awayMoves} new since your last visit · ` : ''}The board →</span>
                 </button>
               )}
             </>
@@ -4682,14 +4875,24 @@ function SwapPageInner() {
             <p style={{ color: C.textMuted, margin: `${SPACE['4']}px 0 0`, fontSize: TEXT.xs.size, lineHeight: 1.6 }}>
               An unofficial, open-source interface to Astroport&apos;s pool contracts on Terra. Not affiliated with Astroport.
               It adds no fee and holds nothing: every swap and deposit goes straight to the pool contract, and pool fees are whatever that contract charges.
-              Every Astroport token with real liquidity, pool creation, and a Positions tab that finds and exits LP anywhere on Terra Swap or Astroport, staked LP and old ASTRO included. The code is MIT and anyone can host their own copy.
+              Every Astroport token with real liquidity, pool creation, and a Portfolio tab that finds and exits LP anywhere on Terra Swap or Astroport, staked LP and old ASTRO included. The code is MIT and anyone can host their own copy.
             </p>
           )}
+          {data?.live && !LITE && tab === 'swap' && (
+            <Explore
+              pools={allPools.filter(p => !p.empty).length}
+              gaps={arbs.length}
+              onGo={k => {
+                if (k === 'gap') { if (arbs[0]) takeArb(arbs[0]); return }
+                if (k === 'lst') { openInPools('lst'); return }
+                if (k === 'search') { setPalette(true); return }
+                openTab(k === 'bridge' ? 'transfer' : k === 'portfolio' ? 'positions' : k === 'history' ? 'history' : k)
+              }}
+            />
+          )}
           {data?.live && !LITE && (
-            <p style={{ color: C.textMuted, margin: `${SPACE['4']}px 0 0`, fontSize: TEXT.xs.size, lineHeight: 1.6 }}>
-              A decentralized exchange on Terra. Swap LUNA, USDC, SOLID, CAPA, ROAR, PAXG and wBTC, open pools, add liquidity.
-              Pool fee {(data.poolFeeBps / 100).toFixed(1)}% to liquidity providers. No protocol fee.
-              Audited pool contracts, small amounts, a beta: trade what you are happy to lose.
+            <p style={{ color: C.textWhisper, margin: `${SPACE['3']}px 0 0`, fontSize: TEXT.xs.size, lineHeight: 1.6 }}>
+              A decentralized exchange on Terra, open source and experimental. Pools run Astroport&apos;s audited contract code; pool fee {(data.poolFeeBps / 100).toFixed(1)}% on Terra Swap&apos;s pools, all to liquidity providers, and no interface fee. Amounts are small: trade what you are happy to lose.
             </p>
           )}
           {data?.live && !LITE && <div style={{ marginTop: SPACE['5'] }}><StatBand data={data} board={board} /></div>}
@@ -4976,6 +5179,14 @@ function SwapPageInner() {
           .terra-tabs { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; margin-bottom: 8px !important; }
           .terra-tabs::-webkit-scrollbar { display: none; }
           .terra-tabs button { padding: 0.32rem 0.65rem !important; white-space: nowrap; }
+          /* Counts are for wide screens; on a phone the five names have to fit. Search stays pinned at the
+             right end of the row while the tabs scroll under it, so finding things never needs a swipe first. */
+          .terra-tab-count, .terra-search-label, .terra-kbd-hint { display: none; }
+          .terra-tabs .terra-search-btn { position: sticky; right: 0; flex: none; background: ${C.void} !important; box-shadow: -14px 0 12px ${C.void}; padding: 0.32rem 0.7rem !important; }
+          /* Beyond the swap: two columns of names on a phone, not eight paragraphs to scroll past. */
+          .terra-explore { grid-template-columns: 1fr 1fr !important; }
+          .terra-explore-body { display: none; }
+          .terra-explore-card { padding: 10px 12px !important; }
           .terra-card { padding: 0.75rem 0.8rem !important; }
           .terra-panel-head { margin-bottom: 4px !important; }
           .terra-panel-title { display: none; }   /* the tab already says Swap */
