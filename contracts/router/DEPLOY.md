@@ -12,6 +12,17 @@ so a route that touches Terra Swap's pools had to be signed as separate swaps,
 and separate swaps leave about the slippage setting of each intermediate token
 in the wallet.
 
+## Deployed
+
+| | |
+|---|---|
+| router | `terra1u2uh0jsl2u76j52e6egf09zslsns27qsmzxxzcsxdxymeax8883s9prc4l` |
+| code | 4028, sha256 `d4f36193c98a92dd455fda0e3b2a899071edda1c638d3dbc8149e0e9caf31ff3` |
+| admin | none |
+| factories | Terra Swap `terra1gx7n4…lp3xd`, Astroport `terra14x9fr…rer8r` |
+
+`./verify.sh terra1u2uh0jsl2u76j52e6egf09zslsns27qsmzxxzcsxdxymeax8883s9prc4l` checks all of it from a public endpoint.
+
 ## 1. Build (reproducible)
 
 ```bash

@@ -62,10 +62,11 @@ export const ASTRO_ROUTER = 'terra1j8hayvehh3yy02c2vtw5fdhz9f4drhtee8p5n5rguvg3n
 /**
  * Terra Swap's router (contracts/router): one transaction through pools on
  * both factories, each swap's whole return into the next, one minimum on what
- * arrives. No owner, no admin, no fee. Empty until it is on chain; until then
- * a route that touches Terra Swap's pools is signed as separate swaps.
+ * arrives. No owner, no admin, no fee. On chain since 2026-09-14 as code 4028;
+ * contracts/router/verify.sh checks it against the build. Set the variable to
+ * an empty string to sign such routes as separate swaps instead.
  */
-export const TERRA_SWAP_ROUTER = process.env.NEXT_PUBLIC_TERRA_SWAP_ROUTER || ''
+export const TERRA_SWAP_ROUTER = process.env.NEXT_PUBLIC_TERRA_SWAP_ROUTER ?? 'terra1u2uh0jsl2u76j52e6egf09zslsns27qsmzxxzcsxdxymeax8883s9prc4l'
 
 
 /** Pool commission, set on the factory. Shown to users; not enforced here. */
