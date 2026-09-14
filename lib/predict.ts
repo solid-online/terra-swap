@@ -8,6 +8,7 @@
  */
 
 import { NOBLE_USDC, queryPool, type AssetInfo } from 'lib/dex'
+import { lcdFetch } from 'lib/lcd'
 
 export const PREDICT_CONTRACT = process.env.NEXT_PUBLIC_PREDICT_CONTRACT || ''
 export const isPredictLive = () => PREDICT_CONTRACT.length > 0
@@ -20,14 +21,12 @@ export const USDC: AssetInfo = { native_token: { denom: NOBLE_USDC } }
 export const VOID_GRACE_SECONDS = 7 * 86_400
 export const MIN_LEAD_SECONDS = 600
 
-const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
-
 export async function smart<T>(contract: string, msg: object): Promise<T | null> {
   try {
     const q = typeof window !== 'undefined'
       ? btoa(JSON.stringify(msg))
       : Buffer.from(JSON.stringify(msg)).toString('base64')
-    const r = await fetch(`${LCD}/cosmwasm/wasm/v1/contract/${contract}/smart/${q}`, { cache: 'no-store' })
+    const r = await lcdFetch(`/cosmwasm/wasm/v1/contract/${contract}/smart/${q}`, { cache: 'no-store' })
     if (!r.ok) return null
     return (await r.json()).data as T
   } catch {

@@ -14,7 +14,7 @@ import { useWallet } from 'components/providers/WalletProvider'
 import { useTxRegionGate, RegionRestricted } from 'components/RegionGate'
 import { DEX_FACTORY, IS_ASTRO } from 'lib/dex'
 import {
-  astroExitMsgs, claimMsg, createPairMsg, exitMsgs, provideMsgs, routeMsgs, stakeMsg, unstakeMsg, zapMsgs,
+  astroExitMsgs, bondMsg, claimMsg, createPairMsg, exitMsgs, provideMsgs, queueUnbondMsg, routeMsgs, stakeMsg, unstakeMsg, withdrawUnbondedMsg, zapMsgs,
   type AstroExitArgs, type CreatePairArgs, type ExitArgs, type ProvideArgs, type ZapArgs,
 } from 'lib/msgs'
 import type { RoutePlan } from 'lib/route'
@@ -106,4 +106,22 @@ export const useAstroLegacyExit = () => {
     const what = a.xastroAmount !== '0' && a.convertAmount !== '0' ? 'unstake old xASTRO and convert' : a.xastroAmount !== '0' ? 'unstake old xASTRO' : 'convert ASTRO'
     return broadcast(astroExitMsgs(a), `${MEMO}: ${what}`)
   })
+}
+
+/** Mint a liquid staking token at its hub instead of buying it in a pool. */
+export const useLstBond = () => {
+  const broadcast = useDexBroadcast()
+  return useMutation(async (a: { hub: string; amount: string; sender: string }) => broadcast([bondMsg(a)], `${MEMO}: stake at hub`))
+}
+
+/** Queue a liquid staking token for redemption at its hub instead of selling it in a pool. */
+export const useLstUnbond = () => {
+  const broadcast = useDexBroadcast()
+  return useMutation(async (a: { token: string; hub: string; amount: string; sender: string }) => broadcast([queueUnbondMsg(a)], `${MEMO}: unstake at hub`))
+}
+
+/** Withdraw LUNA from finished redemptions at a hub. */
+export const useLstWithdraw = () => {
+  const broadcast = useDexBroadcast()
+  return useMutation(async (a: { hub: string; sender: string }) => broadcast([withdrawUnbondedMsg(a)], `${MEMO}: withdraw unstaked LUNA`))
 }

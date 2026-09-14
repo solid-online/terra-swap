@@ -6,9 +6,10 @@
  * checked each of them against real wallets' balances: nothing signed,
  * nothing sent.
  *
- * They all go to Astroport's own contracts: pairs on either factory, the
+ * They go to Astroport's own contracts (pairs on either factory, the
  * factories, the incentives contract, the router, the first ASTRO staking and
- * the ASTRO converter. None sends anything anywhere else, and none takes a fee.
+ * the ASTRO converter) and to the liquid staking hubs in lib/lst. None sends
+ * anything anywhere else, and none takes a fee.
  */
 
 import type { EncodeObject } from '@cosmjs/proto-signing'
@@ -235,3 +236,17 @@ export function astroExitMsgs(a: AstroExitArgs): EncodeObject[] {
   if (msgs.length === 0) throw new Error('Nothing to convert')
   return msgs
 }
+
+// ─── Liquid staking hubs ────────────────────────────────────────
+
+/** Mint a liquid staking token at its hub: LUNA in, the token out at the hub's exchange rate (lib/lst). */
+export const bondMsg = (a: { hub: string; amount: string; sender: string }): EncodeObject =>
+  exec(a.sender, a.hub, { bond: {} }, [{ denom: 'uluna', amount: a.amount }])
+
+/** Queue a liquid staking token for redemption at its hub. The LUNA is withdrawn after unbonding with withdrawUnbondedMsg. */
+export const queueUnbondMsg = (a: { token: string; hub: string; amount: string; sender: string }): EncodeObject =>
+  exec(a.sender, a.token, { send: { contract: a.hub, amount: a.amount, msg: b64({ queue_unbond: {} }) } })
+
+/** Collect every finished redemption this wallet has at a hub. */
+export const withdrawUnbondedMsg = (a: { hub: string; sender: string }): EncodeObject =>
+  exec(a.sender, a.hub, { withdraw_unbonded: {} })

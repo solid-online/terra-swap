@@ -15,9 +15,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kv as vercelKv } from '@vercel/kv'
 import { isDexLive, queryPairs, queryPairsOf, knownPairs, assetId, tokenFor, AWAY_VENUE, VENUE_FACTORY, type AssetInfo } from 'lib/dex'
+import { lcdFetch } from 'lib/lcd'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
-const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
 const UA = 'Mozilla/5.0 atrium-dex-prices'
 const CACHE_MS = 60_000
 /** Chart shows the most recent trades only, so a skewed opening print on a
@@ -51,10 +51,10 @@ const memCache = new Map<string, { at: number; body: PricesResponse }>()
 /** All wasm swap events on this pair, normalised to quote-per-base, oldest→newest. */
 async function scanPrices(pair: string, base: AssetInfo, quote: AssetInfo): Promise<{ points: PricePoint[]; volumeQuote: number; tape: TapeRow[] }> {
   const q = encodeURIComponent(`wasm._contract_address='${pair}'`)
-  const url = `${LCD}/cosmos/tx/v1beta1/txs?query=${q}&order_by=ORDER_BY_DESC&pagination.limit=100`
+  const path = `/cosmos/tx/v1beta1/txs?query=${q}&order_by=ORDER_BY_DESC&pagination.limit=100`
   let rs: TxResp[]
   try {
-    const r = await fetch(url, { headers: { 'User-Agent': UA, accept: 'application/json' }, signal: AbortSignal.timeout(15000) })
+    const r = await lcdFetch(path, { headers: { 'User-Agent': UA, accept: 'application/json' }, kind: 'txs', timeoutMs: 15000 })
     if (!r.ok) return { points: [], volumeQuote: 0, tape: [] }
     rs = (await r.json())?.tx_responses ?? []
   } catch { return { points: [], volumeQuote: 0, tape: [] } }

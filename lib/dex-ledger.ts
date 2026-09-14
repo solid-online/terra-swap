@@ -15,9 +15,9 @@
 import { kv as vercelKv } from '@vercel/kv'
 import { isCrystalHolder } from 'lib/holders'
 import { DEX_FACTORY } from 'lib/dex'
+import { lcdFetch } from 'lib/lcd'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
-const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
 const UA = 'Mozilla/5.0 terra-swap-ledger'
 
 export type DexAction = 'create_pair' | 'provide_liquidity' | 'swap' | 'withdraw_liquidity'
@@ -231,10 +231,10 @@ interface TxBody { body: { messages: { sender?: string; contract?: string; msg?:
  *  history for a long time, and the merge makes replays free. */
 export async function scanContract(contract: string): Promise<DexEvent[]> {
   const q = encodeURIComponent(`wasm._contract_address='${contract}'`)
-  const url = `${LCD}/cosmos/tx/v1beta1/txs?query=${q}&order_by=ORDER_BY_DESC&pagination.limit=100`
+  const path = `/cosmos/tx/v1beta1/txs?query=${q}&order_by=ORDER_BY_DESC&pagination.limit=100`
   let j: { txs?: TxBody[]; tx_responses?: TxResponse[] }
   try {
-    const r = await fetch(url, { headers: { 'User-Agent': UA, accept: 'application/json' }, signal: AbortSignal.timeout(15000) })
+    const r = await lcdFetch(path, { headers: { 'User-Agent': UA, accept: 'application/json' }, kind: 'txs', timeoutMs: 15000 })
     if (!r.ok) return []
     j = await r.json()
   } catch { return [] }

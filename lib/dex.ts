@@ -10,6 +10,8 @@
  * Without a factory the page renders "not live yet".
  */
 
+import { lcdFetch } from 'lib/lcd'
+
 export const DEX_FACTORY = process.env.NEXT_PUBLIC_DEX_FACTORY || ''
 export const isDexLive = () => DEX_FACTORY.length > 0
 
@@ -58,7 +60,6 @@ export const ASTRO_CONVERTER = 'terra1jyu4nct8ake3k8y8g42n8dvc9umtl5cktmtcy6rfdy
  */
 export const ASTRO_ROUTER = 'terra1j8hayvehh3yy02c2vtw5fdhz9f4drhtee8p5n5rguvg3nyd6m83qd2y90a'
 
-const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
 
 /** Pool commission, set on the factory. Shown to users; not enforced here. */
 export const POOL_FEE_BPS = 30
@@ -231,7 +232,7 @@ export async function resolveToken(info: AssetInfo): Promise<KnownToken> {
     if (id.startsWith('factory/')) label = id.split('/').pop() ?? label
     else if (id.startsWith('ibc/')) {
       try {
-        const r = await fetch(`${LCD}/ibc/apps/transfer/v1/denom_traces/${id.slice(4)}`, { signal: AbortSignal.timeout(8000) })
+        const r = await lcdFetch(`/ibc/apps/transfer/v1/denom_traces/${id.slice(4)}`, { timeoutMs: 8000 })
         const trace = r.ok ? (await r.json())?.denom_trace : null
         const base: string = trace?.base_denom ?? ''
         const name = base.includes('/') ? base.split('/').pop() ?? '' : base.replace(/^u/, '')
@@ -278,9 +279,9 @@ export async function smart<T>(contract: string, msg: object): Promise<T | null>
     const q = typeof window !== 'undefined'
       ? btoa(JSON.stringify(msg))
       : Buffer.from(JSON.stringify(msg)).toString('base64')
-    const r = await fetch(`${LCD}/cosmwasm/wasm/v1/contract/${contract}/smart/${q}`, {
+    const r = await lcdFetch(`/cosmwasm/wasm/v1/contract/${contract}/smart/${q}`, {
       headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(8000),
+      timeoutMs: 8000,
     })
     if (!r.ok) return null
     return ((await r.json())?.data ?? null) as T | null
@@ -396,8 +397,8 @@ export function priceLimit(pairType: string, expected: bigint, commission: bigin
 
 export async function queryNativeBalance(addr: string, denom: string): Promise<string> {
   try {
-    const r = await fetch(`${LCD}/cosmos/bank/v1beta1/balances/${addr}/by_denom?denom=${encodeURIComponent(denom)}`, {
-      signal: AbortSignal.timeout(8000),
+    const r = await lcdFetch(`/cosmos/bank/v1beta1/balances/${addr}/by_denom?denom=${encodeURIComponent(denom)}`, {
+      timeoutMs: 8000,
     })
     if (!r.ok) return '0'
     return (await r.json())?.balance?.amount ?? '0'

@@ -34,7 +34,8 @@ import { quoteBest, executionLegs, planRoute, routeText, reachable, quoteLoop, p
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
-import { useRouteSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap } from 'components/transactions/useDex'
+import { useRouteSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap, useLstBond, useLstUnbond, useLstWithdraw } from 'components/transactions/useDex'
+import { hubForToken, hubInfo, type HubInfo } from 'lib/lst'
 import { humanizeTxError } from 'lib/errors'
 
 type Tab = 'swap' | 'pools' | 'positions' | 'create' | 'board'
@@ -1408,6 +1409,8 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
         </div>
       )}
 
+      {from && to && <HubAlternative from={from} to={to} micro={micro} swapOut={plan?.expectedOut ?? null} blocked={insufficient} onDone={onDone} />}
+
       <div style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], marginBottom: SPACE['3'], fontSize: TEXT.xs.size, color: C.textMuted }}>
         <span>Slippage</span>
         {['0.5', '1', '3'].map(s => (
@@ -1481,6 +1484,71 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
  * LP staked in Astroport's incentives contract included, with the ways out.
  * Built so nobody has to open Astroport's app to find or leave a position.
  */
+/**
+ * A liquid staking token's hub can beat the pool: redeeming there pays the full
+ * exchange rate after unbonding, and minting there can cost less than buying.
+ * When it does, say by how much and offer it next to the swap. See lib/lst.
+ */
+function HubAlternative({ from, to, micro, swapOut, blocked, onDone }: {
+  from: KnownToken; to: KnownToken; micro: string | null; swapOut: string | null; blocked: boolean; onDone: () => void
+}) {
+  const me = useMyAddress()
+  const bond = useLstBond()
+  const unbond = useLstUnbond()
+  const fromId = assetId(from.info), toId = assetId(to.info)
+  const minting = fromId === 'uluna'
+  const hub = minting ? hubForToken(toId) : toId === 'uluna' ? hubForToken(fromId) : null
+  const [info, setInfo] = useState<HubInfo | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    setInfo(null); setErr(null); setDone(null)
+    if (hub) hubInfo(hub).then(v => { if (alive) setInfo(v) }).catch(() => {})
+    return () => { alive = false }
+  }, [hub])
+  if (!hub || !info || !micro || micro === '0') return null
+  // LUNA, ampLUNA and bLUNA all have 6 decimals, so the amounts compare directly.
+  const hubOut = Math.floor(minting ? Number(micro) / info.rate : Number(micro) * info.rate)
+  const swap = Number(swapOut ?? 0)
+  const edge = swap > 0 ? (hubOut / swap - 1) * 100 : null
+  // Worth a line only when the hub pays noticeably more than the swap, or there is no swap at all.
+  if (edge !== null && edge < 0.1) return null
+  const out = fromMicro(String(hubOut), 6, 4)
+  const days = `${Math.round(info.unbondDays)} to ${Math.round(info.unbondDays + info.epochDays)} days`
+  const busy = bond.isLoading || unbond.isLoading
+  const go = async () => {
+    if (!me || blocked || busy) return
+    setErr(null); setDone(null)
+    try {
+      if (minting) {
+        await bond.mutateAsync({ hub: hub.hub, amount: micro, sender: me })
+        setDone(`Staked at ${hub.provider}. The ${hub.key} is in your wallet.`)
+      } else {
+        await unbond.mutateAsync({ token: hub.token, hub: hub.hub, amount: micro, sender: me })
+        setDone(`Queued at ${hub.provider}. Withdraw the LUNA from Positions when it is ready, in about ${days}.`)
+      }
+      onDone()
+    } catch (e) { setErr(humanizeTxError(e)) }
+  }
+  return (
+    <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, borderRadius: 10, marginBottom: SPACE['3'], background: C.surface, border: `1px solid ${C.dividerWarm}`, fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6 }}>
+      {minting
+        ? <><b style={{ color: C.textPrimary }}>Or stake at {hub.provider}:</b> {out} {hub.key} straight from its hub{edge !== null && <>, <b style={{ color: C.success }}>{edge.toFixed(2)}% more</b> than this swap</>}. Instant, at the hub&apos;s exchange rate.</>
+        : <><b style={{ color: C.textPrimary }}>Or unstake at {hub.provider}:</b> about {out} LUNA{edge !== null && <>, <b style={{ color: C.success }}>{edge.toFixed(2)}% more</b> than selling now</>}, ready in about {days}. You withdraw it from Positions.</>}
+      {err && <div style={{ color: C.alert, marginTop: 4 }}>{err}</div>}
+      {done && <div style={{ color: C.success, marginTop: 4 }}>✓ {done}</div>}
+      {me && (
+        <div style={{ marginTop: 6 }}>
+          <button type='button' style={{ ...ghostBtn, padding: '3px 10px', opacity: blocked || busy ? 0.5 : 1 }} disabled={blocked || busy} onClick={go}>
+            {busy ? 'Confirm in wallet…' : minting ? `Stake at ${hub.provider} instead` : `Unstake at ${hub.provider} instead`}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PositionsPanel({ onDone }: { onDone: () => void }) {
   const me = useMyAddress()
   const exit = useExitPosition()
@@ -1488,6 +1556,8 @@ function PositionsPanel({ onDone }: { onDone: () => void }) {
   const claim = useClaimRewards()
   const stake = useStakeLp()
   const astroExit = useAstroLegacyExit()
+  const withdrawLst = useLstWithdraw()
+  const day = (s: number | null) => (s ? new Date(s * 1000).toISOString().slice(0, 10) : 'soon')
   const [data, setData] = useState<PositionsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [reload, setReload] = useState(0)
@@ -1541,7 +1611,7 @@ function PositionsPanel({ onDone }: { onDone: () => void }) {
         Every pool position this wallet holds on Terra Swap and Astroport, including LP staked in Astroport&apos;s incentives contract, and any old ASTRO. Withdrawing takes one signature: it unstakes what it needs and sends both tokens to your wallet.
       </p>
       {loading && !data && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Reading your positions from the chain…</div>}
-      {data && positions.length === 0 && !(data.astro && (data.astro.xastro !== '0' || data.astro.astroCw20 !== '0')) && <div style={{ fontSize: TEXT.sm.size, color: C.textMuted }}>No pool positions found for this wallet.</div>}
+      {data && positions.length === 0 && !(data.astro && (data.astro.xastro !== '0' || data.astro.astroCw20 !== '0')) && !(data.unstaking?.length) && <div style={{ fontSize: TEXT.sm.size, color: C.textMuted }}>No pool positions found for this wallet.</div>}
       {incentives && claimable.length > 0 && (
         <button type='button' style={{ ...primaryBtn, marginBottom: SPACE['3'], opacity: busy ? 0.5 : 1 }} disabled={!!busy}
           onClick={() => run('claim', () => claim.mutateAsync({ incentives, lpTokens: claimable.map(p => p.pool.liquidity_token), sender: me }), 'Rewards claimed to your wallet.')}>
@@ -1578,6 +1648,33 @@ function PositionsPanel({ onDone }: { onDone: () => void }) {
           </div>
         )
       })()}
+      {(data?.unstaking ?? []).length > 0 && (
+        <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${C.dividerWarm}`, display: 'grid', gap: 2, marginBottom: SPACE['3'] }}>
+          <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>Unstaking at liquid staking hubs</b>
+          {(data?.unstaking ?? []).map(u => (
+            <div key={u.hub} style={{ display: 'grid', gap: 2, marginTop: 4 }}>
+              {u.requests.map(r => (
+                <div key={`${u.hub}:${r.batch}`} style={rowStyle}>
+                  <span>{u.key} at {u.provider}</span>
+                  <span style={{ color: r.status === 'ready' ? C.success : C.textSecondary }}>
+                    about {fromMicro(r.lunaMicro, 6)} LUNA · {r.status === 'ready'
+                      ? 'ready to withdraw'
+                      : r.status === 'queued'
+                        ? `in the next batch, ready about ${day(r.readyAt)}`
+                        : r.readyAt && r.readyAt * 1000 < Date.now() ? `settling at ${u.provider}` : `ready about ${day(r.readyAt)}`}
+                  </span>
+                </div>
+              ))}
+              {BigInt(u.readyMicro) > BigInt(0) && (
+                <button type='button' disabled={!!busy} style={{ ...primaryBtn, marginTop: 4, opacity: busy && busy !== `lst:${u.hub}` ? 0.5 : 1 }}
+                  onClick={() => run(`lst:${u.hub}`, () => withdrawLst.mutateAsync({ hub: u.hub, sender: me }), `Withdrawn from ${u.provider}. The LUNA is in your wallet.`)}>
+                  {busy === `lst:${u.hub}` ? 'Confirm in wallet…' : `Withdraw ${fromMicro(u.readyMicro, 6)} LUNA from ${u.provider}`}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display: 'grid', gap: SPACE['2'] }}>
         {positions.map(pos => {
           const { pool } = pos

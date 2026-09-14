@@ -9,6 +9,7 @@ import { EndpointOptions, SignerOptions } from '@cosmos-kit/core'
 import { CHAIN_CONFIGS } from 'constants/chainsConfig'
 import { GasPrice } from '@cosmjs/stargate'
 import { Chain } from '@chain-registry/types'
+import { REST_ENDPOINTS, RPC_ENDPOINTS } from 'lib/lcd'
 
 const chains = [terra2Chain]
 const assets = [terra2Assets]
@@ -27,10 +28,11 @@ const endpointOptionsStatic: { endpoints: EndpointOptions['endpoints']; isLazy: 
   endpoints: Object.values(CHAIN_CONFIGS).reduce<EndpointOptions['endpoints']>(
     (endpoints, config) => ({
       ...endpoints,
-      [config.registryChainName]: {
-        rpc: [config.rpc],
-        rest: [config.lcd],
-      },
+      // Terra mainnet gets every endpoint in lib/lcd, and the wallet kit
+      // tests them at connect so one endpoint being down does not stop signing.
+      [config.registryChainName]: config.registryChainName === 'terra2'
+        ? { rpc: RPC_ENDPOINTS, rest: REST_ENDPOINTS, isLazy: false }
+        : { rpc: [config.rpc], rest: [config.lcd] },
     }),
     {},
   ),

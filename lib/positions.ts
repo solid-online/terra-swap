@@ -17,8 +17,8 @@ import {
   resolveToken, smart, toPoolView,
   type Asset, type KnownToken, type PairInfo, type PoolView, type Venue,
 } from 'lib/dex'
+import { lcdFetch } from 'lib/lcd'
 
-const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
 const UA = { 'User-Agent': 'Mozilla/5.0 terra-pools-positions', accept: 'application/json' }
 
 export interface Reward { token: KnownToken; amount: string }
@@ -46,7 +46,7 @@ async function historyTouches(address: string): Promise<{ pairs: Set<string>; lp
   for (let page = 1; page <= 3; page++) {
     let rs: TxEvents[] = []
     try {
-      const r = await fetch(`${LCD}/cosmos/tx/v1beta1/txs?query=${q}&order_by=ORDER_BY_DESC&limit=100&page=${page}`, { headers: UA, signal: AbortSignal.timeout(15000) })
+      const r = await lcdFetch(`/cosmos/tx/v1beta1/txs?query=${q}&order_by=ORDER_BY_DESC&limit=100&page=${page}`, { headers: UA, kind: 'txs', timeoutMs: 15000 })
       rs = r.ok ? ((await r.json())?.tx_responses ?? []) : []
     } catch { rs = [] }
     for (const tx of rs) {

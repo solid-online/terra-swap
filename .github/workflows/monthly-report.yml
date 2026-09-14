@@ -1,0 +1,54 @@
+# On the 1st of each month, writes last month's maintenance report to
+# reports/YYYY-MM.md on the `status` branch and to the run summary.
+# See scripts/monthly-report.mjs. Set the repository variable
+# MAINTENANCE_ADDRESS once there is one, and payments are listed too.
+name: monthly-report
+
+on:
+  schedule:
+    - cron: '30 0 1 * *'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Month to report on, YYYY-MM (default: last month)'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: status-branch
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          ref: status
+          path: status-data
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build the report
+        env:
+          MONTH: ${{ inputs.month }}
+          MAINTENANCE_ADDRESS: ${{ vars.MAINTENANCE_ADDRESS }}
+        run: node scripts/monthly-report.mjs status-data "$MONTH" "$MAINTENANCE_ADDRESS" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish it on the status branch
+        working-directory: status-data
+        run: |
+          git config user.name "terra-swap-status"
+          git config user.email "terra-swap-status@users.noreply.github.com"
+          git add reports
+          git commit -q -m "report $(ls -t reports | head -1)" || exit 0
+          for i in 1 2 3; do
+            git pull -q --rebase origin status && git push -q origin HEAD:status && exit 0
+            sleep 5
+          done
+          exit 1

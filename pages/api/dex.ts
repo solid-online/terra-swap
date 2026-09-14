@@ -13,6 +13,7 @@ import {
   isDexLive, queryPairs, listedPairs, queryPool, toPoolView, refineSpot, annotateTvl,
   POOL_FEE_BPS, DEX_MODE, type PoolView,
 } from 'lib/dex'
+import { lcdFetch } from 'lib/lcd'
 
 export interface DexResponse {
   live: boolean
@@ -31,13 +32,12 @@ export interface DexResponse {
   seoul: { temp: number; code: number } | null
 }
 
-/** One cheap call so the page can show a live block height, Terra Station style. */
-const LCD = process.env.NEXT_PUBLIC_LCD || 'https://terra-lcd.publicnode.com'
 const UA = { 'User-Agent': 'Mozilla/5.0 atrium-dex', accept: 'application/json' }
 
+/** One cheap call so the page can show a live block height, Terra Station style. */
 async function latestBlock(): Promise<{ height: number; chainId: string; proposer: string }> {
   try {
-    const r = await fetch(`${LCD}/cosmos/base/tendermint/v1beta1/blocks/latest`, { headers: UA, signal: AbortSignal.timeout(6000) })
+    const r = await lcdFetch('/cosmos/base/tendermint/v1beta1/blocks/latest', { headers: UA, timeoutMs: 6000 })
     if (!r.ok) return { height: 0, chainId: '', proposer: '' }
     const h = (await r.json())?.block?.header
     const proposer = await Promise.race([monikerFor(String(h?.proposer_address ?? '')), new Promise<string>(r => setTimeout(() => r(''), 1500))])
@@ -56,7 +56,7 @@ async function monikerFor(proposerB64: string): Promise<string> {
   if (!proposerB64) return ''
   try {
     if (!valMap || Date.now() - valMap.at > 600_000) {
-      const r = await fetch(`${LCD}/cosmos/staking/v1beta1/validators?status=BOND_STATUS_BONDED&pagination.limit=300`, { headers: UA, signal: AbortSignal.timeout(8000) })
+      const r = await lcdFetch('/cosmos/staking/v1beta1/validators?status=BOND_STATUS_BONDED&pagination.limit=300', { headers: UA, timeoutMs: 8000 })
       if (!r.ok) return ''
       const vs = ((await r.json())?.validators ?? []) as { consensus_pubkey?: { key?: string }; description?: { moniker?: string } }[]
       const map: Record<string, string> = {}

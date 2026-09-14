@@ -1,0 +1,46 @@
+# Checks swap.terraluna.app, pools.terraluna.app and atrium.markets every
+# 10 minutes from GitHub's machines and appends the result to
+# uptime/YYYY-MM.jsonl on the `status` branch. See scripts/uptime-check.mjs.
+name: uptime
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: status-branch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+      - uses: actions/checkout@v4
+        with:
+          ref: status
+          path: status-data
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check the sites
+        run: node scripts/uptime-check.mjs status-data
+      - name: Write it down
+        working-directory: status-data
+        run: |
+          git config user.name "terra-swap-status"
+          git config user.email "terra-swap-status@users.noreply.github.com"
+          git add uptime
+          git commit -q -m "uptime $(date -u +%Y-%m-%dT%H:%MZ)" || exit 0
+          for i in 1 2 3; do
+            git pull -q --rebase origin status && git push -q origin HEAD:status && exit 0
+            sleep 5
+          done
+          exit 1

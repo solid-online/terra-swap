@@ -12,6 +12,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { fromBech32 } from '@cosmjs/encoding'
 import { VENUE_INCENTIVES } from 'lib/dex'
 import { readAstroLegacy, readPositions, type AstroLegacy, type Position } from 'lib/positions'
+import { readUnstaking, type Unstaking } from 'lib/lst'
 
 export interface PositionsResponse {
   address: string
@@ -20,6 +21,8 @@ export interface PositionsResponse {
   incentives: string | null
   /** old xASTRO and ASTRO.cw20 still in the wallet */
   astro: AstroLegacy | null
+  /** liquid staking tokens queued for redemption at their hubs */
+  unstaking: Unstaking[]
   at: number
 }
 
@@ -60,8 +63,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       return hit ? res.status(200).json(hit) : res.status(503).json({ error: 'busy, try again in a moment' })
     }
     windowBuilds++
-    build = Promise.all([readPositions(address), readAstroLegacy(address).catch(() => null)])
-      .then(([positions, astro]) => ({ address, positions, incentives: VENUE_INCENTIVES.astroport, astro, at: Date.now() }))
+    build = Promise.all([readPositions(address), readAstroLegacy(address).catch(() => null), readUnstaking(address).catch(() => [])])
+      .then(([positions, astro, unstaking]) => ({ address, positions, incentives: VENUE_INCENTIVES.astroport, astro, unstaking, at: Date.now() }))
       .finally(() => { inflight.delete(address) })
     inflight.set(address, build)
   }
