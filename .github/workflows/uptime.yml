@@ -1,4 +1,4 @@
-# Checks swap.terraluna.app, pools.terraluna.app and atrium.markets every
+# Checks swap.terraluna.app (Terra Swap's and Astroport's pools) and atrium.markets every
 # 10 minutes from GitHub's machines and appends the result to
 # uptime/YYYY-MM.jsonl on the `status` branch. See scripts/uptime-check.mjs.
 name: uptime

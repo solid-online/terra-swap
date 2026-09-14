@@ -25,13 +25,8 @@ const TARGETS = [
     checks: [
       { url: 'https://swap.terraluna.app/', expect: (r) => r.status === 200 },
       { url: 'https://swap.terraluna.app/api/dex', json: true, expect: (r, j) => r.status === 200 && j?.live === true && j?.pools?.length > 0 },
-    ],
-  },
-  {
-    site: 'pools.terraluna.app',
-    checks: [
-      { url: 'https://pools.terraluna.app/', expect: (r) => r.status === 200 },
-      { url: 'https://pools.terraluna.app/api/dex', json: true, expect: (r, j) => r.status === 200 && j?.live === true && j?.pools?.length > 0 },
+      // Astroport's pools, listed on the same site since pools.terraluna.app was folded into it (2026-09-14).
+      { url: 'https://swap.terraluna.app/api/dex-venue', json: true, expect: (r, j) => r.status === 200 && j?.pools?.length > 0 },
     ],
   },
   {

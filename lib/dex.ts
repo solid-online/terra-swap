@@ -59,6 +59,13 @@ export const ASTRO_CONVERTER = 'terra1jyu4nct8ake3k8y8g42n8dvc9umtl5cktmtcy6rfdy
  * 2026-09-13), so it trades exactly the pool a quote used.
  */
 export const ASTRO_ROUTER = 'terra1j8hayvehh3yy02c2vtw5fdhz9f4drhtee8p5n5rguvg3nyd6m83qd2y90a'
+/**
+ * Terra Swap's router (contracts/router): one transaction through pools on
+ * both factories, each swap's whole return into the next, one minimum on what
+ * arrives. No owner, no admin, no fee. Empty until it is on chain; until then
+ * a route that touches Terra Swap's pools is signed as separate swaps.
+ */
+export const TERRA_SWAP_ROUTER = process.env.NEXT_PUBLIC_TERRA_SWAP_ROUTER || ''
 
 
 /** Pool commission, set on the factory. Shown to users; not enforced here. */

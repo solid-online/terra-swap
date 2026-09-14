@@ -107,7 +107,8 @@ export const useZap = () => {
 
 export const useCreatePair = () => {
   const broadcast = useDexBroadcast()
-  return useMutation(async (a: CreatePairArgs) => broadcast([createPairMsg(DEX_FACTORY, a)], `${MEMO}: create pool`))
+  // Either site's factory: the one this build fronts unless the panel asks for the other.
+  return useMutation(async (a: CreatePairArgs & { factory?: string }) => broadcast([createPairMsg(a.factory ?? DEX_FACTORY, a)], `${MEMO}: create pool`))
 }
 
 export const useAstroLegacyExit = () => {

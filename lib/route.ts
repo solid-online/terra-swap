@@ -20,13 +20,15 @@
  *
  * A route made only of Astroport's pools goes through Astroport's router, which
  * carries each swap's full return into the next and checks one minimum at the
- * end. A route through Terra Swap's pools, which that router cannot reach, is
- * signed as consecutive swaps in one transaction, each with its own price
- * limit. Either way, if anything falls short the whole transaction reverts.
+ * end. A route through Terra Swap's pools, which that router cannot reach,
+ * goes through Terra Swap's own router (contracts/router) the same way, once
+ * TERRA_SWAP_ROUTER is set; until then it is signed as consecutive swaps in one
+ * transaction, each with its own price limit. Either way, if anything falls
+ * short the whole transaction reverts.
  */
 
 import {
-  assetId, priceLimit, sameAsset, simulateSwap, toMicro, VENUE_NAME,
+  assetId, priceLimit, sameAsset, simulateSwap, toMicro, TERRA_SWAP_ROUTER, VENUE_NAME,
   type KnownToken, type PoolView, type Venue,
 } from 'lib/dex'
 
@@ -63,6 +65,8 @@ export interface Quote {
 /** What actually gets signed for one leg. */
 export interface ExecLeg {
   pair: string
+  /** which site's factory owns the pair; Terra Swap's router looks the pair up there */
+  venue: Venue
   offerInfo: KnownToken['info']
   askInfo: KnownToken['info']
   offerAmount: string
@@ -289,7 +293,7 @@ export function executionLegs(q: Quote, slip: number): ExecLeg[] {
     const commission: bigint = (BigInt(l.commissionMicro) * offer) / BigInt(l.offerMicro)
     const { limitReturn, floor } = priceLimit(l.pool.pairType, expected, commission, slip)
     out.push({
-      pair: l.pool.contract_addr, offerInfo: l.offer.info, askInfo: l.ask.info, offerAmount: offer.toString(),
+      pair: l.pool.contract_addr, venue: l.pool.venue, offerInfo: l.offer.info, askInfo: l.ask.info, offerAmount: offer.toString(),
       expectedReturn: expected.toString(), limitReturn: limitReturn.toString(), minReturn: floor.toString(),
     })
     prev = floor
@@ -308,8 +312,11 @@ export function worstCaseOut(q: Quote, slip: number): string {
 }
 
 export interface RoutePlan {
-  /** 'router': one message through Astroport's router. 'legs': one swap message per leg (executionLegs). */
-  kind: 'router' | 'legs'
+  /**
+   * 'router': one message through Astroport's router. 'multi': one message through Terra Swap's router,
+   * which reaches both factories. 'legs': one swap message per leg (executionLegs).
+   */
+  kind: 'router' | 'multi' | 'legs'
   legs: ExecLeg[]
   /** what reaches the wallet when every pool trades at its quote, smallest units of the output token */
   expectedOut: string
@@ -325,16 +332,17 @@ export interface RoutePlan {
  * Separate swap messages cannot hand one swap's actual return to the next, so
  * a multi-leg route signed that way leaves a slippage-sized slice of each
  * intermediate token in the wallet and delivers that much less of the output
- * than the quote (found in the 2026-09-13 audit). Astroport's router can: two
- * or more Astroport pools go through it, deliver the quote, and check one
- * minimum on what arrives. Routes that touch Terra Swap's pools stay as legs
- * and say what they leave behind.
+ * than the quote (found in the 2026-09-13 audit). A router can: two or more
+ * Astroport pools go through Astroport's, and a route that touches Terra
+ * Swap's pools goes through Terra Swap's own (contracts/router) when it is on
+ * chain. Both deliver the quote and check one minimum on what arrives. Without
+ * Terra Swap's router such a route stays as legs and says what it leaves behind.
  */
 export function planRoute(q: Quote, slip: number): RoutePlan {
   const legs = executionLegs(q, slip)
-  if (q.legs.length > 1 && q.legs.every(l => l.pool.venue === 'astroport')) {
-    return { kind: 'router', legs, expectedOut: q.outMicro, minOut: shave(BigInt(q.outMicro), slip).toString(), leftover: [] }
-  }
+  const all = { expectedOut: q.outMicro, minOut: shave(BigInt(q.outMicro), slip).toString(), leftover: [] }
+  if (q.legs.length > 1 && q.legs.every(l => l.pool.venue === 'astroport')) return { kind: 'router', legs, ...all }
+  if (q.legs.length > 1 && TERRA_SWAP_ROUTER) return { kind: 'multi', legs, ...all }
   const leftover = legs.slice(0, -1)
     .map((l, i) => ({ token: q.legs[i].ask, micro: (BigInt(l.expectedReturn) - BigInt(legs[i + 1].offerAmount)).toString() }))
     .filter(x => BigInt(x.micro) > BigInt(0))

@@ -8,7 +8,8 @@
  *
  * They go to Astroport's own contracts (pairs on either factory, the
  * factories, the incentives contract, the router, the first ASTRO staking and
- * the ASTRO converter), to the liquid staking hubs in lib/lst, and over IBC
+ * the ASTRO converter), to Terra Swap's router in contracts/router, to the
+ * liquid staking hubs in lib/lst, and over IBC
  * between Noble and Terra. One is built by Skip Go's API rather than here, the
  * swap-on-arrival deposit, and skipDepositMsg takes it apart and checks it
  * before any wallet sees it. None sends anything anywhere else, and none
@@ -19,7 +20,7 @@ import type { EncodeObject } from '@cosmjs/proto-signing'
 import { MsgExecuteContract } from 'cosmjs-types/cosmwasm/wasm/v1/tx'
 import { MsgTransfer } from 'cosmjs-types/ibc/applications/transfer/v1/tx'
 import { toUtf8 } from '@cosmjs/encoding'
-import { ASTRO_ROUTER, NOBLE_USDC, type Asset, type AssetInfo } from 'lib/dex'
+import { ASTRO_ROUTER, NOBLE_USDC, TERRA_SWAP_ROUTER, VENUE_FACTORY, type Asset, type AssetInfo } from 'lib/dex'
 import { NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, SKIP_ENTRY_POINT_TERRA } from 'lib/skip'
 import type { ExecLeg, RoutePlan, TradePlan } from 'lib/route'
 
@@ -85,12 +86,32 @@ export function routerMsg(sender: string, hops: { offer: AssetInfo; ask: AssetIn
   return exec(sender, first.token.contract_addr, { send: { contract: router, amount, msg: b64(inner) } })
 }
 
-/** A quote as lib/route planRoute decided to sign it: one router message, or one swap per leg. */
+/**
+ * A route through Terra Swap's router (contracts/router), which reaches pairs
+ * on both factories. Each operation names the factory that owns its pair; the
+ * router looks the pair up there, swaps everything it holds of the offered
+ * token, and checks `minimumReceive` once, on what reaches the wallet. No
+ * intermediate token is left in the wallet or in the router.
+ */
+export function terraSwapRouterMsg(sender: string, legs: ExecLeg[], amount: string, minimumReceive: string, router = TERRA_SWAP_ROUTER): EncodeObject {
+  if (!router) throw new Error("Terra Swap's router is not on chain yet")
+  const inner = {
+    execute_swap_operations: {
+      operations: legs.map(l => ({ factory: VENUE_FACTORY[l.venue], offer_asset_info: l.offerInfo, ask_asset_info: l.askInfo })),
+      minimum_receive: minimumReceive,
+    },
+  }
+  const first = legs[0].offerInfo
+  if ('native_token' in first) return exec(sender, router, inner, [{ denom: first.native_token.denom, amount }])
+  return exec(sender, first.token.contract_addr, { send: { contract: router, amount, msg: b64(inner) } })
+}
+
+/** A quote as lib/route planRoute decided to sign it: one message through a router, or one swap per leg. */
 export function routeMsgs(sender: string, plan: RoutePlan, maxSpread: number): EncodeObject[] {
   if (plan.legs.length === 0 || plan.legs.some(l => l.offerAmount === '0') || plan.minOut === '0') throw new Error('Amount too small to route')
-  return plan.kind === 'router'
-    ? [routerMsg(sender, plan.legs.map(l => ({ offer: l.offerInfo, ask: l.askInfo })), plan.legs[0].offerAmount, plan.minOut)]
-    : legMsgs(sender, plan.legs, maxSpread)
+  if (plan.kind === 'router') return [routerMsg(sender, plan.legs.map(l => ({ offer: l.offerInfo, ask: l.askInfo })), plan.legs[0].offerAmount, plan.minOut)]
+  if (plan.kind === 'multi') return [terraSwapRouterMsg(sender, plan.legs, plan.legs[0].offerAmount, plan.minOut)]
+  return legMsgs(sender, plan.legs, maxSpread)
 }
 
 /**

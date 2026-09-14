@@ -168,11 +168,13 @@ async function terraSwapSection() {
 // ─── The pools interface and Atrium ─────────────────────────────
 
 async function poolsSection() {
-  const dex = await getJson('https://pools.terraluna.app/api/dex')
-  if (!dex) return ['- The pools interface did not answer when this report was generated.']
+  // Astroport's pools are listed on swap.terraluna.app since pools.terraluna.app was folded into it (2026-09-14).
+  const venue = await getJson('https://swap.terraluna.app/api/dex-venue')
+  if (!venue) return ['- The Astroport pool list did not answer when this report was generated.']
+  const tvl = (venue.pools ?? []).reduce((s, p) => s + (p.tvlUsd ?? 0), 0)
   return [
-    `- Astroport pools listed: ${dex.pools.length}`,
-    `- Liquidity reachable through them when this report was generated: ${usd(dex.tvlUsd)}`,
+    `- Astroport pools listed: ${venue.pools.length}`,
+    `- Liquidity reachable through them when this report was generated: ${usd(tvl)}`,
   ]
 }
 
@@ -236,7 +238,7 @@ const md = [
   '',
   ...(await terraSwapSection()),
   '',
-  '## Pools interface',
+  '## Astroport pools',
   '',
   ...(await poolsSection()),
   '',
