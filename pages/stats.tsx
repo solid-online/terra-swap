@@ -11,6 +11,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SPACE, TEXT } from 'components/tokens'
 import LstBoard from 'components/LstBoard'
+import SiteNav from 'components/SiteNav'
 import { VENUE_NAME, annotateMarket, annotateValues, type PoolView } from 'lib/dex'
 import { arbPlans, fmtAmount, fmtUsd } from 'lib/arb'
 import type { DexResponse } from 'pages/api/dex'
@@ -114,7 +115,7 @@ export default function StatsPage() {
       <main style={{ minHeight: '100vh', background: 'radial-gradient(120% 80% at 50% -10%, #111729 0%, #0a0d18 42%, #05070f 100%)', color: C.textPrimary, fontFamily: TERRA_FONT, padding: '1.4rem 1.2rem 4rem' }}>
         <div style={{ maxWidth: 860, margin: '0 auto', display: 'grid', gap: SPACE['3'] }}>
           <div>
-            <Link href='/' style={{ color: C.textMuted, fontSize: TEXT.xs.size, textDecoration: 'none' }}>← Terra Swap</Link>
+            <SiteNav here='stats' />
             <h1 style={{ fontSize: 'clamp(1.8rem, 5vw, 2.4rem)', margin: '0.6rem 0 0.4rem', letterSpacing: '-0.02em' }}>
               <span style={{ fontWeight: 700, color: C.goldLit }}>Stats</span> <span style={{ fontWeight: 300 }}>for Terra&apos;s pools</span>
             </h1>

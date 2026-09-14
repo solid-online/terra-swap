@@ -54,6 +54,8 @@ export default function CommandPalette({ items, onClose }: { items: PaletteItem[
   const [active, setActive] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  /** Phones get no keyboard hints; the palette only ever opens in the browser, so window is there. */
+  const [touch] = useState(() => typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches)
   useEffect(() => { inputRef.current?.focus() }, [])
 
   const list = useMemo(() => {
@@ -126,7 +128,7 @@ export default function CommandPalette({ items, onClose }: { items: PaletteItem[
         </div>
         {!q && (
           <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, padding: '8px 14px', borderTop: `1px solid ${C.divider}`, lineHeight: 1.5 }}>
-            Type a token to buy or sell it, or a pool to jump to it. ↑ ↓ to move, Enter to open.
+            Type a token to buy or sell it, or a pool to jump to it.{touch ? '' : ' ↑ ↓ to move, Enter to open.'}
           </div>
         )}
       </div>

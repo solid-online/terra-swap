@@ -1329,9 +1329,11 @@ function PriceChart({ pool, from, to, compact }: { pool: PoolView; from: KnownTo
 /** A pair and a size handed to the swap panel from somewhere else on the page. */
 export interface SwapPreset { fromId: string; toId: string; amount: string; n: number }
 
-function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, onTakeArb }: {
+function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arbs, preset, onTakeArb, onNext }: {
   pools: PoolView[]; venuePools: PoolView[]; crystal: boolean; feeBps: number; poolFeeBps: number; onDone: () => void
   arbs?: ArbPlan[]; preset?: SwapPreset | null; onTakeArb?: (p: ArbPlan) => void
+  /** after a swap lands: open History, or Pools filtered to the token that arrived */
+  onNext?: (where: 'history' | 'pools', tokenKey?: string) => void
 }) {
   const me = useMyAddress()
   const swap = useTradeSwap()
@@ -1761,6 +1763,14 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
           {txHash !== 'ok' && <a href={finderTx(txHash)} target='_blank' rel='noreferrer' style={{ color: C.goldLit, fontWeight: 700 }}>View on Terrascope →</a>}
         </div>
       )}
+      {/* What people do next with what just arrived: check it landed, or put it to work in a pool. */}
+      {txHash && !err && onNext && to && (
+        <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginBottom: SPACE['2'], display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span>Next:</span>
+          <button type='button' onClick={() => onNext('history')} style={{ ...ghostBtn, padding: '2px 10px' }}>See it in your history</button>
+          <button type='button' onClick={() => onNext('pools', to.key)} style={{ ...ghostBtn, padding: '2px 10px' }}>Pools with {to.label}</button>
+        </div>
+      )}
       {phase > 0 && (
         <div className='terra-stepper' aria-live='polite'>
           {(['asking your wallet', 'broadcasting · steady', 'written down'] as const).map((t, k) => {
@@ -1856,7 +1866,7 @@ function HubAlternative({ from, to, micro, swapOut, blocked, onDone }: {
         setDone(`Staked at ${hub.provider}. The ${hub.key} is in your wallet.`)
       } else {
         await unbond.mutateAsync({ token: hub.token, hub: hub.hub, amount: micro, sender: me })
-        setDone(`Queued at ${hub.provider}. Withdraw the LUNA from Positions when it is ready, in about ${days}.`)
+        setDone(`Queued at ${hub.provider}. Withdraw the LUNA from Portfolio when it is ready, in about ${days}.`)
       }
       onDone()
     } catch (e) { setErr(humanizeTxError(e)) }
@@ -1865,7 +1875,7 @@ function HubAlternative({ from, to, micro, swapOut, blocked, onDone }: {
     <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, borderRadius: 10, marginBottom: SPACE['3'], background: C.surface, border: `1px solid ${C.dividerWarm}`, fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6 }}>
       {minting
         ? <><b style={{ color: C.textPrimary }}>Or stake at {hub.provider}:</b> {out} {hub.key} straight from its hub{edge !== null && <>, <b style={{ color: C.success }}>{edge.toFixed(2)}% more</b> than this swap</>}. Instant, at the hub&apos;s exchange rate.</>
-        : <><b style={{ color: C.textPrimary }}>Or unstake at {hub.provider}:</b> about {out} LUNA{edge !== null && <>, <b style={{ color: C.success }}>{edge.toFixed(2)}% more</b> than selling now</>}, ready in about {days}. You withdraw it from Positions.</>}
+        : <><b style={{ color: C.textPrimary }}>Or unstake at {hub.provider}:</b> about {out} LUNA{edge !== null && <>, <b style={{ color: C.success }}>{edge.toFixed(2)}% more</b> than selling now</>}, ready in about {days}. You withdraw it from Portfolio.</>}
       {err && <div style={{ color: C.alert, marginTop: 4 }}>{err}</div>}
       {done && <div style={{ color: C.success, marginTop: 4 }}>✓ {done}</div>}
       {me && (
@@ -4778,7 +4788,8 @@ function SwapPageInner() {
                 </button>
               </div>
               {tab === 'swap' && loopFor && <LoopPanel plan={loopFor} pools={routePoolsAll} onClose={() => setLoopFor(null)} onOneSided={oneSided} onDone={refresh} />}
-              {tab === 'swap' && <SwapPanel pools={data.pools} venuePools={venuePools} crystal={crystal} feeBps={data.feeBps} poolFeeBps={data.poolFeeBps} onDone={refresh} arbs={arbs} preset={preset} onTakeArb={takeArb} />}
+              {tab === 'swap' && <SwapPanel pools={data.pools} venuePools={venuePools} crystal={crystal} feeBps={data.feeBps} poolFeeBps={data.poolFeeBps} onDone={refresh} arbs={arbs} preset={preset} onTakeArb={takeArb}
+                onNext={(k, key) => { if (k === 'pools') { setVenueFilter('all'); setPoolQuery(key ?? '') } openTab(k) }} />}
               {tab === 'pools' && (
                 allPools.length === 0
                   ? <Empty title='No pools yet' body={LITE ? 'Could not read the pool list. Try again in a moment.' : 'Open the first one. One signature, gas only. Your name goes to the top of the board and everyone sees it was you.'} />
