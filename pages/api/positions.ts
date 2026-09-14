@@ -11,8 +11,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { fromBech32 } from '@cosmjs/encoding'
 import { VENUE_INCENTIVES } from 'lib/dex'
-import { readAstroLegacy, readPositions, type AstroLegacy, type Position } from 'lib/positions'
+import { readAstroLegacy, readFlows, readPositions, type AstroLegacy, type Position } from 'lib/positions'
 import { readUnstaking, type Unstaking } from 'lib/lst'
+import type { LpFlow } from 'lib/dex-ledger'
 
 export interface PositionsResponse {
   address: string
@@ -23,6 +24,8 @@ export interface PositionsResponse {
   astro: AstroLegacy | null
   /** liquid staking tokens queued for redemption at their hubs */
   unstaking: Unstaking[]
+  /** what the wallet put into each position's pool, from its own history (lib/positions readFlows) */
+  flows: Record<string, LpFlow>
   at: number
 }
 
@@ -64,7 +67,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
     windowBuilds++
     build = Promise.all([readPositions(address), readAstroLegacy(address).catch(() => null), readUnstaking(address).catch(() => [])])
-      .then(([positions, astro, unstaking]) => ({ address, positions, incentives: VENUE_INCENTIVES.astroport, astro, unstaking, at: Date.now() }))
+      .then(async ([positions, astro, unstaking]) => {
+        const flows = await readFlows(address, new Set(positions.map(p => p.pool.contract_addr))).catch(() => ({}))
+        return { address, positions, incentives: VENUE_INCENTIVES.astroport, astro, unstaking, flows, at: Date.now() }
+      })
       .finally(() => { inflight.delete(address) })
     inflight.set(address, build)
   }

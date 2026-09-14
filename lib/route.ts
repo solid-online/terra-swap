@@ -177,6 +177,8 @@ export interface Quotes {
   home: Quote | null
   /** two paths that share no pool, when splitting the amount between them delivers more than `best` (asked for with split) */
   split: SplitPart[] | null
+  /** the best path through one or two pools, which is what paths through three pools and splitting are measured against (tradeMemo) */
+  short: Quote | null
   /** the input amount these quotes are for, smallest units */
   amountMicro: string
 }
@@ -188,7 +190,7 @@ export interface Quotes {
  * what the ranking compares.
  */
 export async function quoteBest(pools: PoolView[], from: KnownToken, to: KnownToken, amountMicro: string, home?: Venue, opts: { slip?: number; split?: boolean; threeHop?: boolean } = {}): Promise<Quotes> {
-  const none: Quotes = { best: null, home: null, split: null, amountMicro }
+  const none: Quotes = { best: null, home: null, split: null, short: null, amountMicro }
   if (!amountMicro || amountMicro === '0') return none
   const slip = opts.slip ?? 0.01
   const amount = Number(amountMicro) / 10 ** from.decimals
@@ -212,6 +214,7 @@ export async function quoteBest(pools: PoolView[], from: KnownToken, to: KnownTo
     best,
     home: home ? quotes.find(q => q.legs.every(l => l.pool.venue === home)) ?? null : null,
     split: best && opts.split ? await bestSplit(quotes, amountMicro, slip) : null,
+    short: quotes.find(q => q.legs.length <= 2) ?? null,
     amountMicro,
   }
 }
@@ -357,9 +360,17 @@ export interface TradePlan {
   impactPct: number
 }
 
-/** A single path or a split, as it gets signed. */
+/**
+ * A single path or a split, as it gets signed. In a split, a part through one
+ * pool also goes through Terra Swap's router: each part still carries its own
+ * minimum, and every trade the routing improved then passes through a router,
+ * where the monthly report can find it on chain.
+ */
 export function planTrade(parts: SplitPart[], slip: number): TradePlan {
-  const planned = parts.map(p => ({ ...p, plan: planRoute(p.quote, slip) }))
+  const planned = parts.map(p => ({
+    ...p,
+    plan: (parts.length > 1 && p.quote.legs.length === 1 ? routerPlan(p.quote, slip) : null) ?? planRoute(p.quote, slip),
+  }))
   const sum = (pick: (x: (typeof planned)[number]) => string) => planned.reduce((s, x) => s + BigInt(pick(x)), BigInt(0)).toString()
   const out = planned.reduce((s, x) => s + Number(x.plan.expectedOut), 0)
   return {
@@ -369,6 +380,27 @@ export function planTrade(parts: SplitPart[], slip: number): TradePlan {
     leftover: planned.flatMap(x => x.plan.leftover),
     impactPct: out > 0 ? planned.reduce((s, x) => s + x.quote.impactPct * Number(x.plan.expectedOut), 0) / out : 0,
   }
+}
+
+/**
+ * The memo a trade is signed with: the kind of trade, what it was quoted, and
+ * what the routing added over the best path through one or two pools, as in
+ * "split swap (quote 4923.246400 USDC, +1.03% vs 2 pools)". It is public on
+ * chain, so a wallet's history and the monthly report can set what was quoted
+ * beside what arrived. The report reads it back with the same pattern.
+ */
+export function tradeMemo(trade: TradePlan, short: Quote | null, slip: number, to: KnownToken): string {
+  const kind = trade.parts.length > 1 ? 'split swap' : trade.parts[0].quote.legs.length > 1 ? 'routed swap' : 'swap'
+  const quote = `quote ${(Number(trade.expectedOut) / 10 ** to.decimals).toFixed(Math.min(6, to.decimals))} ${to.label}`
+  const base = short ? Number(planRoute(short, slip).expectedOut) : 0
+  const gain = base > 0 ? (Number(trade.expectedOut) / base - 1) * 100 : null
+  return `${kind} (${quote}${gain != null ? `, ${gain >= 0 ? '+' : ''}${gain.toFixed(2)}% vs 2 pools` : ''})`
+}
+
+/** A memo written by tradeMemo, read back. Null for any other memo. */
+export function readTradeMemo(memo: string): { kind: string; quote: number; label: string; gainPct: number | null } | null {
+  const m = /(split swap|routed swap|swap) \(quote ([\d.]+) ([^,)\s]+)(?:, ([+-][\d.]+)% vs 2 pools)?\)/.exec(memo)
+  return m ? { kind: m[1], quote: Number(m[2]), label: m[3], gainPct: m[4] != null ? Number(m[4]) : null } : null
 }
 
 /** "70% LUNA → ampLUNA (Astroport) → USDC (Astroport) · 30% LUNA → USDC (Astroport)" */

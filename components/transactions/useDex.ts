@@ -143,30 +143,35 @@ export const useTerraMsgs = () => {
   return useMutation(async (a: { msgs: EncodeObject[]; memo: string }) => broadcast(a.msgs, `${MEMO}: ${a.memo}`))
 }
 
-/** The same region gate and on-chain success check as useDexBroadcast, for messages signed on Noble. */
-export function useNobleBroadcast() {
-  const noble = useChain('noble')
+/**
+ * The same region gate and on-chain success check as useDexBroadcast, for
+ * messages signed on another chain the wallet kit signs for: Noble or the
+ * Cosmos Hub. The component calling it is keyed by chain, so the chain never
+ * changes under a mounted hook.
+ */
+export function useCosmosBroadcast(chainName: 'noble' | 'cosmoshub', label: string) {
+  const chain = useChain(chainName)
   const { txAllowed, country } = useTxRegionGate()
   return useCallback(async (msgs: EncodeObject[], memo: string) => {
     if (txAllowed === false) throw new RegionRestricted(country)
-    if (!noble.address || !noble.isWalletConnected) throw new Error('Connect your wallet on Noble first')
+    if (!chain.address || !chain.isWalletConnected) throw new Error(`Connect your wallet on ${label} first`)
     try {
       const geo = await fetch('/api/geo', { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
       if (geo && geo.tx_allowed === false) throw new RegionRestricted(geo.country ?? country)
     } catch (e) {
       if (e instanceof RegionRestricted) throw e
     }
-    const client = await noble.getSigningStargateClient()
-    const res = await client.signAndBroadcast(noble.address, msgs, 'auto', memo)
+    const client = await chain.getSigningStargateClient()
+    const res = await client.signAndBroadcast(chain.address, msgs, 'auto', memo)
     if (res && typeof res.code === 'number' && res.code !== 0) {
-      throw new Error(res.rawLog || `Transaction failed on Noble (code ${res.code})`)
+      throw new Error(res.rawLog || `Transaction failed on ${label} (code ${res.code})`)
     }
     return res
-  }, [noble, txAllowed, country])
+  }, [chain, label, txAllowed, country])
 }
 
-export const useNobleMsgs = () => {
-  const broadcast = useNobleBroadcast()
+export const useCosmosMsgs = (chainName: 'noble' | 'cosmoshub', label: string) => {
+  const broadcast = useCosmosBroadcast(chainName, label)
   return useMutation(async (a: { msgs: EncodeObject[]; memo: string }) => broadcast(a.msgs, `${MEMO}: ${a.memo}`))
 }
 

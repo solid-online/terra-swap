@@ -14,8 +14,11 @@ repository is one way to look at them.
   (code id 392), created through an instance of Astroport's own factory
   (code id 3108). Nothing in the AMM is ours.
 - **The factory's ownership has been renounced** to a contract that can never
-  use it, and the migrate admin is cleared on the factory and on every pool.
-  Nobody can change fees, upgrade code, or stop pool creation.
+  use it, and the migrate admin is cleared on the factory and on the pools that
+  existed then. Pools opened since are given the factory's owner, the sink, as
+  their admin, and the sink has no way to migrate anything. Nobody can change
+  fees, upgrade code, or stop pool creation. `/verify` on the live site checks
+  all of it from your browser.
   Factory: `terra1gx7n4yrfc2req7tdt9vpj66kr0cssnqkjsr80xmfacjpdlw6mzlqvlp3xd`
   Owner sink: `terra1ylr5lqj9e4ehjpxc4944rhjcmq7zdaju50r3tn60vn7rsqym50gq5w27l3`
   Check it yourself: query the factory's `{"config":{}}` and any pool's

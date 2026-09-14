@@ -8,6 +8,9 @@ import terra2Assets from 'chain-registry/mainnet/terra2/assets'
 // Noble, for moving USDC in and out (lib/noble). Also narrow imports.
 import nobleChain from 'chain-registry/mainnet/noble/chain'
 import nobleAssets from 'chain-registry/mainnet/noble/assets'
+// The Cosmos Hub, for moving ATOM in and out (lib/cosmoshub).
+import cosmoshubChain from 'chain-registry/mainnet/cosmoshub/chain'
+import cosmoshubAssets from 'chain-registry/mainnet/cosmoshub/assets'
 // Injective, for moving USDC.inj in and out. Its transactions are built and
 // broadcast in lib/injective, not by the wallet kit's signing client.
 import injectiveChain from 'chain-registry/mainnet/injective/chain'
@@ -19,10 +22,11 @@ import { Chain } from '@chain-registry/types'
 import { REST_ENDPOINTS, RPC_ENDPOINTS } from 'lib/lcd'
 import { NOBLE_REST_ENDPOINTS, NOBLE_RPC_ENDPOINTS } from 'lib/noble'
 import { GAS_PRICE } from 'lib/gas'
+import { HUB_CHAIN_ID, HUB_GAS_PRICE, HUB_REST_ENDPOINTS, HUB_RPC_ENDPOINTS } from 'lib/cosmoshub'
 import { INJECTIVE_REST_ENDPOINTS, INJECTIVE_RPC_ENDPOINTS } from 'lib/injective'
 
-const chains = [terra2Chain, nobleChain, injectiveChain]
-const assets = [terra2Assets, nobleAssets, injectiveAssets]
+const chains = [terra2Chain, nobleChain, cosmoshubChain, injectiveChain]
+const assets = [terra2Assets, nobleAssets, cosmoshubAssets, injectiveAssets]
 
 // ─── Module-level frozen constants ─────────────────────────────
 //
@@ -46,6 +50,7 @@ const endpointOptionsStatic: { endpoints: EndpointOptions['endpoints']; isLazy: 
     }),
     {
       noble: { rpc: NOBLE_RPC_ENDPOINTS, rest: NOBLE_REST_ENDPOINTS, isLazy: false },
+      cosmoshub: { rpc: HUB_RPC_ENDPOINTS, rest: HUB_REST_ENDPOINTS, isLazy: false },
       injective: { rpc: INJECTIVE_RPC_ENDPOINTS, rest: INJECTIVE_REST_ENDPOINTS, isLazy: false },
     },
   ),
@@ -53,9 +58,11 @@ const endpointOptionsStatic: { endpoints: EndpointOptions['endpoints']; isLazy: 
 }
 
 const signerOptionsStatic: SignerOptions = {
-  // Noble charges its network fee in USDC.
+  // Noble charges its network fee in USDC, the Hub in ATOM.
   //@ts-ignore
-  signingStargate: (chain: Chain) => (chain.chain_id === 'noble-1' ? { gasPrice: GasPrice.fromString('0.1uusdc') } : undefined),
+  signingStargate: (chain: Chain) => (chain.chain_id === 'noble-1'
+    ? { gasPrice: GasPrice.fromString('0.1uusdc') }
+    : chain.chain_id === HUB_CHAIN_ID ? { gasPrice: GasPrice.fromString(HUB_GAS_PRICE) } : undefined),
   //@ts-ignore
   signingCosmwasm: (chain: Chain) => {
     switch (chain.chain_id) {

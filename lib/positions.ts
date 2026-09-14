@@ -18,6 +18,7 @@ import {
   type Asset, type KnownToken, type PairInfo, type PoolView, type Venue,
 } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
+import { parseAssets, type LpFlow } from 'lib/dex-ledger'
 
 const UA = { 'User-Agent': 'Mozilla/5.0 terra-pools-positions', accept: 'application/json' }
 
@@ -63,6 +64,51 @@ async function historyTouches(address: string): Promise<{ pairs: Set<string>; lp
     if (rs.length < 100) break
   }
   return { pairs, lpTokens }
+}
+
+/**
+ * What this wallet put into each of `pairs`, less what it took out, from its
+ * own provide and withdraw events, keyed like the board's flows
+ * (`${address}|${pair}`). The board's ledger (lib/dex-ledger computeFlows)
+ * only records Terra Swap's pools; this reads the wallet's history instead,
+ * so Astroport positions get the same "Put in" line. Only liquidity the
+ * wallet added itself counts: LP bought or received from someone else has no
+ * deposit to show. Reads the wallet's own transactions, newest first, up to
+ * five pages; a search that combines the signer with the action matched
+ * nothing on public endpoints on 2026-09-14, so the filtering happens here.
+ */
+export async function readFlows(address: string, pairs: Set<string>): Promise<Record<string, LpFlow>> {
+  const out: Record<string, LpFlow> = {}
+  if (pairs.size === 0) return out
+  const q = encodeURIComponent(`message.sender='${address}'`)
+  for (let page = 1; page <= 5; page++) {
+    let rs: TxEvents[] = []
+    try {
+      const r = await lcdFetch(`/cosmos/tx/v1beta1/txs?query=${q}&order_by=ORDER_BY_DESC&limit=100&page=${page}`, { headers: UA, kind: 'txs', timeoutMs: 15000 })
+      rs = r.ok ? ((await r.json())?.tx_responses ?? []) : []
+    } catch { rs = [] }
+    for (const tx of rs) {
+      for (const ev of tx.events) {
+        if (ev.type !== 'wasm') continue
+        const at: Record<string, string> = {}
+        for (const a of ev.attributes) if (!(a.key in at)) at[a.key] = a.value
+        const pair = at._contract_address
+        const provide = at.action === 'provide_liquidity', withdraw = at.action === 'withdraw_liquidity'
+        if ((!provide && !withdraw) || !pair || !pairs.has(pair)) continue
+        if (at.sender !== address && at.receiver !== address) continue
+        const moved = parseAssets((provide ? at.assets : at.refund_assets) ?? '')
+        const key = `${address}|${pair}`
+        const f = out[key] ?? (out[key] = { net: {}, provides: 0, withdraws: 0 })
+        if (provide) f.provides++; else f.withdraws++
+        for (const id of Object.keys(moved)) {
+          const cur = BigInt(f.net[id] ?? '0'), amt = BigInt(moved[id])
+          f.net[id] = (provide ? cur + amt : cur - amt).toString()
+        }
+      }
+    }
+    if (rs.length < 100) break
+  }
+  return out
 }
 
 async function lpBalance(lpToken: string, user: string): Promise<string> {

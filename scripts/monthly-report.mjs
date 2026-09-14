@@ -182,8 +182,7 @@ const BENCH_USD = [100, 5000]
 const BENCH_SLIP = 0.01
 const assetKey = (info) => ('native_token' in info ? info.native_token.denom : info.token.contract_addr)
 
-async function routerUsage(decimals, px) {
-  const txs = await txsInMonth(`wasm._contract_address='${ROUTER}'`)
+async function routerUsage(txs, decimals, px) {
   let swaps = 0, arrivals = 0, fromSite = 0, volume = 0, unpriced = 0
   const wallets = new Set()
   const byPools = new Map()
@@ -218,6 +217,59 @@ async function routerUsage(decimals, px) {
   }
   lines.push("- Routes made only of Astroport's pools go through Astroport's own router and are not counted here.")
   return lines
+}
+
+/** Astroport's router on Terra. It writes no attributes of its own, so its calls are found by the execute event. */
+const ASTRO_ROUTER = 'terra1j8hayvehh3yy02c2vtw5fdhz9f4drhtee8p5n5rguvg3nyd6m83qd2y90a'
+/** lib/route tradeMemo, read back: "split swap (quote 4923.246400 USDC, +1.03% vs 2 pools)". */
+const MEMO_TAG = /(split swap|routed swap|swap) \(quote ([\d.]+) ([^,)\s]+)(?:, ([+-][\d.]+)% vs 2 pools)?\)/
+
+/**
+ * Swaps signed on the interface carry their quote and what paths through three
+ * pools and splitting added over the best path through up to two pools
+ * (lib/route tradeMemo). Every such trade passes through a router: a split
+ * signs each part through one. So the month's router transactions hold all of
+ * them, and what arrived is on chain beside what was quoted.
+ */
+async function interfaceSwaps(routerTxs, pools, px) {
+  const astro = await txsInMonth(`execute._contract_address='${ASTRO_ROUTER}'`)
+  const byLabel = new Map()
+  for (const p of pools) for (const t of p.tokens) byLabel.set(t.label, t)
+  const seen = new Set()
+  let tagged = 0, improved = 0, gainSum = 0, extraUsd = 0, unpricedGain = 0, realizedSum = 0, realizedN = 0
+  for (const tx of [...routerTxs, ...astro]) {
+    if (seen.has(tx.txhash) || tx.code) continue
+    seen.add(tx.txhash)
+    const memo = String(tx._body?.memo ?? '')
+    const m = memo.startsWith('Terra Swap') ? MEMO_TAG.exec(memo) : null
+    if (!m) continue
+    tagged++
+    const quote = Number(m[2]), token = byLabel.get(m[3]), gain = m[4] != null ? Number(m[4]) : null
+    const signer = tx._body?.messages?.[0]?.sender
+    if (token && signer) {
+      let received = 0n
+      for (const ev of tx.events ?? []) {
+        if (ev.type !== 'wasm') continue
+        const at = Object.fromEntries(ev.attributes.map((a) => [a.key, a.value]))
+        if (at.action === 'swap' && at.receiver === signer && at.ask_asset === assetKey(token.info)) received += BigInt(at.return_amount ?? '0')
+      }
+      if (received > 0n && quote > 0) { realizedSum += (Number(received) / 10 ** token.decimals / quote - 1) * 100; realizedN++ }
+    }
+    if (gain != null && gain >= 0.005) {
+      improved++
+      gainSum += gain
+      const price = token ? px[assetKey(token.info)] : 0
+      if (price > 0) extraUsd += quote * price * (gain / (100 + gain)); else unpricedGain++
+    }
+  }
+  if (tagged === 0) return ['- No swap signed on the interface this month carried the quote tag (it was added on 2026-09-14).']
+  const signed = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+  return [
+    `- Swaps signed on the interface with the quote tag: ${tagged}`,
+    `- Where paths through three pools or splitting added something: ${improved}${improved ? `, ${signed(gainSum / improved)} on average` : ''}`,
+    ...(improved ? [`- What that added: about ${usd(extraUsd)} more delivered, at the prices on the day this report was generated${unpricedGain ? ` (${unpricedGain} swap${unpricedGain === 1 ? '' : 's'} into tokens without a price not counted)` : ''}`] : []),
+    ...(realizedN ? [`- What arrived against the quote: ${signed(realizedSum / realizedN)} on average over ${realizedN} swap${realizedN === 1 ? '' : 's'}`] : []),
+  ]
 }
 
 /** The same trades priced three ways with the site's own routing code, compiled by the workflow. */
@@ -274,7 +326,18 @@ async function routingSection() {
   const pools = [...(dex?.pools ?? []), ...(venue?.pools ?? [])].filter((p) => !p.empty)
   const decimals = {}
   for (const p of pools) for (const t of p.tokens) decimals[assetKey(t.info)] = t.decimals
-  return [...(await routerUsage(decimals, px)), '', '### What the routing is worth', '', ...(await routeBenchmark(pools, px))]
+  const routerTxs = await txsInMonth(`wasm._contract_address='${ROUTER}'`)
+  return [
+    ...(await routerUsage(routerTxs, decimals, px)),
+    '',
+    '### Swaps signed on the interface',
+    '',
+    ...(await interfaceSwaps(routerTxs, pools, px)),
+    '',
+    '### What the routing is worth',
+    '',
+    ...(await routeBenchmark(pools, px)),
+  ]
 }
 
 // ─── The pools interface and Atrium ─────────────────────────────

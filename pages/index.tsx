@@ -18,7 +18,7 @@ import ElectricPulse from 'components/ElectricPulse'
 import { SPACE, RADIUS, TEXT } from 'components/tokens'
 import { isCrystalHolder } from 'lib/holders'
 import {
-  KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, TERRA_SWAP_ROUTER, assetId, sameAsset, tokenFor, toMicro, fromMicro,
+  KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, ATOM_DENOM, TERRA_SWAP_ROUTER, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
   lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_FACTORY, VENUE_NAME, VENUE_INCENTIVES, smart, type Venue,
   COIN_REGISTRY, ASTRO_STAKING, XASTRO_CW20, ASTRO_CONVERTER, ASTRO_CW20,
@@ -31,16 +31,20 @@ import type { LpFlow } from 'lib/dex-ledger'
 import type { PricesResponse } from 'pages/api/dex-prices'
 import type { VenueResponse } from 'pages/api/dex-venue'
 import type { PositionsResponse } from 'pages/api/positions'
-import { quoteBest, planRoute, planTrade, routeText, tradeText, reachable, quoteLoop, planRoutedZap, routerPlan, type Quotes, type Loop, type RoutedZap, type RoutePlan, type TradePlan } from 'lib/route'
+import type { HistoryResponse } from 'pages/api/history'
+import type { HistoryRow, Moved } from 'lib/history'
+import type { PoolFeesResponse } from 'pages/api/pool-fees'
+import { quoteBest, planRoute, planTrade, routeText, tradeText, tradeMemo, reachable, quoteLoop, planRoutedZap, routerPlan, type Quotes, type Loop, type RoutedZap, type RoutePlan, type TradePlan } from 'lib/route'
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
-import { useRouteSwap, useTradeSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap, useLstBond, useLstUnbond, useLstWithdraw, useNobleMsgs, useTerraMsgs, useInjectiveMsgs } from 'components/transactions/useDex'
+import { useRouteSwap, useTradeSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap, useLstBond, useLstUnbond, useLstWithdraw, useCosmosMsgs, useTerraMsgs, useInjectiveMsgs } from 'components/transactions/useDex'
 import { useChain } from '@cosmos-kit/react'
 import { fromBech32 } from '@cosmjs/encoding'
 import type { EncodeObject } from '@cosmjs/proto-signing'
 import { arrivalSwapMsg, ibcTransferMsg, tradeMsgs } from 'lib/msgs'
 import { NOBLE_CHAIN_ID, NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, TERRA_CHAIN_ID, TERRA_TO_NOBLE_CHANNEL, nobleUsdcBalance } from 'lib/noble'
+import { HUB_ATOM_DENOM, HUB_CHAIN_ID, HUB_TO_TERRA_CHANNEL, TERRA_TO_HUB_CHANNEL, hubAtomBalance } from 'lib/cosmoshub'
 import { estimateFee } from 'lib/gas'
 import { INJECTIVE_CHAIN_ID, INJECTIVE_TO_TERRA_CHANNEL, TERRA_TO_INJECTIVE_CHANNEL, USDC_INJ_ON_INJECTIVE, injectiveBalance, toInjectiveAddress } from 'lib/injective'
 import { hubForToken, hubInfo, type HubInfo } from 'lib/lst'
@@ -48,7 +52,7 @@ import { lcdFetch } from 'lib/lcd'
 import { TOKEN_META, tokenScore } from 'lib/tokenMeta'
 import { humanizeTxError } from 'lib/errors'
 
-type Tab = 'swap' | 'pools' | 'positions' | 'transfer' | 'create' | 'board'
+type Tab = 'swap' | 'pools' | 'positions' | 'history' | 'transfer' | 'create' | 'board'
 
 // The classic Terra brand face is Gotham (terra.money served "Gotham A/B"
 // from Hoefler & Co's cloud.typography in 2020–21; the wordmark is Gotham
@@ -593,6 +597,8 @@ function Footer({ height, soundOn, onToggleSound, onSecret, seoul }: { height?: 
       <span title='born in seoul. rebuilt everywhere.'>🇰🇷 seoul {new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit' }).format(new Date())}{seoul ? ` · ${seoul.temp}°C ${wxEmoji(seoul.code)}` : ''}{(() => { const h = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Seoul', hour: '2-digit', hour12: false }).format(new Date())); return h >= 20 || h < 2 ? ' · PC방 hours' : '' })()}</span>
       <span>·</span>
       <span>phoenix-1{height ? ` #${height.toLocaleString('en-US')}` : ''}</span>
+      <span>·</span>
+      <Link href='/verify' title='check every contract from this browser' style={{ color: C.textSecondary, textDecoration: 'none' }}>verify the contracts</Link>
       <button type='button' onClick={onToggleSound} title={soundOn ? 'sound on · click to mute' : 'sound off · click for tiny beeps'} style={{
         marginLeft: 'auto', background: 'transparent', border: `1px solid ${C.divider}`, borderRadius: 999, padding: '2px 8px',
         color: soundOn ? C.goldLit : C.textWhisper, cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.7rem',
@@ -1510,6 +1516,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
     // The quote on screen can be a minute old. Price it again before the wallet opens: if it now delivers
     // more than half the slippage less, show the new number and let the next press sign that.
     let signed = trade
+    let short = quotes?.short ?? null
     const key = quoteKey.current
     setChecking(true)
     try {
@@ -1523,6 +1530,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
           return
         }
         signed = next
+        short = fresh.short
       }
     } catch {
       // An endpoint had a bad moment. The quote on screen still carries its minimum, so that is what gets signed.
@@ -1532,7 +1540,8 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
     setPhase(1)
     const p2 = setTimeout(() => setPhase(2), 2500)
     try {
-      const r = await swap.mutateAsync({ trade: signed, maxSpread: slip, sender: me })
+      // The memo says what was quoted and what the routing added, so the wallet's history and the monthly report can check it.
+      const r = await swap.mutateAsync({ trade: signed, maxSpread: slip, sender: me, memo: tradeMemo(signed, short, slip, to) })
       clearTimeout(p2); setPhase(3); setTimeout(() => setPhase(0), 2600)
       const hash = (r as { transactionHash?: string })?.transactionHash ?? 'ok'
       const first = signed.parts[0].quote
@@ -1858,104 +1867,144 @@ function HubAlternative({ from, to, micro, swapOut, blocked, onDone }: {
   )
 }
 
-// ─── Moving USDC between Noble and Terra ────────────────────────
+// ─── Moving tokens between Noble or the Cosmos Hub and Terra ────
 
-const isNobleAddress = (a: string) => { try { const { prefix, data } = fromBech32(a); return prefix === 'noble' && data.length === 20 } catch { return false } }
-const nobleTxUrl = (hash: string) => `https://www.mintscan.io/noble/tx/${hash}`
+/** A chain the wallet kit signs for directly, and the one token this panel moves between it and Terra. */
+interface SourceChain {
+  chainName: 'noble' | 'cosmoshub'
+  chainId: string
+  name: string
+  /** bech32 prefix of its addresses */
+  prefix: string
+  /** the token as it is on Terra, and as the source chain names it */
+  terraDenom: string
+  sourceDenom: string
+  label: string
+  toTerra: string
+  fromTerra: string
+  balance: (address: string) => Promise<string>
+  /** what max leaves behind on the source chain, which takes its network fee in this same token */
+  feeReserve: bigint
+  txUrl: (hash: string) => string
+  /** Terra tokens this token never turns into here, nor comes from, and whose pools a route avoids */
+  never: string[]
+  footnote: string
+}
+
+const SOURCE_CHAINS: Record<'noble' | 'cosmoshub', SourceChain> = {
+  noble: {
+    chainName: 'noble', chainId: NOBLE_CHAIN_ID, name: 'Noble', prefix: 'noble', terraDenom: NOBLE_USDC, sourceDenom: NOBLE_USDC_DENOM, label: 'USDC',
+    toTerra: NOBLE_TO_TERRA_CHANNEL, fromTerra: TERRA_TO_NOBLE_CHANNEL, balance: nobleUsdcBalance, feeReserve: BigInt(50_000),
+    txUrl: h => `https://www.mintscan.io/noble/tx/${h}`,
+    // USDC.inj is a different dollar with its own switch, so USDC never turns into it here, or comes from it.
+    never: [USDC_INJ_DENOM],
+    footnote: 'This route carries USDC issued on Noble; USDC.inj from Injective has its own switch above. Noble charges its network fee in USDC.',
+  },
+  cosmoshub: {
+    chainName: 'cosmoshub', chainId: HUB_CHAIN_ID, name: 'Cosmos Hub', prefix: 'cosmos', terraDenom: ATOM_DENOM, sourceDenom: HUB_ATOM_DENOM, label: 'ATOM',
+    toTerra: HUB_TO_TERRA_CHANNEL, fromTerra: TERRA_TO_HUB_CHANNEL, balance: hubAtomBalance, feeReserve: BigInt(20_000),
+    txUrl: h => `https://www.mintscan.io/cosmos/tx/${h}`,
+    never: [],
+    footnote: 'The Cosmos Hub charges its network fee in ATOM.',
+  },
+}
 
 /**
- * USDC between Noble and Terra without leaving the page.
+ * A token between Noble or the Cosmos Hub and Terra without leaving the page.
  *
- * Into Terra: a plain IBC transfer, or, when the USDC should arrive as another
+ * Into Terra: a plain IBC transfer, or, when it should arrive as another
  * token, the same transfer carrying a call to Terra Swap's router that Terra's
  * IBC hooks run as it lands (lib/msgs arrivalSwapMsg). If the swap cannot
- * deliver its minimum, the transfer fails and Noble returns the USDC.
- * Out of Terra: any listed token is swapped to USDC by this site's own routing
- * and the USDC is sent to Noble in the same transaction. See lib/noble.
+ * deliver its minimum, the transfer fails and the source chain returns the
+ * tokens. Out of Terra: any listed token is swapped to the chain's token by
+ * this site's own routing and sent in the same transaction. See lib/noble and
+ * lib/cosmoshub.
  */
-function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[]; onDone: () => void; switcher: JSX.Element }) {
+function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChain; routePools: PoolView[]; onDone: () => void; switcher: JSX.Element }) {
   const me = useMyAddress()
-  const noble = useChain('noble')
-  const nobleMsgs = useNobleMsgs()
+  const source = useChain(net.chainName)
+  const sourceMsgs = useCosmosMsgs(net.chainName, net.name)
   const terraMsgs = useTerraMsgs()
   const [dir, setDir] = useState<'in' | 'out'>('in')
   const [amount, setAmount] = useState('')
-  const [tokenId, setTokenId] = useState(NOBLE_USDC)
-  const [nobleTo, setNobleTo] = useState('')
-  const [nobleBal, setNobleBal] = useState('0')
+  const [tokenId, setTokenId] = useState(net.terraDenom)
+  const [sendTo, setSendTo] = useState('')
+  const [srcBal, setSrcBal] = useState('0')
   const [terraBal, setTerraBal] = useState('0')
   const [quote, setQuote] = useState<{ out: string; secs: number; path: string; note?: string; plan?: RoutePlan; trade?: TradePlan } | null>(null)
   const [quoteErr, setQuoteErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [status, setStatus] = useState<{ tx: string; chain: string; text: string; done?: boolean; failed?: boolean } | null>(null)
+  const [status, setStatus] = useState<TransferStatus | null>(null)
   const SLIP = 0.01
 
-  const usdc = useMemo(() => tokenFor({ native_token: { denom: NOBLE_USDC } }), [])
+  const base = useMemo(() => tokenFor({ native_token: { denom: net.terraDenom } }), [net])
+  /** Routes avoid pools holding a token this one is never exchanged for. */
+  const pools = useMemo(() => routePools.filter(p => !p.tokens.some(t => net.never.includes(assetId(t.info)))), [routePools, net])
   const allTokens = useMemo(() => {
     const m = new Map<string, KnownToken>()
-    for (const p of routePools) for (const t of p.tokens) m.set(assetId(t.info), t)
+    for (const p of pools) for (const t of p.tokens) m.set(assetId(t.info), t)
     return Array.from(m.values())
-  }, [routePools])
-  /**
-   * USDC.inj is a different dollar with its own switch above, so it is never what USDC turns into here, or
-   * the other way round. Everything else this site can route USDC into or out of is offered both ways.
-   */
-  const routable = useMemo(() => reachable(routePools, usdc, allTokens).filter(t => assetId(t.info) !== USDC_INJ_DENOM), [routePools, usdc, allTokens])
-  /** A deposit can arrive as USDC, or swapped on arrival by Terra Swap's router into anything routable. */
-  const inOptions = useMemo(() => (TERRA_SWAP_ROUTER ? [usdc, ...routable] : [usdc]), [usdc, routable])
-  /** Anything this site can route to USDC can leave for Noble. */
-  const outOptions = useMemo(() => [usdc, ...routable], [usdc, routable])
+  }, [pools])
+  const routable = useMemo(() => reachable(pools, base, allTokens), [pools, base, allTokens])
+  /** A deposit can arrive as the token itself, or swapped on arrival by Terra Swap's router into anything routable. */
+  const inOptions = useMemo(() => (TERRA_SWAP_ROUTER ? [base, ...routable] : [base]), [base, routable])
+  /** Anything this site can route to the token can leave for its chain. */
+  const outOptions = useMemo(() => [base, ...routable], [base, routable])
   const options = dir === 'in' ? inOptions : outOptions
-  useEffect(() => { if (!options.some(t => assetId(t.info) === tokenId)) setTokenId(NOBLE_USDC) }, [options, tokenId])
-  const token = options.find(t => assetId(t.info) === tokenId) ?? usdc
-  const plainUsdc = tokenId === NOBLE_USDC
-  const micro = toMicro(amount, dir === 'in' ? 6 : token.decimals)
+  useEffect(() => { if (!options.some(t => assetId(t.info) === tokenId)) setTokenId(net.terraDenom) }, [options, tokenId, net])
+  const token = options.find(t => assetId(t.info) === tokenId) ?? base
+  const plain = tokenId === net.terraDenom
+  const micro = toMicro(amount, dir === 'in' ? base.decimals : token.decimals)
   const debounced = useDebounced(micro, 400)
-  const nobleAddr = noble.address ?? ''
-  const destination = dir === 'out' ? (nobleTo.trim() || nobleAddr) : ''
+  const srcAddr = source.address ?? ''
+  const isSourceAddress = (a: string) => { try { const { prefix, data } = fromBech32(a); return prefix === net.prefix && data.length === 20 } catch { return false } }
+  const destination = dir === 'out' ? (sendTo.trim() || srcAddr) : ''
 
   useEffect(() => {
-    if (!nobleAddr) { setNobleBal('0'); return }
-    nobleUsdcBalance(nobleAddr).then(setNobleBal).catch(() => {})
-  }, [nobleAddr, status?.done])
+    if (!srcAddr) { setSrcBal('0'); return }
+    net.balance(srcAddr).then(setSrcBal).catch(() => {})
+  }, [srcAddr, net, status?.done])
   useEffect(() => {
     if (!me) { setTerraBal('0'); return }
-    queryBalance(me, dir === 'in' ? usdc.info : token.info).then(setTerraBal).catch(() => {})
-  }, [me, dir, token, usdc, status?.done])
+    queryBalance(me, dir === 'in' ? base.info : token.info).then(setTerraBal).catch(() => {})
+  }, [me, dir, token, base, status?.done])
 
   useEffect(() => {
     let alive = true
     setQuote(null); setQuoteErr(null)
     if (!debounced || debounced === '0') return
-    if (plainUsdc) {
-      setQuote({ out: debounced, secs: 30, path: dir === 'in' ? 'IBC transfer from Noble to Terra' : 'IBC transfer from Terra to Noble' })
+    if (plain) {
+      setQuote({ out: debounced, secs: 30, path: dir === 'in' ? `IBC transfer from ${net.name} to Terra` : `IBC transfer from Terra to ${net.name}` })
       return
     }
     if (dir === 'in') {
       // One path and no split: the swap on arrival is a single call to the router, run inside the relayer's
       // transaction. Kept to two pools: on 2026-09-14 a two-pool call simulated at 1.02 to 1.10M gas, and the
-      // relayer delivering Skip's hooked packets on this channel spent 1.09M of 2.18M the same day.
-      quoteBest(routePools, usdc, token, debounced, HOME_VENUE, { slip: SLIP, threeHop: false }).then(q => {
+      // relayer delivering Skip's hooked packets from Noble spent 1.09M of 2.18M the same day.
+      quoteBest(pools, base, token, debounced, HOME_VENUE, { slip: SLIP, threeHop: false }).then(q => {
         if (!alive) return
         const plan = q.best ? routerPlan(q.best, SLIP) : null
-        if (!q.best || !plan) { setQuoteErr(`No route from USDC to ${token.label} right now. Bring USDC to Terra and swap it here.`); return }
+        if (!q.best || !plan) { setQuoteErr(`No route from ${net.label} to ${token.label} through up to two pools right now. Bring ${net.label} to Terra and swap it here.`); return }
         setQuote({
           out: plan.expectedOut, secs: 45, plan,
           path: `IBC transfer to Terra, swapped on arrival by Terra Swap's router: ${routeText(q.best)}`,
-          note: `At least ${fromMicro(plan.minOut, token.decimals, 6)} ${token.label} arrives, or the swap does not happen and Noble returns the USDC to you.`,
+          note: `At least ${fromMicro(plan.minOut, token.decimals, 6)} ${token.label} arrives, or the swap does not happen and ${net.name} returns the ${net.label} to you.`,
         })
       }).catch(() => { if (alive) setQuoteErr('Could not price that right now.') })
     } else {
-      quoteBest(routePools, token, usdc, debounced, HOME_VENUE, { slip: SLIP, split: true }).then(q => {
+      quoteBest(pools, token, base, debounced, HOME_VENUE, { slip: SLIP, split: true }).then(q => {
         if (!alive) return
-        if (!q.best) { setQuoteErr(`No route from ${token.label} to USDC right now.`); return }
+        if (!q.best) { setQuoteErr(`No route from ${token.label} to ${net.label} right now.`); return }
         const trade = planTrade(q.split ?? [{ quote: q.best, share: 1 }], SLIP)
-        setQuote({ out: trade.minOut, secs: 60, trade, path: `${tradeText(trade.parts)}, then IBC transfer to Noble`, note: `The swap should give about ${fromMicro(trade.expectedOut, 6)} USDC. At least ${fromMicro(trade.minOut, 6)} is sent to Noble, and anything above that stays in your Terra wallet as USDC.` })
+        setQuote({
+          out: trade.minOut, secs: 60, trade, path: `${tradeText(trade.parts)}, then IBC transfer to ${net.name}`,
+          note: `The swap should give about ${fromMicro(trade.expectedOut, base.decimals)} ${net.label}. At least ${fromMicro(trade.minOut, base.decimals)} is sent to ${net.name}, and anything above that stays in your Terra wallet as ${net.label}.`,
+        })
       }).catch(() => { if (alive) setQuoteErr('Could not price that right now.') })
     }
     return () => { alive = false }
-  }, [dir, tokenId, token, plainUsdc, debounced, routePools, usdc])
+  }, [dir, tokenId, token, plain, debounced, pools, base, net])
 
   const go = async () => {
     setErr(null); setStatus(null)
@@ -1964,106 +2013,108 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
     try {
       if (dir === 'in') {
         if (!me) throw new Error('Connect your wallet first')
-        if (!nobleAddr) throw new Error('Connect your wallet on Noble first')
-        const msgs: EncodeObject[] = plainUsdc
-          ? [ibcTransferMsg({ sender: nobleAddr, receiver: me, channel: NOBLE_TO_TERRA_CHANNEL, denom: NOBLE_USDC_DENOM, amount: micro })]
-          : [arrivalSwapMsg({ nobleAddress: nobleAddr, terraAddress: me, amount: micro, plan: quote.plan! })]
-        const [before, nobleBefore] = await Promise.all([queryBalance(me, token.info), nobleUsdcBalance(nobleAddr)])
-        const res = await nobleMsgs.mutateAsync({ msgs, memo: plainUsdc ? 'USDC to Terra' : `USDC to Terra as ${token.label}` }) as { transactionHash?: string }
+        if (!srcAddr) throw new Error(`Connect your wallet on ${net.name} first`)
+        const msgs: EncodeObject[] = plain
+          ? [ibcTransferMsg({ sender: srcAddr, receiver: me, channel: net.toTerra, denom: net.sourceDenom, amount: micro })]
+          : [arrivalSwapMsg({ sender: srcAddr, terraAddress: me, channel: net.toTerra, sourceDenom: net.sourceDenom, terraDenom: net.terraDenom, amount: micro, plan: quote.plan! })]
+        const [before, srcBefore] = await Promise.all([queryBalance(me, token.info), net.balance(srcAddr)])
+        const res = await sourceMsgs.mutateAsync({ msgs, memo: plain ? `${net.label} to Terra` : `${net.label} to Terra as ${token.label}` }) as { transactionHash?: string }
         const hash = res?.transactionHash ?? ''
-        setStatus({ tx: hash, chain: NOBLE_CHAIN_ID, text: `Sent on Noble. Arriving on Terra as ${token.label}…` })
+        setStatus({ tx: hash, chain: net.chainId, text: `Sent on ${net.name}. Arriving on Terra as ${token.label}…` })
         if (hash) followIbc(before, () => queryBalance(me, token.info), setStatus, {
-          check: cameBack(() => nobleUsdcBalance(nobleAddr), nobleBefore, micro),
-          text: plainUsdc
-            ? 'It was not delivered, and the USDC is back on Noble.'
-            : `The swap into ${token.label} could not deliver its minimum, so the transfer failed and the USDC is back on Noble. Nothing was swapped.`,
+          check: cameBack(() => net.balance(srcAddr), srcBefore, micro),
+          text: plain
+            ? `It was not delivered, and the ${net.label} is back on ${net.name}.`
+            : `The swap into ${token.label} could not deliver its minimum, so the transfer failed and the ${net.label} is back on ${net.name}. Nothing was swapped.`,
         })
       } else {
         if (!me) throw new Error('Connect your wallet first')
-        if (!destination || !isNobleAddress(destination)) throw new Error('Enter a Noble address, or connect your wallet on Noble')
-        const send = plainUsdc ? micro : quote.trade!.minOut
+        if (!destination || !isSourceAddress(destination)) throw new Error(`Enter a ${net.name} address, or connect your wallet on ${net.name}`)
+        const send = plain ? micro : quote.trade!.minOut
         const msgs = [
-          ...(plainUsdc ? [] : tradeMsgs(me, quote.trade!, SLIP)),
-          ibcTransferMsg({ sender: me, receiver: destination, channel: TERRA_TO_NOBLE_CHANNEL, denom: NOBLE_USDC, amount: send }),
+          ...(plain ? [] : tradeMsgs(me, quote.trade!, SLIP)),
+          ibcTransferMsg({ sender: me, receiver: destination, channel: net.fromTerra, denom: net.terraDenom, amount: send }),
         ]
-        const [before, terraBefore] = await Promise.all([nobleUsdcBalance(destination), queryBalance(me, usdc.info)])
-        const res = await terraMsgs.mutateAsync({ msgs, memo: plainUsdc ? 'USDC to Noble' : `${token.label} to Noble as USDC` }) as { transactionHash?: string }
+        const [before, terraBefore] = await Promise.all([net.balance(destination), queryBalance(me, base.info)])
+        const res = await terraMsgs.mutateAsync({ msgs, memo: plain ? `${net.label} to ${net.name}` : `${token.label} to ${net.name} as ${net.label}` }) as { transactionHash?: string }
         const hash = res?.transactionHash ?? ''
-        setStatus({ tx: hash, chain: TERRA_CHAIN_ID, text: 'Sent on Terra. Arriving on Noble…' })
-        // Only a plain send can be recognised coming back: after a swap the Terra USDC balance moves for other reasons too.
-        if (hash) followIbc(before, () => nobleUsdcBalance(destination), setStatus, plainUsdc
-          ? { check: cameBack(() => queryBalance(me, usdc.info), terraBefore, send), text: 'It was not delivered, and the USDC is back in your Terra wallet.' }
+        setStatus({ tx: hash, chain: TERRA_CHAIN_ID, text: `Sent on Terra. Arriving on ${net.name}…` })
+        // Only a plain send can be recognised coming back: after a swap the Terra balance moves for other reasons too.
+        if (hash) followIbc(before, () => net.balance(destination), setStatus, plain
+          ? { check: cameBack(() => queryBalance(me, base.info), terraBefore, send), text: `It was not delivered, and the ${net.label} is back in your Terra wallet.` }
           : undefined)
       }
       setAmount('')
       onDone()
     } catch (e) {
       const text = String((e as Error)?.message ?? e)
-      setErr(dir === 'in' && /retrieve account|account .*not found|does not exist/i.test(text) ? 'This wallet has no account on Noble yet. It needs some USDC there first.' : humanizeTxError(e))
+      setErr(dir === 'in' && /retrieve account|account .*not found|does not exist/i.test(text) ? `This wallet has no account on ${net.name} yet. It needs some ${net.label} there first.` : humanizeTxError(e))
     } finally { setBusy(false) }
   }
 
-  const needNoble = dir === 'in' || !nobleTo.trim()
-  const fromBal = dir === 'in' ? nobleBal : terraBal
-  const fromDecimals = dir === 'in' ? 6 : token.decimals
+  const needSource = dir === 'in' || !sendTo.trim()
+  const fromBal = dir === 'in' ? srcBal : terraBal
+  const fromDecimals = dir === 'in' ? base.decimals : token.decimals
   const insufficient = !!micro && BigInt(micro) > BigInt(fromBal || '0')
-  const canGo = !!me && !!quote && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!nobleAddr : !!destination && isNobleAddress(destination))
+  const canGo = !!me && !!quote && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!srcAddr : !!destination && isSourceAddress(destination))
+  const turn = (d: 'in' | 'out') => { setDir(d); setAmount(''); setStatus(null); setErr(null) }
+  const terraIcon = <img src='/img/terra-globe.svg' alt='' width={46} height={46} />
 
   return (
     <Card>
       <Section title='Transfer' />
       {switcher}
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `${SPACE['2']}px 0 ${SPACE['3']}px` }}>
-        Move USDC between Noble and Terra in one signature. Arriving on Terra it can land as USDC or already swapped into another token; leaving Terra, any token here is swapped to USDC on the way out.
+        Move {net.label} between {net.name} and Terra in one signature. Arriving on Terra it can land as {net.label} or already swapped into another token; leaving Terra, any token here is swapped to {net.label} on the way out.
       </p>
       <div style={{ margin: `0 0 ${SPACE['3']}px` }}>
         <ElectricPulse
           caption='IBC'
           active={busy || (!!status && !status.done && !status.failed)}
-          onSwap={() => { setDir(d => (d === 'in' ? 'out' : 'in')); setAmount(''); setStatus(null); setErr(null) }}
-          left={dir === 'in' ? <TokenIcon label='USDC' size={40} /> : <img src='/img/terra-globe.svg' alt='' width={46} height={46} />}
-          right={dir === 'in' ? <img src='/img/terra-globe.svg' alt='' width={46} height={46} /> : <TokenIcon label='USDC' size={40} />}
-          leftLabel={dir === 'in' ? 'From · Noble' : 'From · Terra'}
-          rightLabel={dir === 'in' ? 'To · Terra' : 'To · Noble'}
+          onSwap={() => turn(dir === 'in' ? 'out' : 'in')}
+          left={dir === 'in' ? <TokenIcon label={net.label} size={40} /> : terraIcon}
+          right={dir === 'in' ? terraIcon : <TokenIcon label={net.label} size={40} />}
+          leftLabel={dir === 'in' ? `From · ${net.name}` : 'From · Terra'}
+          rightLabel={dir === 'in' ? 'To · Terra' : `To · ${net.name}`}
         />
       </div>
       <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
         {(['in', 'out'] as const).map(d => (
-          <button key={d} type='button' onClick={() => { setDir(d); setAmount(''); setStatus(null); setErr(null) }}
+          <button key={d} type='button' onClick={() => turn(d)}
             style={{ ...ghostBtn, padding: '4px 12px', color: dir === d ? C.goldLit : C.textMuted, borderColor: dir === d ? C.goldCore : C.divider }}>
-            {d === 'in' ? 'Noble → Terra' : 'Terra → Noble'}
+            {d === 'in' ? `${net.name} → Terra` : `Terra → ${net.name}`}
           </button>
         ))}
       </div>
 
-      <label style={label}>{dir === 'in' ? 'From Noble' : 'From Terra'}</label>
+      <label style={label}>{dir === 'in' ? `From ${net.name}` : 'From Terra'}</label>
       <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['2'] }}>
         <input style={field} type='number' min='0' step='any' placeholder='0.0' value={amount} onChange={e => setAmount(e.target.value)} />
         {dir === 'in'
-          ? <div style={{ ...select, display: 'flex', alignItems: 'center', gap: 8, color: C.textPrimary }}><TokenIcon label='USDC' size={20} /><b>USDC</b></div>
+          ? <div style={{ ...select, display: 'flex', alignItems: 'center', gap: 8, color: C.textPrimary }}><TokenIcon label={net.label} size={20} /><b>{net.label}</b></div>
           : <TokenSelect value={tokenId} onChange={setTokenId} options={outOptions} />}
       </div>
       <div style={{ ...rowStyle, marginBottom: SPACE['3'] }}>
-        <span>{dir === 'in' ? (nobleAddr ? `On Noble: ${fromMicro(nobleBal, 6)} USDC` : 'Noble not connected') : `Balance ${fromMicro(terraBal, fromDecimals)} ${token.label}`}</span>
-        {Number(fromBal) > 0 && (dir === 'out' || nobleAddr) && (
+        <span>{dir === 'in' ? (srcAddr ? `On ${net.name}: ${fromMicro(srcBal, base.decimals)} ${net.label}` : `${net.name} not connected`) : `Balance ${fromMicro(terraBal, fromDecimals)} ${token.label}`}</span>
+        {Number(fromBal) > 0 && (dir === 'out' || srcAddr) && (
           <button type='button' style={{ ...ghostBtn, padding: '2px 8px' }} onClick={() => {
-            // Noble charges its network fee in USDC, so leave a little behind when moving all of it.
-            const keep = dir === 'in' ? BigInt(50_000) : BigInt(0)
+            // The source chain takes its network fee in the same token, so leave a little behind when moving all of it.
+            const keep = dir === 'in' ? net.feeReserve : BigInt(0)
             const max = BigInt(fromBal) > keep ? BigInt(fromBal) - keep : BigInt(0)
             setAmount(fromMicro(max.toString(), fromDecimals, 6).replace(/,/g, ''))
           }}>max</button>
         )}
       </div>
 
-      <label style={label}>{dir === 'in' ? 'Arrive on Terra as' : 'To this Noble address'}</label>
+      <label style={label}>{dir === 'in' ? 'Arrive on Terra as' : `To this ${net.name} address`}</label>
       {dir === 'in'
         ? <div style={{ display: 'flex', marginBottom: SPACE['3'] }}><TokenSelect value={tokenId} onChange={setTokenId} options={inOptions} style={{ flex: 1 }} /></div>
         : (
           <div style={{ marginBottom: SPACE['3'] }}>
-            <input style={{ ...field, width: '100%', boxSizing: 'border-box' }} placeholder={nobleAddr || 'noble1…'} value={nobleTo} onChange={e => setNobleTo(e.target.value)} spellCheck={false} autoComplete='off' />
-            {nobleTo.trim() && !isNobleAddress(nobleTo.trim()) && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginTop: 4 }}>That is not a Noble address.</div>}
-            {nobleTo.trim() && isNobleAddress(nobleTo.trim()) && nobleTo.trim() !== nobleAddr && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Sending to someone else&apos;s address, or an exchange? Check that it accepts USDC on Noble.</div>}
-            {!nobleTo.trim() && nobleAddr && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Your wallet&apos;s Noble address.</div>}
+            <input style={{ ...field, width: '100%', boxSizing: 'border-box' }} placeholder={srcAddr || `${net.prefix}1…`} value={sendTo} onChange={e => setSendTo(e.target.value)} spellCheck={false} autoComplete='off' />
+            {sendTo.trim() && !isSourceAddress(sendTo.trim()) && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginTop: 4 }}>That is not a {net.name} address.</div>}
+            {sendTo.trim() && isSourceAddress(sendTo.trim()) && sendTo.trim() !== srcAddr && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Sending to someone else&apos;s address, or an exchange? Check that it accepts {net.label} on {net.name}.</div>}
+            {!sendTo.trim() && srcAddr && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Your wallet&apos;s {net.name} address.</div>}
           </div>
         )}
 
@@ -2073,7 +2124,7 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
             ? <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6 }}>{quoteErr}</div>
             : quote && (
               <>
-                <Row k={dir === 'in' ? 'You receive on Terra' : plainUsdc ? 'You receive on Noble' : 'At least, on Noble'} v={`${fromMicro(quote.out, dir === 'in' ? token.decimals : 6, 6)} ${dir === 'in' ? token.label : 'USDC'}`} hi />
+                <Row k={dir === 'in' ? 'You receive on Terra' : plain ? `You receive on ${net.name}` : `At least, on ${net.name}`} v={`${fromMicro(quote.out, dir === 'in' ? token.decimals : base.decimals, 6)} ${dir === 'in' ? token.label : net.label}`} hi />
                 <Row k='How' v={quote.path} />
                 <Row k='Time' v={`about ${quote.secs < 90 ? `${quote.secs} seconds` : `${Math.round(quote.secs / 60)} minutes`}`} />
                 {quote.note && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>{quote.note}</div>}
@@ -2086,20 +2137,20 @@ function NobleTransfer({ routePools, onDone, switcher }: { routePools: PoolView[
       {status && (
         <div style={{ fontSize: TEXT.xs.size, color: status.failed ? C.alert : status.done ? C.success : C.textSecondary, marginBottom: SPACE['2'], lineHeight: 1.6 }}>
           {status.done ? '✓ ' : ''}{status.text}{' '}
-          {status.tx && <a href={status.chain === NOBLE_CHAIN_ID ? nobleTxUrl(status.tx) : finderTx(status.tx)} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>View tx →</a>}
+          {status.tx && <a href={status.chain === net.chainId ? net.txUrl(status.tx) : finderTx(status.tx)} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>View tx →</a>}
         </div>
       )}
 
       {!me
         ? <div className='terra-connect-cta'><WalletButton /></div>
-        : needNoble && !nobleAddr
-          ? <button type='button' style={primaryBtn} onClick={() => { noble.connect().catch(() => {}) }}>Connect your wallet on Noble</button>
+        : needSource && !srcAddr
+          ? <button type='button' style={primaryBtn} onClick={() => { source.connect().catch(() => {}) }}>Connect your wallet on {net.name}</button>
           : <button type='button' style={{ ...primaryBtn, opacity: canGo ? 1 : 0.5 }} disabled={!canGo} onClick={go}>
-              {busy ? 'Confirm in wallet…' : insufficient ? `Not enough ${dir === 'in' ? 'USDC on Noble' : token.label}` : dir === 'in' ? 'Move to Terra' : 'Move to Noble'}
+              {busy ? 'Confirm in wallet…' : insufficient ? `Not enough ${dir === 'in' ? `${net.label} on ${net.name}` : token.label}` : dir === 'in' ? 'Move to Terra' : `Move to ${net.name}`}
             </button>}
 
       <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.6, marginTop: SPACE['3'] }}>
-        Plain transfers are ordinary IBC. A swap on arrival travels in the same transfer: Terra&apos;s IBC hooks hand the USDC to Terra Swap&apos;s router (no owner, no fee), which swaps it through pools listed here and sends the result to your Terra address. If less than the minimum would arrive, the transfer fails and Noble returns the USDC. This route carries USDC issued on Noble; USDC.inj from Injective has its own switch above. Noble charges its network fee in USDC. This page adds no fee.
+        Plain transfers are ordinary IBC. A swap on arrival travels in the same transfer: Terra&apos;s IBC hooks hand the {net.label} to Terra Swap&apos;s router (no owner, no fee), which swaps it through pools listed here and sends the result to your Terra address. If less than the minimum would arrive, the transfer fails and {net.name} returns the {net.label}. {net.footnote} This page adds no fee.
       </div>
     </Card>
   )
@@ -2138,12 +2189,12 @@ function followIbc(before: string, readDest: () => Promise<string>, setStatus: (
 
 const injectiveTxUrl = (hash: string) => `https://www.mintscan.io/injective/tx/${hash}`
 
-/** Which dollar to move: USDC on Noble, or USDC.inj on Injective. Two separate tokens, never swapped for each other here. */
+/** Which token to move: USDC on Noble, ATOM on the Cosmos Hub, or USDC.inj on Injective. The two dollars are separate tokens, never swapped for each other here. */
 function TransferPanel({ routePools, onDone }: { routePools: PoolView[]; onDone: () => void }) {
-  const [net, setNet] = useState<'noble' | 'injective'>('noble')
+  const [net, setNet] = useState<'noble' | 'cosmoshub' | 'injective'>('noble')
   const switcher = (
-    <div role='tablist' aria-label='Which USDC to move' style={{ display: 'flex', flexWrap: 'wrap', gap: SPACE['2'], marginTop: SPACE['2'] }}>
-      {([['noble', 'USDC · Noble'], ['injective', 'USDC.inj · Injective']] as const).map(([k, text]) => (
+    <div role='tablist' aria-label='Which token to move' style={{ display: 'flex', flexWrap: 'wrap', gap: SPACE['2'], marginTop: SPACE['2'] }}>
+      {([['noble', 'USDC · Noble'], ['cosmoshub', 'ATOM · Cosmos Hub'], ['injective', 'USDC.inj · Injective']] as const).map(([k, text]) => (
         <button key={k} type='button' role='tab' aria-selected={net === k} onClick={() => setNet(k)}
           style={{ ...ghostBtn, padding: '4px 12px', color: net === k ? C.goldLit : C.textMuted, borderColor: net === k ? C.goldCore : C.divider }}>
           {text}
@@ -2151,18 +2202,20 @@ function TransferPanel({ routePools, onDone }: { routePools: PoolView[]; onDone:
       ))}
     </div>
   )
-  return net === 'noble'
-    ? <NobleTransfer routePools={routePools} onDone={onDone} switcher={switcher} />
-    : <InjectiveTransfer onDone={onDone} switcher={switcher} />
+  return net === 'injective'
+    ? <InjectiveTransfer routePools={routePools} onDone={onDone} switcher={switcher} />
+    : <CosmosTransfer key={net} net={SOURCE_CHAINS[net]} routePools={routePools} onDone={onDone} switcher={switcher} />
 }
 
 /**
- * USDC.inj between Injective and Terra: ordinary IBC both ways, nothing
- * swapped. It leaves Injective as Circle's USDC and arrives on Terra as
- * USDC.inj, a token of its own that this site never exchanges for, or counts
- * as, USDC from Noble.
+ * USDC.inj between Injective and Terra: ordinary IBC both ways. It leaves
+ * Injective as Circle's USDC and arrives on Terra as USDC.inj, a token of its
+ * own that this site never exchanges for, or counts as, USDC from Noble.
+ * Arriving, it can also be swapped into another token by Terra Swap's router
+ * through Terra's IBC hooks, never into USDC from Noble and never through a
+ * pool holding both.
  */
-function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher: JSX.Element }) {
+function InjectiveTransfer({ routePools, onDone, switcher }: { routePools: PoolView[]; onDone: () => void; switcher: JSX.Element }) {
   const me = useMyAddress()
   const injective = useChain('injective')
   const injectiveMsgs = useInjectiveMsgs()
@@ -2182,6 +2235,35 @@ function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher:
   const typed = injTo.trim()
   const typedAddr = typed ? toInjectiveAddress(typed) : null
   const destination = typed ? typedAddr ?? '' : injAddr
+
+  // Swap on arrival: through any pool that does not hold USDC from Noble, into anything but USDC from Noble.
+  const SLIP = 0.01
+  const [targetId, setTargetId] = useState(USDC_INJ_DENOM)
+  const [quote, setQuote] = useState<{ plan: RoutePlan; path: string } | null>(null)
+  const [quoteErr, setQuoteErr] = useState<string | null>(null)
+  const pools = useMemo(() => routePools.filter(p => !p.tokens.some(t => assetId(t.info) === NOBLE_USDC)), [routePools])
+  const arriveOptions = useMemo(() => {
+    const m = new Map<string, KnownToken>()
+    for (const p of pools) for (const t of p.tokens) m.set(assetId(t.info), t)
+    return TERRA_SWAP_ROUTER ? [token, ...reachable(pools, token, Array.from(m.values()))] : [token]
+  }, [pools, token])
+  useEffect(() => { if (!arriveOptions.some(t => assetId(t.info) === targetId)) setTargetId(USDC_INJ_DENOM) }, [arriveOptions, targetId])
+  const target = arriveOptions.find(t => assetId(t.info) === targetId) ?? token
+  const plain = dir === 'out' || targetId === USDC_INJ_DENOM
+  const debounced = useDebounced(micro, 400)
+  useEffect(() => {
+    let alive = true
+    setQuote(null); setQuoteErr(null)
+    if (plain || !debounced || debounced === '0') return
+    // One path through up to two pools, for the same reason as from Noble: it runs inside the relayer's transaction.
+    quoteBest(pools, token, target, debounced, HOME_VENUE, { slip: SLIP, threeHop: false }).then(q => {
+      if (!alive) return
+      const plan = q.best ? routerPlan(q.best, SLIP) : null
+      if (!q.best || !plan) { setQuoteErr(`No route from USDC.inj to ${target.label} through up to two pools right now. Bring USDC.inj to Terra and swap it here.`); return }
+      setQuote({ plan, path: `IBC transfer to Terra, swapped on arrival by Terra Swap's router: ${routeText(q.best)}` })
+    }).catch(() => { if (alive) setQuoteErr('Could not price that right now.') })
+    return () => { alive = false }
+  }, [plain, debounced, pools, token, target])
 
   useEffect(() => {
     if (!injAddr) { setInjBal('0'); setInjGas(null); return }
@@ -2204,13 +2286,19 @@ function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher:
       if (!me) throw new Error('Connect your wallet first')
       if (dir === 'in') {
         if (!injAddr) throw new Error('Connect your wallet on Injective first')
-        const before = await queryBalance(me, token.info)
+        if (!plain && !quote) throw new Error('Wait for the price, then try again')
+        const [before, injBefore] = await Promise.all([queryBalance(me, target.info), injectiveBalance(injAddr, USDC_INJ_ON_INJECTIVE)])
         const hash = await injectiveMsgs.mutateAsync({
-          msgs: [ibcTransferMsg({ sender: injAddr, receiver: me, channel: INJECTIVE_TO_TERRA_CHANNEL, denom: USDC_INJ_ON_INJECTIVE, amount: micro })],
-          memo: 'USDC.inj to Terra',
+          msgs: [plain
+            ? ibcTransferMsg({ sender: injAddr, receiver: me, channel: INJECTIVE_TO_TERRA_CHANNEL, denom: USDC_INJ_ON_INJECTIVE, amount: micro })
+            : arrivalSwapMsg({ sender: injAddr, terraAddress: me, channel: INJECTIVE_TO_TERRA_CHANNEL, sourceDenom: USDC_INJ_ON_INJECTIVE, terraDenom: USDC_INJ_DENOM, amount: micro, plan: quote!.plan })],
+          memo: plain ? 'USDC.inj to Terra' : `USDC.inj to Terra as ${target.label}`,
         })
-        setStatus({ tx: hash, chain: INJECTIVE_CHAIN_ID, text: 'Sent on Injective. Arriving on Terra as USDC.inj…' })
-        follow(hash, before, () => queryBalance(me, token.info))
+        setStatus({ tx: hash, chain: INJECTIVE_CHAIN_ID, text: `Sent on Injective. Arriving on Terra as ${target.label}…` })
+        if (hash) followIbc(before, () => queryBalance(me, target.info), setStatus, plain ? undefined : {
+          check: cameBack(() => injectiveBalance(injAddr, USDC_INJ_ON_INJECTIVE), injBefore, micro),
+          text: `The swap into ${target.label} could not deliver its minimum, so the transfer failed and the USDC.inj is back on Injective. Nothing was swapped.`,
+        })
       } else {
         if (!destination) throw new Error('Enter an Injective address (inj1… or 0x…), or connect your wallet on Injective')
         const before = await injectiveBalance(destination, USDC_INJ_ON_INJECTIVE).catch(() => '0')
@@ -2233,7 +2321,7 @@ function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher:
   const insufficient = !!micro && BigInt(micro) > BigInt(fromBal || '0')
   const noGas = dir === 'in' && !!injAddr && injGas === '0'
   const needInjective = dir === 'in' || !typed
-  const canGo = !!me && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!injAddr && !noGas : !!destination)
+  const canGo = !!me && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!injAddr && !noGas && (plain || (!!quote && quote.plan.legs[0]?.offerAmount === micro)) : !!destination)
   const injIcon = <TokenIcon label='INJ' size={40} />
   const terraIcon = <img src='/img/terra-globe.svg' alt='' width={46} height={46} />
 
@@ -2242,7 +2330,7 @@ function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher:
       <Section title='Transfer' />
       {switcher}
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `${SPACE['2']}px 0 ${SPACE['3']}px` }}>
-        Move USDC.inj, Circle&apos;s USDC as issued on Injective, between Injective and Terra in one signature. It is ordinary IBC both ways and nothing is swapped: on Terra it stays USDC.inj, a token of its own with its own pools.
+        Move USDC.inj, Circle&apos;s USDC as issued on Injective, between Injective and Terra in one signature. On Terra it is USDC.inj, a token of its own with its own pools; arriving, it can stay USDC.inj or be swapped into another token, never into USDC from Noble.
       </p>
       <div style={{ margin: `0 0 ${SPACE['3']}px` }}>
         <ElectricPulse
@@ -2277,6 +2365,12 @@ function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher:
         )}
       </div>
 
+      {dir === 'in' && (
+        <>
+          <label style={label}>Arrive on Terra as</label>
+          <div style={{ display: 'flex', marginBottom: SPACE['3'] }}><TokenSelect value={targetId} onChange={setTargetId} options={arriveOptions} style={{ flex: 1 }} /></div>
+        </>
+      )}
       {dir === 'out' && (
         <>
           <label style={label}>To this Injective address</label>
@@ -2292,9 +2386,21 @@ function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher:
 
       {!!micro && micro !== '0' && (
         <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: 'rgba(0,0,0,0.22)', borderRadius: 10, marginBottom: SPACE['3'] }}>
-          <Row k={dir === 'in' ? 'You receive on Terra' : 'You receive on Injective'} v={`${fromMicro(micro, 6, 6)} USDC.inj`} hi />
-          <Row k='How' v={dir === 'in' ? 'IBC transfer from Injective to Terra' : 'IBC transfer from Terra to Injective'} />
-          <Row k='Time' v='about 30 seconds' />
+          {plain
+            ? <>
+                <Row k={dir === 'in' ? 'You receive on Terra' : 'You receive on Injective'} v={`${fromMicro(micro, 6, 6)} USDC.inj`} hi />
+                <Row k='How' v={dir === 'in' ? 'IBC transfer from Injective to Terra' : 'IBC transfer from Terra to Injective'} />
+              </>
+            : quoteErr
+              ? <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary, lineHeight: 1.6 }}>{quoteErr}</div>
+              : quote
+                ? <>
+                    <Row k='You receive on Terra' v={`${fromMicro(quote.plan.expectedOut, target.decimals, 6)} ${target.label}`} hi />
+                    <Row k='How' v={quote.path} />
+                    <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>At least {fromMicro(quote.plan.minOut, target.decimals, 6)} {target.label} arrives, or the swap does not happen and Injective returns the USDC.inj to you.</div>
+                  </>
+                : <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Pricing the swap on arrival…</div>}
+          <Row k='Time' v={plain ? 'about 30 seconds' : 'about 45 seconds'} />
           <Row k='Network fee' v={dir === 'in' ? 'a little INJ, on Injective' : 'a little LUNA, on Terra'} />
         </div>
       )}
@@ -2317,7 +2423,7 @@ function InjectiveTransfer({ onDone, switcher }: { onDone: () => void; switcher:
             </button>}
 
       <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.6, marginTop: SPACE['3'] }}>
-        Ordinary IBC over the channel between Injective and Terra, in both directions. Injective charges its network fee in INJ. This page adds no fee.
+        Ordinary IBC over the channel between Injective and Terra, in both directions. A swap on arrival travels in the same transfer: Terra&apos;s IBC hooks hand the USDC.inj to Terra Swap&apos;s router (no owner, no fee), which swaps it and sends the result to your Terra address; if less than the minimum would arrive, the transfer fails and Injective returns the USDC.inj. Injective charges its network fee in INJ. This page adds no fee.
       </div>
     </Card>
   )
@@ -2466,7 +2572,7 @@ function PositionsPanel({ onDone, flows }: { onDone: () => void; flows?: Record<
                 {pos.usd != null && <span style={{ marginLeft: 'auto', color: C.goldLit, fontWeight: 700, fontSize: TEXT.sm.size }}>{fmtUsd(pos.usd)}</span>}
               </div>
               <div style={rowStyle}><span>Claim on</span><span style={{ color: C.textSecondary }}>{fmtAmount(pos.amounts[0])} {t0.label} + {fmtAmount(pos.amounts[1])} {t1.label}</span></div>
-              <PutInRow flow={flows?.[`${me}|${key}`]} tokens={pool.tokens} amounts={pos.amounts} />
+              <PutInRow flow={data?.flows?.[`${me}|${key}`] ?? flows?.[`${me}|${key}`]} tokens={pool.tokens} amounts={pos.amounts} />
               <div style={rowStyle}>
                 <span>LP</span>
                 <span style={{ color: C.textSecondary }}>{fromMicro(pos.walletLp, 6)} in wallet{staked ? ` · ${fromMicro(pos.stakedLp, 6)} staked in Astroport Incentives` : ''}</span>
@@ -2504,6 +2610,113 @@ function PositionsPanel({ onDone, flows }: { onDone: () => void; flows?: Record<
       </div>
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginTop: SPACE['2'] }}>{err}</div>}
       {ok && <div style={{ fontSize: TEXT.xs.size, color: C.success, marginTop: SPACE['2'] }}>✓ {ok}</div>}
+    </Card>
+  )
+}
+
+// ─── History: what a wallet did, read back from the chain ───────
+
+const KIND_TEXT: Record<HistoryRow['kind'], string> = {
+  swap: 'Swap', zap: 'Zap', 'add liquidity': 'Added liquidity', 'remove liquidity': 'Removed liquidity',
+  stake: 'Staked LP', unstake: 'Unstaked LP', claim: 'Claimed rewards', 'transfer out': 'Sent over IBC',
+  'transfer in': 'Arrived over IBC', 'arrived swapped': 'Arrived swapped', 'create pool': 'Opened a pool',
+  'liquid staking': 'Liquid staking', other: 'Other',
+}
+
+/**
+ * The connected wallet's recent transactions on Terra, read back from the
+ * chain (lib/history): what left, what arrived and the network fee, and for a
+ * swap signed here, what it was quoted beside what actually arrived.
+ */
+function HistoryPanel({ pools }: { pools: PoolView[] }) {
+  const me = useMyAddress()
+  const [data, setData] = useState<HistoryResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [reload, setReload] = useState(0)
+  useEffect(() => {
+    if (!me) { setData(null); return }
+    let alive = true
+    setLoading(true); setFailed(false)
+    fetch(`/api/history?address=${me}${reload ? `&_=${reload}` : ''}`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then((j: HistoryResponse | null) => { if (!alive) return; if (j?.rows) setData(j); else setFailed(true) })
+      .catch(() => { if (alive) setFailed(true) })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [me, reload])
+  const lpNames = useMemo(() => new Map(pools.map(p => [p.liquidity_token, `${p.label} LP`])), [pools])
+  const tokenOf = useCallback((id: string) => {
+    const lp = lpNames.get(id)
+    if (lp) return { label: lp, decimals: 6 }
+    const t = tokenFor(id.startsWith('terra1') ? { token: { contract_addr: id } } : { native_token: { denom: id } })
+    return { label: t.label, decimals: t.decimals }
+  }, [lpNames])
+  const show = (m: Moved) => { const t = tokenOf(m.id); return `${fromMicro(m.amount, t.decimals, 6)} ${t.label}` }
+
+  if (!me) {
+    return (
+      <Card>
+        <Section title='History' />
+        <p style={{ fontSize: TEXT.sm.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px` }}>
+          Connect a wallet to see its swaps, liquidity and transfers on Terra, read back from the chain, with what each swap here was quoted beside what arrived.
+        </p>
+        <div className='terra-connect-cta'><WalletButton /></div>
+      </Card>
+    )
+  }
+
+  const rows = data?.rows ?? []
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: SPACE['2'] }}>
+        <Section title='History' />
+        <button type='button' onClick={() => setReload(Date.now())} style={{ ...ghostBtn, marginLeft: 'auto', padding: '2px 8px' }} disabled={loading}>{loading ? 'reading…' : 'refresh'}</button>
+      </div>
+      <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px` }}>
+        This wallet&apos;s recent transactions on Terra, read back from the chain: what left, what arrived, and the network fee. A swap signed here carries its quote in the memo, so what it was quoted sits beside what actually arrived.
+      </p>
+      {loading && !data && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Reading the chain…</div>}
+      {failed && !data && <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary }}>The chain&apos;s history endpoint did not answer. Try refresh in a moment.</div>}
+      {data && rows.length === 0 && <div style={{ fontSize: TEXT.sm.size, color: C.textMuted }}>No transactions found for this wallet.</div>}
+      <div style={{ display: 'grid', gap: SPACE['2'] }}>
+        {rows.map(row => {
+          const q = row.quote
+          const got = q ? row.in.find(m => tokenOf(m.id).label === q.label) : undefined
+          const gotNum = got ? Number(got.amount) / 10 ** tokenOf(got.id).decimals : null
+          const vsQuote = q && gotNum != null && q.amount > 0 ? (gotNum / q.amount - 1) * 100 : null
+          return (
+            <div key={row.hash} style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, borderRadius: 10, border: `1px solid ${row.ok ? C.divider : 'rgba(224,74,90,0.35)'}`, display: 'grid', gap: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: SPACE['2'], flexWrap: 'wrap' }}>
+                <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>{KIND_TEXT[row.kind]}</b>
+                {row.chain && <span style={{ fontSize: TEXT.caption.size, letterSpacing: '0.1em', textTransform: 'uppercase', color: C.textMuted }}>{row.kind === 'transfer out' ? `to ${row.chain}` : `from ${row.chain}`}</span>}
+                <span style={{ marginLeft: 'auto', fontSize: TEXT.xs.size, color: C.textWhisper }}>{new Date(row.time).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+              </div>
+              {!row.ok && <div style={{ fontSize: TEXT.xs.size, color: C.alert }}>Failed on chain: nothing moved but the network fee.</div>}
+              {row.out.length > 0 && <div style={rowStyle}><span>Left</span><span style={{ color: C.textSecondary }}>{row.out.map(show).join(' + ')}</span></div>}
+              {row.in.length > 0 && <div style={rowStyle}><span>Arrived</span><span style={{ color: C.textSecondary }}>{row.in.map(show).join(' + ')}</span></div>}
+              {q && (
+                <div style={rowStyle}>
+                  <span>Quoted</span>
+                  <span style={{ color: C.textSecondary }}>
+                    {fmtAmount(q.amount)} {q.label}
+                    {vsQuote != null && <> · arrived <span style={{ color: vsQuote >= -0.05 ? C.success : C.emberLit }}>{vsQuote >= 0 ? '+' : ''}{vsQuote.toFixed(2)}%</span></>}
+                  </span>
+                </div>
+              )}
+              {q?.gainPct != null && q.gainPct >= 0.005 && <div style={rowStyle}><span>Routing added</span><span style={{ color: C.success }}>+{q.gainPct.toFixed(2)}% over the best path through up to two pools</span></div>}
+              {row.minimum && <div style={rowStyle}><span>Least it allowed</span><span style={{ color: C.textSecondary }}>{show(row.minimum)}</span></div>}
+              <div style={rowStyle}>
+                <span>Network fee</span>
+                <span style={{ display: 'inline-flex', gap: 10 }}>
+                  <span style={{ color: C.textSecondary }}>{row.feeUluna !== '0' ? `${fromMicro(row.feeUluna, 6, 4)} LUNA` : 'paid by the relayer'}</span>
+                  <a href={finderTx(row.hash)} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>tx ↗</a>
+                </span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </Card>
   )
 }
@@ -2592,6 +2805,48 @@ function LoopPanel({ plan, pools, onClose, onOneSided, onDone }: {
 }
 
 // ─── Pools tab ──────────────────────────────────────────────────
+
+/**
+ * What a pool paid its liquidity providers in the last 7 and 30 days, from its
+ * own swap events (/api/pool-fees), at today's prices. History, never a rate:
+ * nothing here says what a pool will pay. Asked for once the row comes near
+ * the screen, since a busy pool takes a moment to read.
+ */
+function PoolFees({ pair }: { pair: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [near, setNear] = useState(false)
+  const [f, setF] = useState<PoolFeesResponse | null>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || near) return
+    if (typeof IntersectionObserver === 'undefined') { setNear(true); return }
+    const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { setNear(true); io.disconnect() } }, { rootMargin: '300px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [near])
+  useEffect(() => {
+    if (!near) return
+    let alive = true
+    fetch(`/api/pool-fees?pair=${pair}`).then(r => (r.ok ? r.json() : null)).then((j: PoolFeesResponse | null) => { if (alive && j) setF(j) }).catch(() => {})
+    return () => { alive = false }
+  }, [near, pair])
+  // Fees paid in a token without a reference price are counted, not priced.
+  const usd = (v: number | null, swaps: number) => (v == null ? `${swaps} swap${swaps === 1 ? '' : 's'}` : fmtUsd(v))
+  // A busy pool's scan stops early; then the longer figure covers the days it reached.
+  const days = f && !f.complete && f.since ? Math.max(1, Math.round((f.at - Date.parse(f.since)) / 86_400_000)) : 30
+  return (
+    <div ref={ref} style={f ? { ...rowStyle, marginTop: 2 } : { minHeight: 1 }}>
+      {f && (
+        <>
+          <span title="From the pool's own swap events, less what goes to Astroport's maker. At today's prices.">Fees to LPs</span>
+          <span style={{ color: f.day30.swaps ? C.textSecondary : C.textWhisper }}>
+            {!f.day30.swaps ? `no swaps in ${days} days` : days < 7 ? `last ${days} day${days === 1 ? '' : 's'} ${usd(f.day30.usd, f.day30.swaps)}` : `7 days ${usd(f.day7.usd, f.day7.swaps)} · ${days} days ${usd(f.day30.usd, f.day30.swaps)}`}
+          </span>
+        </>
+      )}
+    </div>
+  )
+}
 
 /** A tiny price line for the deepest pools. Same data as the chart, 22px tall. */
 function Spark({ pair }: { pair: string }) {
@@ -2900,6 +3155,8 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
           </div>
         )
       })()}
+
+      {!p.empty && (p.tvlUsd ?? 0) >= 10 && <PoolFees pair={p.contract_addr} />}
 
       {/* An LP balance is a claim on a fraction of the pool. Say which fraction,
           of what, and what it is worth. The raw token count said none of that. */}
@@ -4338,7 +4595,7 @@ function SwapPageInner() {
           {data?.live && (
             <>
               <div className='terra-tabs' style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
-                {tabBtn('swap', 'Swap')}{tabBtn('pools', `Pools · ${allPools.length}`)}{tabBtn('positions', 'Positions')}{tabBtn('transfer', 'Transfer')}
+                {tabBtn('swap', 'Swap')}{tabBtn('pools', `Pools · ${allPools.length}`)}{tabBtn('positions', 'Positions')}{tabBtn('history', 'History')}{tabBtn('transfer', 'Transfer')}
                 {tabBtn('create', 'Open a pool')}{!LITE && tabBtn('board', `Board${board?.rows.length ? ` · ${board.rows.length}` : ''}`)}
                 {/* Terra Predict lives next door, same domain. Not part of Astroport mode. */}
                 {!LITE && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, marginLeft: 'auto', whiteSpace: 'nowrap' }}>Predict ↗</Link>}
@@ -4378,6 +4635,7 @@ function SwapPageInner() {
                     </div>
               )}
               {tab === 'positions' && <PositionsPanel onDone={refresh} flows={me ? board?.flows : undefined} />}
+              {tab === 'history' && <HistoryPanel pools={allPools} />}
               {tab === 'transfer' && <TransferPanel routePools={routePoolsAll} onDone={refresh} />}
               {tab === 'create' && <CreatePanel pools={allPools}marketPx={marketPx} onDone={refresh} onCreated={() => setTab('pools')} onParty={setParty} />}
               {tab === 'board' && <Leaderboard board={board} me={me} onGoSwap={() => setTab('swap')} height={data.height} crystal={crystal} spotlight={spotlight} />}

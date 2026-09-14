@@ -18,8 +18,7 @@ import type { EncodeObject } from '@cosmjs/proto-signing'
 import { MsgExecuteContract } from 'cosmjs-types/cosmwasm/wasm/v1/tx'
 import { MsgTransfer } from 'cosmjs-types/ibc/applications/transfer/v1/tx'
 import { toUtf8 } from '@cosmjs/encoding'
-import { ASTRO_ROUTER, NOBLE_USDC, TERRA_SWAP_ROUTER, VENUE_FACTORY, type Asset, type AssetInfo } from 'lib/dex'
-import { NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM } from 'lib/noble'
+import { ASTRO_ROUTER, TERRA_SWAP_ROUTER, VENUE_FACTORY, type Asset, type AssetInfo } from 'lib/dex'
 import type { ExecLeg, RoutePlan, TradePlan } from 'lib/route'
 
 type Coin = { denom: string; amount: string }
@@ -306,25 +305,32 @@ export function ibcTransferMsg(a: { sender: string; receiver: string; channel: s
 }
 
 export interface ArrivalSwapArgs {
-  nobleAddress: string
+  /** the sender on the source chain */
+  sender: string
   terraAddress: string
-  /** USDC on Noble, smallest units, exactly as entered */
+  /** the source chain's IBC channel to Terra (lib/noble, lib/cosmoshub, lib/injective) */
+  channel: string
+  /** the token as the source chain names it, and as it arrives on Terra */
+  sourceDenom: string
+  terraDenom: string
+  /** smallest units, exactly as entered */
   amount: string
-  /** lib/route routerPlan for USDC on Terra into the token asked for, priced for `amount` */
+  /** lib/route routerPlan from the arriving token into the token asked for, priced for `amount` */
   plan: RoutePlan
   router?: string
   timeoutMinutes?: number
 }
 
 /**
- * USDC leaving Noble and arriving on Terra already swapped, in one signature
- * and with no third party in the path. Terra runs IBC hooks: a transfer whose
- * receiver is a contract, and whose memo is {"wasm":{"contract","msg"}} naming
- * that same contract, is paid to the contract and runs the message as the
- * transfer lands. Here the contract is Terra Swap's router, the message is the
- * route with its minimum, and `to` is the wallet's own Terra address. If the
- * swap would deliver less than the minimum, or anything else in it fails, the
- * transfer is acknowledged as failed and Noble returns the USDC to the sender.
+ * A token leaving Noble, the Cosmos Hub or Injective and arriving on Terra
+ * already swapped, in one signature and with no third party in the path. Terra
+ * runs IBC hooks: a transfer whose receiver is a contract, and whose memo is
+ * {"wasm":{"contract","msg"}} naming that same contract, is paid to the
+ * contract and runs the message as the transfer lands. Here the contract is
+ * Terra Swap's router, the message is the route with its minimum, and `to` is
+ * the wallet's own Terra address. If the swap would deliver less than the
+ * minimum, or anything else in it fails, the transfer is acknowledged as
+ * failed and the source chain returns the tokens to the sender.
  */
 export function arrivalSwapMsg(a: ArrivalSwapArgs): EncodeObject {
   const router = a.router ?? TERRA_SWAP_ROUTER
@@ -333,11 +339,11 @@ export function arrivalSwapMsg(a: ArrivalSwapArgs): EncodeObject {
   const legs = a.plan.legs
   const first = legs[0]?.offerInfo
   if (!first || a.plan.minOut === '0' || legs.some(l => l.offerAmount === '0')) throw new Error('Amount too small to route')
-  if (!('native_token' in first) || first.native_token.denom !== NOBLE_USDC) throw new Error('A swap on arrival has to start from USDC')
+  if (!('native_token' in first) || first.native_token.denom !== a.terraDenom) throw new Error('The swap does not start from the token being sent')
   if (legs[0].offerAmount !== a.amount) throw new Error('The price was for a different amount. Wait a moment and try again.')
   const msg = { execute_swap_operations: { operations: routerOperations(legs), minimum_receive: a.plan.minOut, to: a.terraAddress } }
   return ibcTransferMsg({
-    sender: a.nobleAddress, receiver: router, channel: NOBLE_TO_TERRA_CHANNEL, denom: NOBLE_USDC_DENOM, amount: a.amount,
+    sender: a.sender, receiver: router, channel: a.channel, denom: a.sourceDenom, amount: a.amount,
     memo: JSON.stringify({ wasm: { contract: router, msg } }), timeoutMinutes: a.timeoutMinutes,
   })
 }

@@ -24,13 +24,16 @@ export const NOBLE_USDC_DENOM = 'uusdc'
 export const NOBLE_RPC_ENDPOINTS = ['https://noble-rpc.polkachu.com', 'https://rpc.cosmos.directory/noble']
 export const NOBLE_REST_ENDPOINTS = ['https://noble-api.polkachu.com', 'https://rest.cosmos.directory/noble']
 
-/** USDC on Noble for an address, smallest units. */
-export async function nobleUsdcBalance(address: string): Promise<string> {
-  for (const base of NOBLE_REST_ENDPOINTS) {
+/** A token balance on another Cosmos chain through its REST endpoints, smallest units, from the first endpoint that answers. */
+export async function bankBalance(endpoints: string[], address: string, denom: string): Promise<string> {
+  for (const base of endpoints) {
     try {
-      const r = await fetch(`${base}/cosmos/bank/v1beta1/balances/${address}/by_denom?denom=${NOBLE_USDC_DENOM}`, { signal: AbortSignal.timeout(8000) })
+      const r = await fetch(`${base}/cosmos/bank/v1beta1/balances/${address}/by_denom?denom=${encodeURIComponent(denom)}`, { signal: AbortSignal.timeout(8000) })
       if (r.ok) return (await r.json())?.balance?.amount ?? '0'
     } catch { /* try the next endpoint */ }
   }
   return '0'
 }
+
+/** USDC on Noble for an address, smallest units. */
+export const nobleUsdcBalance = (address: string) => bankBalance(NOBLE_REST_ENDPOINTS, address, NOBLE_USDC_DENOM)
