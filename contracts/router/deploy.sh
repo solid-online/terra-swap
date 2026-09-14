@@ -4,7 +4,8 @@
 #
 #   ./deploy.sh <key-name>
 #
-# Env overrides: NODE (RPC), KEYRING (file|os|test), WASM (path to terra_swap_router.wasm).
+# Env overrides: NODE (RPC), KEYRING (file|os|test), WASM (path to terra_swap_router.wasm),
+# CODE_ID (the code is already stored: check its checksum and go straight to instantiating).
 # Needs: terrad, jq, curl.
 set -euo pipefail
 
@@ -89,12 +90,17 @@ read -r -p "Type DEPLOY to continue: " ok
 [[ "$ok" == "DEPLOY" ]] || die "aborted"
 
 # ─── 1. store ──────────────────────────────────────────────────────────
-say "1. Store the router"
-J=$(send wasm store "$WASM")
-CODE_ID=$(attr "$J" store_code code_id)
-[[ -n "$CODE_ID" ]] || die "could not read code_id"
-ONCHAIN_SHA=$(terrad query wasm code-info "$CODE_ID" "${Q[@]}" | jq -r '.data_hash // .code_info.data_hash' | tr 'A-F' 'a-f')
-[[ "$ONCHAIN_SHA" == "$EXPECTED_SHA" ]] || die "code $CODE_ID has checksum $ONCHAIN_SHA, expected $EXPECTED_SHA"
+if [[ -z "${CODE_ID:-}" ]]; then
+  say "1. Store the router"
+  J=$(send wasm store "$WASM")
+  CODE_ID=$(attr "$J" store_code code_id)
+  [[ -n "$CODE_ID" ]] || die "could not read code_id"
+else
+  say "1. Code $CODE_ID is already stored"
+fi
+# terrad's code-info names the field `checksum` on wasmd 0.54 and `data_hash` on older versions.
+ONCHAIN_SHA=$(terrad query wasm code-info "$CODE_ID" "${Q[@]}" | jq -r '.checksum // .data_hash // .code_info.data_hash // empty' | tr 'A-F' 'a-f')
+[[ "$ONCHAIN_SHA" == "$EXPECTED_SHA" ]] || die "code $CODE_ID has checksum ${ONCHAIN_SHA:-unreadable}, expected $EXPECTED_SHA"
 echo "  code_id: $CODE_ID, checksum matches"
 
 # ─── 2. instantiate ────────────────────────────────────────────────────
