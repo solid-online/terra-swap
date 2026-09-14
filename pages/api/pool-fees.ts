@@ -20,6 +20,9 @@ import { fromBech32 } from '@cosmjs/encoding'
 import { lcdFetch } from 'lib/lcd'
 import { marketPrices, resolveToken } from 'lib/dex'
 
+/** A busy pool's fifteen pages of transactions can take twenty seconds to read. */
+export const config = { maxDuration: 60 }
+
 export interface PoolFeesResponse {
   pair: string
   /** in US dollars at today's reference prices; null when a fee token has no price */
@@ -83,6 +86,8 @@ async function build(pair: string): Promise<PoolFeesResponse> {
     if (past || rs.length < 100) { complete = true; break }
   }
   const px = await marketPrices().catch(() => ({} as Record<string, number>))
+  // No reference prices at all means the market read failed, not that nothing has a price. Not worth keeping.
+  if (Object.keys(px).length === 0) throw new Error('no reference prices')
   const usd = async (m: Map<string, bigint>): Promise<number | null> => {
     let total = 0
     for (const [id, amount] of Array.from(m.entries())) {

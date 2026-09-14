@@ -15,6 +15,7 @@ import useMyAddress from 'components/hooks/useMyAddress'
 import WalletButton from 'components/WalletButton'
 import { WalletName } from 'components/WalletName'
 import ElectricPulse from 'components/ElectricPulse'
+import LstBoard from 'components/LstBoard'
 import { SPACE, RADIUS, TEXT } from 'components/tokens'
 import { isCrystalHolder } from 'lib/holders'
 import {
@@ -599,6 +600,8 @@ function Footer({ height, soundOn, onToggleSound, onSecret, seoul }: { height?: 
       <span>phoenix-1{height ? ` #${height.toLocaleString('en-US')}` : ''}</span>
       <span>·</span>
       <Link href='/verify' title='check every contract from this browser' style={{ color: C.textSecondary, textDecoration: 'none' }}>verify the contracts</Link>
+      <span>·</span>
+      <Link href='/stats' title='liquidity, fees, liquid staking against the hubs, routing and uptime' style={{ color: C.textSecondary, textDecoration: 'none' }}>stats</Link>
       <button type='button' onClick={onToggleSound} title={soundOn ? 'sound on · click to mute' : 'sound off · click for tiny beeps'} style={{
         marginLeft: 'auto', background: 'transparent', border: `1px solid ${C.divider}`, borderRadius: 999, padding: '2px 8px',
         color: soundOn ? C.goldLit : C.textWhisper, cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.7rem',
@@ -4606,6 +4609,8 @@ function SwapPageInner() {
                 allPools.length === 0
                   ? <Empty title='No pools yet' body={LITE ? 'Could not read the pool list. Try again in a moment.' : 'Open the first one. One signature, gas only. Your name goes to the top of the board and everyone sees it was you.'} />
                   : <div style={{ display: 'grid', gap: SPACE['3'] }}>
+                    {/* ampLUNA and bLUNA in the pools against their hubs; "swap" opens the trade in the Swap tab, which offers the hub when it is the better side. */}
+                    <LstBoard onTrade={(fromId, toId, amount) => { setPreset({ fromId, toId, amount, n: Date.now() }); setTab('swap'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
                     <div style={{ display: 'grid', gap: SPACE['2'] }}>
                       <div style={{ display: 'flex', gap: SPACE['2'], flexWrap: 'wrap' }}>
                         {(['all', 'terraswap', 'astroport'] as const).map(v => (
