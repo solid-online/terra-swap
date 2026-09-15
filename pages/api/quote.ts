@@ -1,6 +1,6 @@
 /**
  * GET /api/quote?from=LUNA&to=USDC&amount=100 — what a swap would deliver
- * right now through the best route over Terra Swap's and Astroport's pools,
+ * right now through the best route over Terra Swap's, Astroport's and Skeleton Swap's pools,
  * the same routing the swap page signs (lib/route): paths through up to three
  * pools, and a split over two paths when that delivers more.
  *
@@ -18,7 +18,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { KNOWN_TOKENS, assetId, fromMicro, toMicro, type KnownToken } from 'lib/dex'
 import { planTrade, quoteBest, quoteExactOut, tradeText, type TradePlan } from 'lib/route'
-import { sitePools } from 'lib/sitePools'
+import { routingPools } from 'lib/routingPools'
 
 /** A cold instance reads both factories' pools first. */
 export const config = { maxDuration: 60 }
@@ -89,7 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   windowReads += exactOut ? 4 : 1
 
   try {
-    const { pools } = await sitePools()
+    const pools = await routingPools()
     let trade: TradePlan
     let pay: string
     if (exactOut) {

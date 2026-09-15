@@ -28,16 +28,29 @@ export const IS_ASTRO = DEX_MODE === 'astroport'
 /** Terra Swap's renounced factory, and Astroport's. Each site routes through both. */
 export const TERRA_SWAP_FACTORY = 'terra1gx7n4yrfc2req7tdt9vpj66kr0cssnqkjsr80xmfacjpdlw6mzlqvlp3xd'
 export const ASTRO_FACTORY = 'terra14x9fr055x5hvr48hzy2t4q7kvjvfttsvxusa4xsdcy702mnzsvuqprer8r'
-export type Venue = 'terraswap' | 'astroport'
+/**
+ * The pool factory behind Skeleton Swap on Terra (Backbone Labs' interface):
+ * White Whale's pool-network contracts, labelled "White Whale Pool Factory" on
+ * chain. Its pairs are routed through for swaps only (lib/skeleton). They answer
+ * the same pool and simulation queries as Astroport's and take the same swap
+ * message, but report their fee in parts, name their pool types differently,
+ * and have an owner that can change fees and pause swaps. Neither router can
+ * reach them, so a route through one is signed as separate swaps (lib/route).
+ */
+export const SKELETON_FACTORY = 'terra1f4cr4sr5eulp3f2us8unu6qv8a5rhjltqsg7ujjx6f2mrlqh923sljwhn3'
+export type Venue = 'terraswap' | 'astroport' | 'skeleton'
 /** This build's own pools, and the other site's, which it routes into as well. */
 export const HOME_VENUE: Venue = IS_ASTRO ? 'astroport' : 'terraswap'
 export const AWAY_VENUE: Venue = IS_ASTRO ? 'terraswap' : 'astroport'
-export const VENUE_FACTORY: Record<Venue, string> = { terraswap: TERRA_SWAP_FACTORY, astroport: ASTRO_FACTORY }
-export const VENUE_NAME: Record<Venue, string> = { terraswap: 'Terra Swap', astroport: 'Astroport' }
+export const VENUE_FACTORY: Record<Venue, string> = { terraswap: TERRA_SWAP_FACTORY, astroport: ASTRO_FACTORY, skeleton: SKELETON_FACTORY }
+export const VENUE_NAME: Record<Venue, string> = { terraswap: 'Terra Swap', astroport: 'Astroport', skeleton: 'Skeleton Swap' }
+/** The factories Terra Swap's router trusts (its config on chain, checked 2026-09-15). A route with a pool anywhere else cannot go through it. */
+export const ROUTER_VENUES: readonly Venue[] = ['terraswap', 'astroport']
 /** Where a venue's LP gets staked for rewards ("Astroport Incentives"). Terra Swap's factory has none. */
 export const VENUE_INCENTIVES: Record<Venue, string | null> = {
   terraswap: null,
   astroport: 'terra1eywh4av8sln6r45pxq45ltj798htfy0cfcf7fy3pxc2gcv6uc07se4ch9x',
+  skeleton: null,
 }
 /** The native coin registry both factories read decimals from. */
 export const COIN_REGISTRY = 'terra1zuf8fla02926nhpfvk09k2pg6qv9aayflp0qt4a0msppu2h4exqs6af275'
@@ -302,7 +315,8 @@ export interface PairInfo {
   asset_infos: AssetInfo[]
   contract_addr: string
   liquidity_token: string
-  pair_type: Record<string, unknown>
+  /** Astroport's pairs: { xyk: {} } and the like. White Whale's (Skeleton Swap): "constant_product" or { stable_swap: { amp } }. */
+  pair_type: Record<string, unknown> | string
 }
 
 export interface PoolState {
@@ -313,7 +327,18 @@ export interface PoolState {
 export interface Simulation {
   return_amount: string
   spread_amount: string
+  /** the pool's fee on this swap; White Whale's pairs report it in parts, which simulateSwap adds up into this */
   commission_amount: string
+}
+
+/** A simulation as White Whale's pairs answer it: the fee in swap, protocol and burn parts, all already taken from the return. */
+interface PartsSimulation {
+  return_amount: string
+  spread_amount: string
+  commission_amount?: string
+  swap_fee_amount?: string
+  protocol_fee_amount?: string
+  burn_fee_amount?: string
 }
 
 /**
@@ -368,9 +393,15 @@ export function listedPairs(pairs: PairInfo[]): PairInfo[] {
   return IS_ASTRO ? knownPairs(pairs) : pairs
 }
 
-/** xyk, stable, concentrated, or whatever custom name the pair carries. */
+/**
+ * xyk, stable, concentrated, or whatever custom name the pair carries. White
+ * Whale's pairs (Skeleton Swap) name the same two kinds differently:
+ * "constant_product" reads as xyk and stable_swap as stable.
+ */
 export function pairTypeOf(p: Pick<PairInfo, 'pair_type'>): string {
+  if (typeof p.pair_type === 'string') return p.pair_type === 'constant_product' ? 'xyk' : p.pair_type
   const [k, v] = Object.entries(p.pair_type ?? {})[0] ?? ['xyk', {}]
+  if (k === 'stable_swap') return 'stable'
   return k === 'custom' && typeof v === 'string' ? v : k
 }
 
@@ -379,7 +410,12 @@ export async function queryPool(pair: string): Promise<PoolState | null> {
 }
 
 export async function simulateSwap(pair: string, offer: Asset): Promise<Simulation | null> {
-  return smart<Simulation>(pair, { simulation: { offer_asset: offer } })
+  const s = await smart<PartsSimulation>(pair, { simulation: { offer_asset: offer } })
+  if (!s) return null
+  if (typeof s.commission_amount === 'string') return s as Simulation
+  const part = (x: string | undefined) => (typeof x === 'string' && /^\d+$/.test(x) ? BigInt(x) : BigInt(0))
+  const fee = part(s.swap_fee_amount) + part(s.protocol_fee_amount) + part(s.burn_fee_amount)
+  return { return_amount: s.return_amount, spread_amount: s.spread_amount, commission_amount: fee.toString() }
 }
 
 /**
@@ -392,12 +428,17 @@ export async function simulateSwap(pair: string, offer: Asset): Promise<Simulati
  * concentrated pairs refused it (they compare the return alone). Writing xyk
  * and stable limits against return plus fee makes a slippage setting mean the
  * same on every pool type. An unknown pool type keeps the looser floor.
+ *
+ * White Whale's pairs (Skeleton Swap) compare the return alone, on every pool
+ * type. Simulated 2026-09-15 on their LUNA/USDC pool: a limit at the return
+ * passed at 0.01% spread, a limit at the return plus fee failed with "Spread
+ * limit exceeded". Their limits are written the way concentrated pools' are.
  */
-export function priceLimit(pairType: string, expected: bigint, commission: bigint, slip: number): { limitReturn: bigint; floor: bigint } {
+export function priceLimit(pairType: string, expected: bigint, commission: bigint, slip: number, venue?: Venue): { limitReturn: bigint; floor: bigint } {
   const shave = (x: bigint) => (x * BigInt(Math.round((1 - slip) * 10_000))) / BigInt(10_000)
   let limitReturn = expected
   let floor: bigint
-  if (pairType === 'concentrated') floor = shave(expected)
+  if (pairType === 'concentrated' || venue === 'skeleton') floor = shave(expected)
   else if (pairType === 'xyk' || pairType === 'stable') { limitReturn = expected + commission; floor = shave(limitReturn) - commission }
   else floor = shave(expected) - commission
   return { limitReturn, floor: floor > BigInt(0) ? floor : BigInt(0) }

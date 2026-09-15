@@ -35,6 +35,7 @@ import type { BoardResponse, PoolActivity } from 'pages/api/dex-leaderboard'
 import type { LpFlow } from 'lib/dex-ledger'
 import type { PricesResponse } from 'pages/api/dex-prices'
 import type { VenueResponse } from 'pages/api/dex-venue'
+import type { SkeletonResponse } from 'pages/api/dex-skeleton'
 import type { PositionsResponse } from 'pages/api/positions'
 import type { HistoryResponse } from 'pages/api/history'
 import type { HistoryRow, Moved } from 'lib/history'
@@ -93,10 +94,12 @@ const poolFeeText = (p: PoolView | null | undefined, poolFeeBps: number) => {
   if (!p) return 'set by the pool'
   return p.pairType === 'xyk' ? '0.3%, set by the pool' : p.pairType === 'stable' ? '0.05%, set by the pool' : 'dynamic, set by the pool'
 }
-/** One leg's pool fee, for a pool on either site. Terra Swap's factory sends all of it to LPs. */
+/** One leg's pool fee, for a pool on any venue. Terra Swap's factory sends all of it to LPs; Skeleton Swap's pools each set their own. */
 const poolFeeTextFor = (p: PoolView) => p.venue === 'terraswap'
   ? '0.3% to LPs on Terra Swap'
-  : `${p.pairType === 'xyk' ? '0.3%' : p.pairType === 'stable' ? '0.05%' : 'dynamic'} on Astroport`
+  : p.venue === 'skeleton'
+    ? 'fee set by the pool, on Skeleton Swap'
+    : `${p.pairType === 'xyk' ? '0.3%' : p.pairType === 'stable' ? '0.05%' : 'dynamic'} on Astroport`
 
 // Retro Terra 2020 palette — deep royal navy, electric Terra blue, cool white.
 // Scoped to this page: it shadows the shared Atrium tokens (gold/ember roles
@@ -5318,6 +5321,21 @@ function SwapPageInner() {
     pull(); const iv = setInterval(pull, 60_000)
     return () => { alive = false; clearInterval(iv) }
   }, [])
+  /**
+   * Skeleton Swap's pools (lib/skeleton): routed through by the swap, and nothing else. Not listed in Pools,
+   * not used by zaps or swaps on arrival, which need a router that cannot reach them. Arrives on the side too.
+   */
+  const [skeletonPools, setSkeletonPools] = useState<PoolView[]>([])
+  useEffect(() => {
+    if (LITE) return
+    let alive = true
+    const pull = () => fetch('/api/dex-skeleton').then(r => (r.ok ? r.json() : null)).then((j: SkeletonResponse | null) => {
+      if (alive && j?.pools) setSkeletonPools(j.pools)
+    }).catch(() => {})
+    pull(); const iv = setInterval(pull, 60_000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [])
+  const swapVenuePools = useMemo(() => [...venuePools, ...skeletonPools], [venuePools, skeletonPools])
   /** Both sites' pools in one list, since pools.terraluna.app was folded into this page (2026-09-14). */
   const allPools = useMemo(() => {
     const own = data?.pools ?? []
@@ -5459,7 +5477,7 @@ function SwapPageInner() {
       { id: 'do-open-pool', group: 'Do', label: 'Open a pool', hint: "on Terra Swap's or Astroport's factory, one signature", keywords: 'create new pair pool list token factory', icon: icon('🏗️'), run: () => openTab('create') },
       { id: 'do-sweep', group: 'Do', label: 'Sell small balances in one go', hint: 'leftover tokens into USDC or LUNA, one signature', keywords: 'sweep dust leftovers clean wallet balances sell all convert', icon: icon('🧹'), run: () => openTab('wallet') },
       { id: 'do-keys', group: 'Do', label: 'Keyboard shortcuts', hint: '⌘K search · / amount · f flip the pair', keywords: 'keys hotkeys keyboard', icon: icon('⌨️'), run: () => setShortcuts(true) },
-      { id: 'go-swap', group: 'Go to', label: 'Swap', hint: "the best route through Terra Swap's and Astroport's pools", keywords: 'trade exchange buy sell convert', icon: icon('🔀'), run: () => openTab('swap') },
+      { id: 'go-swap', group: 'Go to', label: 'Swap', hint: "the best route through Terra Swap's, Astroport's and Skeleton Swap's pools", keywords: 'trade exchange buy sell convert skeleton white whale', icon: icon('🔀'), run: () => openTab('swap') },
       { id: 'go-pools', group: 'Go to', label: 'Pools', hint: `${allPools.length} pools on both sites: add, zap in, remove`, keywords: 'liquidity lp provide add remove zap fees', icon: icon('💧'), run: () => openTab('pools') },
       { id: 'go-bridge', group: 'Go to', label: 'Bridge', hint: 'USDC from Noble, ATOM from the Cosmos Hub, USDC.inj from Injective, ASTRO and dATOM from Neutron, stLUNA from Stride, and back', keywords: 'transfer ibc deposit withdraw move chains', icon: icon('🌉'), run: () => openTab('transfer') },
       { id: 'go-positions', group: 'Go to', label: 'Portfolio', hint: 'every position on both sites, staked LP included, and a way out of each', keywords: 'positions lp exit withdraw staked rewards claim holdings', icon: icon('🧾'), run: () => openTab('positions') },
@@ -5679,7 +5697,7 @@ function SwapPageInner() {
                 </button>
               </div>
               {tab === 'swap' && loopFor && <LoopPanel plan={loopFor} pools={routePoolsAll} onClose={() => setLoopFor(null)} onOneSided={oneSided} onDone={refresh} />}
-              {tab === 'swap' && <SwapPanel pools={data.pools} venuePools={venuePools} crystal={crystal} feeBps={data.feeBps} poolFeeBps={data.poolFeeBps} onDone={refresh} arbs={arbs} preset={preset} onTakeArb={takeArb}
+              {tab === 'swap' && <SwapPanel pools={data.pools} venuePools={swapVenuePools} crystal={crystal} feeBps={data.feeBps} poolFeeBps={data.poolFeeBps} onDone={refresh} arbs={arbs} preset={preset} onTakeArb={takeArb}
                 onNext={(k, key) => { if (k === 'pools') { setVenueFilter('all'); setPoolQuery(key ?? '') } openTab(k) }} />}
               {tab === 'pools' && (
                 allPools.length === 0
@@ -5801,7 +5819,7 @@ function SwapPageInner() {
           )}
           {data?.live && !LITE && (
             <p style={{ color: C.textWhisper, margin: `${SPACE['3']}px 0 0`, fontSize: TEXT.xs.size, lineHeight: 1.6 }}>
-              A decentralized exchange on Terra, open source and experimental. Pools run Astroport&apos;s audited contract code; pool fee {(data.poolFeeBps / 100).toFixed(1)}% on Terra Swap&apos;s pools, all to liquidity providers, and no interface fee. Independent, not affiliated with Terraswap (app.terraswap.io) or Astroport. Amounts are small: trade what you are happy to lose.
+              A decentralized exchange on Terra, open source and experimental. Pools run Astroport&apos;s audited contract code; pool fee {(data.poolFeeBps / 100).toFixed(1)}% on Terra Swap&apos;s pools, all to liquidity providers, and no interface fee. Swaps also route through Astroport&apos;s pools and Skeleton Swap&apos;s (White Whale&apos;s pool contracts) when they price better. Independent, not affiliated with Terraswap (app.terraswap.io), Astroport, Skeleton Swap or White Whale. Amounts are small: trade what you are happy to lose.
             </p>
           )}
           {data?.live && !LITE && <div style={{ marginTop: SPACE['5'] }}><StatBand data={data} board={board} /></div>}

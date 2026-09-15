@@ -8,10 +8,11 @@
  *
  * They go to Astroport's own contracts (pairs on either factory, the
  * factories, the incentives contract, the router, the first ASTRO staking and
- * the ASTRO converter), to Terra Swap's router in contracts/router, to the
- * liquid staking hubs in lib/lst, and over IBC between Noble and Terra, where
- * a deposit can carry a call to Terra Swap's router that swaps it on arrival.
- * None sends anything anywhere else, and none takes a fee.
+ * the ASTRO converter), to Terra Swap's router in contracts/router, to
+ * Skeleton Swap's pairs (White Whale's pool contracts, which take the same swap
+ * message), to the liquid staking hubs in lib/lst, and over IBC between Noble
+ * and Terra, where a deposit can carry a call to Terra Swap's router that swaps
+ * it on arrival. None sends anything anywhere else, and none takes a fee.
  */
 
 import type { EncodeObject } from '@cosmjs/proto-signing'

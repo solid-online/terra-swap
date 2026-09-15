@@ -10,6 +10,8 @@
  * Astroport's own code, so they are checked against the code Astroport's
  * factory on Terra runs and uses for its xyk pools. The same checks run from a
  * terminal with contracts/owner-sink/verify.sh and contracts/router/verify.sh.
+ * Astroport's contracts and Skeleton Swap's factory, which swaps also go
+ * through, are listed as notes: they are not Terra Swap's to verify.
  */
 
 import Head from 'next/head'
@@ -17,7 +19,7 @@ import Link from 'next/link'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SPACE, TEXT } from 'components/tokens'
 import SiteNav from 'components/SiteNav'
-import { ASTRO_FACTORY, ASTRO_ROUTER, TERRA_SWAP_FACTORY, TERRA_SWAP_ROUTER, VENUE_INCENTIVES, smart } from 'lib/dex'
+import { ASTRO_FACTORY, ASTRO_ROUTER, SKELETON_FACTORY, TERRA_SWAP_FACTORY, TERRA_SWAP_ROUTER, VENUE_INCENTIVES, smart } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
 
 const TERRA_FONT = "'Montserrat', 'Space Grotesk', 'Inter', system-ui, sans-serif"
@@ -59,6 +61,7 @@ const GROUPS: { key: string; title: string; address?: string; blurb: string }[] 
   { key: 'pools', title: 'Every pool', blurb: "Astroport's xyk pair code. 0.3% per swap, all of it to liquidity providers. No pool can be migrated: the pools that existed at the renounce had their admin cleared, and pools opened since carry the owner sink as admin, which has no way to migrate anything." },
   { key: 'router', title: "Terra Swap's router", address: TERRA_SWAP_ROUTER, blurb: 'One transaction through pools on both factories, and the swap on arrival over IBC (contracts/router). No owner, no admin, no fee.' },
   { key: 'astroport', title: "Astroport's contracts this page also uses", blurb: "Not Terra Swap's. Swaps and positions can go through them, and Astroport can upgrade them; shown so that is plain." },
+  { key: 'skeleton', title: "Skeleton Swap's pools this page also routes through", blurb: "Not Terra Swap's. Swaps can go through Skeleton Swap's pools, which run on White Whale's pool contracts. Their factory's owner can change the pools' fees and pause swaps; shown so that is plain." },
 ]
 
 async function run(push: (c: Check) => void): Promise<void> {
@@ -117,6 +120,13 @@ async function run(push: (c: Check) => void): Promise<void> {
   external.forEach(([name, a], i) => {
     const x = exInfos[i]
     push({ group: 'astroport', what: name, expected: 'Astroport can migrate it', found: x ? (x.admin ? `code ${x.code_id} · admin ${x.admin.slice(0, 12)}…` : `code ${x.code_id} · no admin`) : 'no answer', state: 'note', href: a ? addressUrl(a) : undefined })
+  })
+
+  const [skInfo, skConfig] = await Promise.all([contractInfo(SKELETON_FACTORY), smart<{ owner?: string }>(SKELETON_FACTORY, { config: {} })])
+  push({
+    group: 'skeleton', what: "White Whale's pool factory (Skeleton Swap)", expected: 'its owner can change pool fees and pause swaps',
+    found: skInfo ? `code ${skInfo.code_id}${skInfo.admin ? ` · admin ${skInfo.admin.slice(0, 12)}…` : ' · no admin'}${skConfig?.owner ? ` · owner ${skConfig.owner.slice(0, 12)}…` : ''}` : 'no answer',
+    state: 'note', href: addressUrl(SKELETON_FACTORY),
   })
 }
 

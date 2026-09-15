@@ -25,10 +25,16 @@
  * TERRA_SWAP_ROUTER is set; until then it is signed as consecutive swaps in one
  * transaction, each with its own price limit. Either way, if anything falls
  * short the whole transaction reverts.
+ *
+ * Skeleton Swap's pools (White Whale's pool contracts, lib/skeleton) are priced
+ * and ranked the same way when the swap page or the quote API passes them in.
+ * Neither router can reach them, so a route through one is always signed as
+ * consecutive swaps, and a swap that has to be one router call (on arrival over
+ * IBC) never uses them.
  */
 
 import {
-  NOBLE_USDC, USDC_INJ_DENOM, assetId, priceLimit, sameAsset, simulateSwap, toMicro, TERRA_SWAP_ROUTER, VENUE_NAME,
+  NOBLE_USDC, ROUTER_VENUES, USDC_INJ_DENOM, assetId, priceLimit, sameAsset, simulateSwap, toMicro, TERRA_SWAP_ROUTER, VENUE_NAME,
   type KnownToken, type PoolView, type Venue,
 } from 'lib/dex'
 
@@ -292,6 +298,9 @@ async function bestSplit(quotes: Quote[], amountMicro: string, slip: number): Pr
 
 const shave = (x: bigint, slip: number) => (x * BigInt(Math.round((1 - slip) * 10_000))) / BigInt(10_000)
 
+/** Every pool on the route sits on a factory Terra Swap's router trusts. */
+const routerReaches = (q: Quote) => q.legs.every(l => ROUTER_VENUES.includes(l.pool.venue))
+
 /**
  * A route as separate swap messages. The first leg offers the full amount;
  * each later leg offers the least the leg before it can return, so it is
@@ -308,7 +317,7 @@ export function executionLegs(q: Quote, slip: number): ExecLeg[] {
     const offer: bigint = prev === null ? BigInt(l.offerMicro) : prev
     const expected: bigint = (BigInt(l.returnMicro) * offer) / BigInt(l.offerMicro)
     const commission: bigint = (BigInt(l.commissionMicro) * offer) / BigInt(l.offerMicro)
-    const { limitReturn, floor } = priceLimit(l.pool.pairType, expected, commission, slip)
+    const { limitReturn, floor } = priceLimit(l.pool.pairType, expected, commission, slip, l.pool.venue)
     out.push({
       pair: l.pool.contract_addr, venue: l.pool.venue, offerInfo: l.offer.info, askInfo: l.ask.info, offerAmount: offer.toString(),
       expectedReturn: expected.toString(), limitReturn: limitReturn.toString(), minReturn: floor.toString(),
@@ -343,13 +352,14 @@ export interface RoutePlan {
  * Astroport pools go through Astroport's, and a route that touches Terra
  * Swap's pools goes through Terra Swap's own (contracts/router) when it is on
  * chain. Both deliver the quote and check one minimum on what arrives. Without
- * Terra Swap's router such a route stays as legs and says what it leaves behind.
+ * Terra Swap's router, or with a Skeleton Swap pool on the route (a factory the
+ * router does not trust), the route stays as legs and says what it leaves behind.
  */
 export function planRoute(q: Quote, slip: number): RoutePlan {
   const legs = executionLegs(q, slip)
   const all = { expectedOut: q.outMicro, minOut: shave(BigInt(q.outMicro), slip).toString(), leftover: [] }
   if (q.legs.length > 1 && q.legs.every(l => l.pool.venue === 'astroport')) return { kind: 'router', legs, ...all }
-  if (q.legs.length > 1 && TERRA_SWAP_ROUTER) return { kind: 'multi', legs, ...all }
+  if (q.legs.length > 1 && TERRA_SWAP_ROUTER && routerReaches(q)) return { kind: 'multi', legs, ...all }
   const leftover = legs.slice(0, -1)
     .map((l, i) => ({ token: q.legs[i].ask, micro: (BigInt(l.expectedReturn) - BigInt(legs[i + 1].offerAmount)).toString() }))
     .filter(x => BigInt(x.micro) > BigInt(0))
@@ -573,9 +583,10 @@ export async function planRoutedZap(pools: PoolView[], target: PoolView, inIdx: 
  * A quote as a single call to Terra Swap's router, whatever its length, for a
  * swap that has to be one contract call: a deposit swapped on arrival over IBC
  * runs as the router's own execute (lib/msgs arrivalSwapMsg). The router
- * checks the minimum on what reaches the receiver. Null when there is no router.
+ * checks the minimum on what reaches the receiver. Null when there is no router,
+ * or when a pool on the route sits on a factory the router does not trust.
  */
 export function routerPlan(q: Quote, slip: number): RoutePlan | null {
-  if (!TERRA_SWAP_ROUTER) return null
+  if (!TERRA_SWAP_ROUTER || !routerReaches(q)) return null
   return { kind: 'multi', legs: executionLegs(q, slip), expectedOut: q.outMicro, minOut: shave(BigInt(q.outMicro), slip).toString(), leftover: [] }
 }
