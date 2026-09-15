@@ -5794,7 +5794,7 @@ function SwapPageInner() {
           )}
           {data?.live && !LITE && (
             <p style={{ color: C.textWhisper, margin: `${SPACE['3']}px 0 0`, fontSize: TEXT.xs.size, lineHeight: 1.6 }}>
-              A decentralized exchange on Terra, open source and experimental. Pools run Astroport&apos;s audited contract code; pool fee {(data.poolFeeBps / 100).toFixed(1)}% on Terra Swap&apos;s pools, all to liquidity providers, and no interface fee. Amounts are small: trade what you are happy to lose.
+              A decentralized exchange on Terra, open source and experimental. Pools run Astroport&apos;s audited contract code; pool fee {(data.poolFeeBps / 100).toFixed(1)}% on Terra Swap&apos;s pools, all to liquidity providers, and no interface fee. Independent, not affiliated with Terraswap (app.terraswap.io) or Astroport. Amounts are small: trade what you are happy to lose.
             </p>
           )}
           {data?.live && !LITE && <div style={{ marginTop: SPACE['5'] }}><StatBand data={data} board={board} /></div>}
@@ -6149,7 +6149,7 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
           ? `${short} is written down on the Terra Swap board. A DEX for Terra built in a night for the price of gas. Steady lads.`
           : share
           ? `Opens Terra Swap with this swap filled in. The route is priced across Terra Swap's and Astroport's pools when the page opens. No interface fee.`
-          : 'A DEX for Terra, shipped overnight on audited pool code, with every fee handed back to the people who show up. No permission. Steady lads.',
+          : 'A DEX for Terra, shipped overnight on audited pool code, with every fee handed back to the people who show up. No permission. Not affiliated with Terraswap. Steady lads.',
         url: `${base}/${who ? `?who=${who}` : share ? share.query : ''}`,
         type: 'website',
         // The Terra globe as this page's favicon (terra-money/assets); PNG for Safari/iOS home screen.
