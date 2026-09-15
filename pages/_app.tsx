@@ -22,6 +22,8 @@ interface PageOg {
 }
 
 export default function App({ Component, pageProps }: AppProps) {
+  // A page that signs nothing and is framed by other sites (/embed) renders without the wallet stack.
+  const bare = (Component as { bare?: boolean }).bare === true
   const og = (pageProps as { og?: PageOg } | undefined)?.og ?? null
   const title = og?.title ?? 'Terra Swap'
   const description = og?.description ?? 'A decentralized exchange on Terra. Experimental.'
@@ -42,17 +44,30 @@ export default function App({ Component, pageProps }: AppProps) {
         <link key='icon' rel='icon' type='image/svg+xml' href={og?.icon ?? '/img/terra-globe.svg'} />
         <link key='apple-touch-icon' rel='apple-touch-icon' href={og?.touchIcon ?? '/img/terra-globe-180.png'} />
         <meta name='viewport' content='width=device-width, initial-scale=1, viewport-fit=cover' />
+        {/* Installable as an app: home screen icon, full screen, the night-sky colour behind the status bar. */}
+        <link key='manifest' rel='manifest' href='/manifest.webmanifest' />
+        <meta key='theme-color' name='theme-color' content='#05070f' />
+        <meta key='apple-capable' name='apple-mobile-web-app-capable' content='yes' />
+        <meta key='mobile-capable' name='mobile-web-app-capable' content='yes' />
+        <meta key='apple-status' name='apple-mobile-web-app-status-bar-style' content='black-translucent' />
+        <meta key='apple-title' name='apple-mobile-web-app-title' content='Terra Swap' />
       </Head>
-      <ErrorBoundary>
-        <Providers>
-          <TxRegionGateProvider>
-            <RegionBanner />
-            <ErrorBoundary>
-              <Component {...pageProps} />
-            </ErrorBoundary>
-          </TxRegionGateProvider>
-        </Providers>
-      </ErrorBoundary>
+      {bare ? (
+        <ErrorBoundary>
+          <Component {...pageProps} />
+        </ErrorBoundary>
+      ) : (
+        <ErrorBoundary>
+          <Providers>
+            <TxRegionGateProvider>
+              <RegionBanner />
+              <ErrorBoundary>
+                <Component {...pageProps} />
+              </ErrorBoundary>
+            </TxRegionGateProvider>
+          </Providers>
+        </ErrorBoundary>
+      )}
     </>
   )
 }

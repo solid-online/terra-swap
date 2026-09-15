@@ -16,6 +16,7 @@ import { PairIcons, TokenIcon } from 'components/TokenIcon'
 import { KNOWN_TOKENS, VENUE_NAME, annotateMarket, annotateValues, assetId, sameAsset, type KnownToken } from 'lib/dex'
 import { fmtUsd } from 'lib/arb'
 import { TOKEN_META } from 'lib/tokenMeta'
+import { addAlert, askNotifications, fmtUsdPrice, removeAlert, toggleFavorite, useAlertWatcher, usePrefs } from 'lib/alerts'
 import type { DexResponse } from 'pages/api/dex'
 import type { VenueResponse } from 'pages/api/dex-venue'
 
@@ -24,6 +25,8 @@ const counterpart = (key: string) => (key === 'USDC' || key === 'USDC.inj' ? 'LU
 /** Tokens the Bridge tab brings in, and from where. */
 const BRIDGE: Record<string, { name: string; net: string }> = {
   USDC: { name: 'Noble', net: 'noble' }, ATOM: { name: 'the Cosmos Hub', net: 'cosmoshub' }, 'USDC.inj': { name: 'Injective', net: 'injective' },
+  ASTRO: { name: 'Neutron', net: 'neutron-astro' }, dATOM: { name: 'Neutron', net: 'neutron-datom' }, FUEL: { name: 'Neutron', net: 'neutron-fuel' },
+  stLUNA: { name: 'Stride', net: 'stride-stluna' }, stATOM: { name: 'Stride', net: 'stride-statom' },
 }
 /** Liquid staking tokens whose hub rate the stats page sets against the pools. */
 const HUB_RATE = new Set(['ampLUNA', 'bLUNA'])
@@ -89,6 +92,32 @@ export default function TokenPage({ symbol }: { symbol: string }) {
   const cw20 = 'token' in token.info
   const bridge = BRIDGE[token.key]
 
+  // Starring and price alerts, kept in this browser only (lib/alerts). While an alert waits, the price is read again once a minute.
+  const { favorites, alerts } = usePrefs()
+  const starred = favorites.includes(id)
+  const mine = alerts.filter(a => a.tokenId === id)
+  const armed = mine.some(a => !a.firedAt)
+  const [dir, setDir] = useState<'above' | 'below'>('above')
+  const [level, setLevel] = useState('')
+  const [note, setNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (!armed) return
+    let alive = true
+    const t = setInterval(() => {
+      fetch('/api/dex-market').then(r => (r.ok ? r.json() : null)).then((j: { px?: Record<string, number> } | null) => { if (alive && j?.px) setPx(j.px) }).catch(() => {})
+    }, 60_000)
+    return () => { alive = false; clearInterval(t) }
+  }, [armed])
+  useAlertWatcher(px, fired => setNote(fired.map(f => `${f.label} is ${f.dir} $${fmtUsdPrice(f.usd)}: $${fmtUsdPrice(f.firedUsd ?? 0)} now.`).join(' ')))
+  const setAlert = async () => {
+    const usd = Number(level)
+    if (!(usd > 0)) return
+    addAlert({ tokenId: id, key: token.key, label: token.label, dir, usd })
+    setLevel('')
+    await askNotifications()
+  }
+  const small: React.CSSProperties = { padding: '0.45rem 0.6rem', background: 'rgba(0,0,0,0.32)', border: `1px solid ${C.divider}`, borderRadius: 10, color: C.textPrimary, fontFamily: 'inherit', fontSize: TEXT.sm.size }
+
   return (
     <Page>
       <header style={{ display: 'grid', gap: 6 }}>
@@ -113,6 +142,36 @@ export default function TokenPage({ symbol }: { symbol: string }) {
           <Figure label='Price' value={price ? `$${fmtNum(price)}` : done ? '—' : '…'} />
           <Figure label='In pools holding it' value={done ? fmtUsd(liquidity) : '…'} sub={done ? `${pools.length} pool${pools.length === 1 ? '' : 's'}` : undefined} />
         </div>
+      </Panel>
+
+      <Panel title={`Watch ${token.label}`} note='Kept in this browser only. An alert goes off once, when an open Terra Swap page sees the market reference cross its level; with notifications allowed, the browser says so too.'>
+        <div style={{ display: 'flex', gap: SPACE['2'], flexWrap: 'wrap', alignItems: 'center' }}>
+          <button type='button' onClick={() => toggleFavorite(id)} style={{ ...linkBtn(), cursor: 'pointer', color: starred ? C.goldLit : C.textSecondary }}>{starred ? '★ Starred' : '☆ Star'}</button>
+          <span style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Tell me when it is</span>
+          <select aria-label='Direction' value={dir} onChange={e => setDir(e.target.value as 'above' | 'below')} style={{ ...small, cursor: 'pointer' }}>
+            <option value='above'>above</option>
+            <option value='below'>below</option>
+          </select>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ color: C.textMuted }}>$</span>
+            <input aria-label='Price in dollars' inputMode='decimal' value={level} onChange={e => setLevel(e.target.value.replace(',', '.'))} placeholder={price ? fmtUsdPrice(price) : '0.00'} style={{ ...small, width: 110 }} />
+          </span>
+          <button type='button' onClick={setAlert} disabled={!(Number(level) > 0)} style={{ ...linkBtn(true), cursor: 'pointer', opacity: Number(level) > 0 ? 1 : 0.5 }}>Set alert</button>
+        </div>
+        {note && <div style={{ fontSize: TEXT.xs.size, color: C.success, marginTop: 8 }}>🔔 {note}</div>}
+        {mine.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            {mine.map(a => (
+              <div key={a.id} style={{ ...row, alignItems: 'center' }}>
+                <span style={{ color: C.textSecondary }}>{a.dir} ${fmtUsdPrice(a.usd)}</span>
+                <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+                  <span style={{ color: a.firedAt ? C.success : C.textWhisper }}>{a.firedAt ? `went off at $${fmtUsdPrice(a.firedUsd ?? 0)}` : 'waiting'}</span>
+                  <button type='button' aria-label='Remove alert' onClick={() => removeAlert(a.id)} style={{ background: 'transparent', border: 'none', color: C.textMuted, cursor: 'pointer' }}>✕</button>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </Panel>
 
       <Panel title={`Pools with ${token.label}`} note='Every pool with liquidity on both factories that holds it, deepest first. A swap here goes through whichever pools deliver the most, on either site.'>

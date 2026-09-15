@@ -15,6 +15,11 @@ import cosmoshubAssets from 'chain-registry/mainnet/cosmoshub/assets'
 // broadcast in lib/injective, not by the wallet kit's signing client.
 import injectiveChain from 'chain-registry/mainnet/injective/chain'
 import injectiveAssets from 'chain-registry/mainnet/injective/assets'
+// Neutron (ASTRO, dATOM, FUEL) and Stride (stLUNA, stATOM), for moving their tokens in and out (lib/neutron, lib/stride).
+import neutronChain from 'chain-registry/mainnet/neutron/chain'
+import neutronAssets from 'chain-registry/mainnet/neutron/assets'
+import strideChain from 'chain-registry/mainnet/stride/chain'
+import strideAssets from 'chain-registry/mainnet/stride/assets'
 import { EndpointOptions, SignerOptions } from '@cosmos-kit/core'
 import { CHAIN_CONFIGS } from 'constants/chainsConfig'
 import { GasPrice } from '@cosmjs/stargate'
@@ -24,9 +29,11 @@ import { NOBLE_REST_ENDPOINTS, NOBLE_RPC_ENDPOINTS } from 'lib/noble'
 import { GAS_PRICE } from 'lib/gas'
 import { HUB_CHAIN_ID, HUB_GAS_PRICE, HUB_REST_ENDPOINTS, HUB_RPC_ENDPOINTS } from 'lib/cosmoshub'
 import { INJECTIVE_REST_ENDPOINTS, INJECTIVE_RPC_ENDPOINTS } from 'lib/injective'
+import { NEUTRON_CHAIN_ID, NEUTRON_GAS_PRICE, NEUTRON_REST_ENDPOINTS, NEUTRON_RPC_ENDPOINTS } from 'lib/neutron'
+import { STRIDE_CHAIN_ID, STRIDE_GAS_PRICE, STRIDE_REST_ENDPOINTS, STRIDE_RPC_ENDPOINTS } from 'lib/stride'
 
-const chains = [terra2Chain, nobleChain, cosmoshubChain, injectiveChain]
-const assets = [terra2Assets, nobleAssets, cosmoshubAssets, injectiveAssets]
+const chains = [terra2Chain, nobleChain, cosmoshubChain, injectiveChain, neutronChain, strideChain]
+const assets = [terra2Assets, nobleAssets, cosmoshubAssets, injectiveAssets, neutronAssets, strideAssets]
 
 // ─── Module-level frozen constants ─────────────────────────────
 //
@@ -52,6 +59,8 @@ const endpointOptionsStatic: { endpoints: EndpointOptions['endpoints']; isLazy: 
       noble: { rpc: NOBLE_RPC_ENDPOINTS, rest: NOBLE_REST_ENDPOINTS, isLazy: false },
       cosmoshub: { rpc: HUB_RPC_ENDPOINTS, rest: HUB_REST_ENDPOINTS, isLazy: false },
       injective: { rpc: INJECTIVE_RPC_ENDPOINTS, rest: INJECTIVE_REST_ENDPOINTS, isLazy: false },
+      neutron: { rpc: NEUTRON_RPC_ENDPOINTS, rest: NEUTRON_REST_ENDPOINTS, isLazy: false },
+      stride: { rpc: STRIDE_RPC_ENDPOINTS, rest: STRIDE_REST_ENDPOINTS, isLazy: false },
     },
   ),
   isLazy: true,
@@ -62,7 +71,9 @@ const signerOptionsStatic: SignerOptions = {
   //@ts-ignore
   signingStargate: (chain: Chain) => (chain.chain_id === 'noble-1'
     ? { gasPrice: GasPrice.fromString('0.1uusdc') }
-    : chain.chain_id === HUB_CHAIN_ID ? { gasPrice: GasPrice.fromString(HUB_GAS_PRICE) } : undefined),
+    : chain.chain_id === HUB_CHAIN_ID ? { gasPrice: GasPrice.fromString(HUB_GAS_PRICE) }
+    : chain.chain_id === NEUTRON_CHAIN_ID ? { gasPrice: GasPrice.fromString(NEUTRON_GAS_PRICE) }
+    : chain.chain_id === STRIDE_CHAIN_ID ? { gasPrice: GasPrice.fromString(STRIDE_GAS_PRICE) } : undefined),
   //@ts-ignore
   signingCosmwasm: (chain: Chain) => {
     switch (chain.chain_id) {

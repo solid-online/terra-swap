@@ -16,6 +16,7 @@
 
 import type { EncodeObject } from '@cosmjs/proto-signing'
 import { MsgExecuteContract } from 'cosmjs-types/cosmwasm/wasm/v1/tx'
+import { MsgSend } from 'cosmjs-types/cosmos/bank/v1beta1/tx'
 import { MsgTransfer } from 'cosmjs-types/ibc/applications/transfer/v1/tx'
 import { toUtf8 } from '@cosmjs/encoding'
 import { ASTRO_ROUTER, TERRA_SWAP_ROUTER, VENUE_FACTORY, type Asset, type AssetInfo } from 'lib/dex'
@@ -41,6 +42,19 @@ export function exec(sender: string, contract: string, msg: object, funds: Coin[
     typeUrl: '/cosmwasm.wasm.v1.MsgExecuteContract',
     value: MsgExecuteContract.fromPartial({ sender, contract, msg: toUtf8(JSON.stringify(msg)), funds: sorted }),
   }
+}
+
+// ─── Sending ────────────────────────────────────────────────────
+
+/** A plain send on Terra: a native token through the bank module, a cw20 through its own transfer. */
+export function sendMsg(a: { sender: string; recipient: string; info: AssetInfo; amount: string }): EncodeObject {
+  if ('native_token' in a.info) {
+    return {
+      typeUrl: '/cosmos.bank.v1beta1.MsgSend',
+      value: MsgSend.fromPartial({ fromAddress: a.sender, toAddress: a.recipient, amount: [{ denom: a.info.native_token.denom, amount: a.amount }] }),
+    }
+  }
+  return exec(a.sender, a.info.token.contract_addr, { transfer: { recipient: a.recipient, amount: a.amount } })
 }
 
 // ─── Swaps ──────────────────────────────────────────────────────

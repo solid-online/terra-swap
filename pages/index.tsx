@@ -25,7 +25,7 @@ import {
   KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, ATOM_DENOM, TERRA_SWAP_ROUTER, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
   lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_FACTORY, VENUE_NAME, VENUE_INCENTIVES, smart, type Venue,
-  COIN_REGISTRY, ASTRO_STAKING, XASTRO_CW20, ASTRO_CONVERTER, ASTRO_CW20,
+  COIN_REGISTRY, ASTRO_STAKING, XASTRO_CW20, ASTRO_CONVERTER, ASTRO_CW20, ASTRO_IBC_DENOM, DATOM_DENOM, FUEL_DENOM, STLUNA_DENOM, STATOM_DENOM,
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
 } from 'lib/dex'
 import { arbPlans, fmtAmount, fmtUsd, totalUsd, type ArbPlan } from 'lib/arb'
@@ -46,18 +46,21 @@ import { useRouteSwap, useTradeSwap, useProvideLiquidity, useExitPosition, useUn
 import { useChain } from '@cosmos-kit/react'
 import { fromBech32 } from '@cosmjs/encoding'
 import type { EncodeObject } from '@cosmjs/proto-signing'
-import { arrivalSwapMsg, ibcTransferMsg, routeMsgs, tradeMsgs } from 'lib/msgs'
+import { arrivalSwapMsg, ibcTransferMsg, routeMsgs, sendMsg, tradeMsgs } from 'lib/msgs'
 import { NOBLE_CHAIN_ID, NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, TERRA_CHAIN_ID, TERRA_TO_NOBLE_CHANNEL, nobleUsdcBalance } from 'lib/noble'
 import { HUB_ATOM_DENOM, HUB_CHAIN_ID, HUB_TO_TERRA_CHANNEL, TERRA_TO_HUB_CHANNEL, hubAtomBalance } from 'lib/cosmoshub'
+import { NEUTRON_ASTRO, NEUTRON_CHAIN_ID, NEUTRON_DATOM, NEUTRON_FEE_DENOM, NEUTRON_FUEL, NEUTRON_TO_TERRA_CHANNEL, TERRA_TO_NEUTRON_CHANNEL, neutronBalance } from 'lib/neutron'
+import { STRIDE_CHAIN_ID, STRIDE_FEE_DENOM, STRIDE_TO_TERRA_CHANNEL, TERRA_TO_STRIDE_CHANNEL, strideBalance } from 'lib/stride'
 import { estimateFee } from 'lib/gas'
 import { INJECTIVE_CHAIN_ID, INJECTIVE_TO_TERRA_CHANNEL, TERRA_TO_INJECTIVE_CHANNEL, USDC_INJ_ON_INJECTIVE, injectiveBalance, toInjectiveAddress } from 'lib/injective'
 import { hubForToken, hubInfo, type HubInfo } from 'lib/lst'
 import { lcdFetch } from 'lib/lcd'
 import { TOKEN_META, tokenScore } from 'lib/tokenMeta'
-import { humanizeTxError } from 'lib/errors'
+import { explainTx, humanizeTxError, type TxFix } from 'lib/errors'
 import { recentMovePct, suggestSlippage, type SlipAdvice } from 'lib/slippage'
 import { SWEEP_KEEP_LUNA_MICRO, SWEEP_MAX, planSweep, poolsFor, type SweepLine, type SweepPick } from 'lib/sweep'
 import { GAS_DROP_BELOW_MICRO, LUNA, gasDropMicro, planGasDrop } from 'lib/gasDrop'
+import { askNotifications, fmtUsdPrice, notificationsAllowed, removeAlert, toggleFavorite, useAlertWatcher, usePrefs } from 'lib/alerts'
 
 type Tab = 'swap' | 'pools' | 'positions' | 'wallet' | 'history' | 'transfer' | 'create' | 'board'
 
@@ -238,6 +241,7 @@ function TokenPicker({ options, value, onPick, onClose }: {
   const [q, setQ] = useState('')
   const [active, setActive] = useState(0)
   const [bal, setBal] = useState<Record<string, string>>({})
+  const { favorites } = usePrefs()
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   useEffect(() => { inputRef.current?.focus() }, [])
@@ -267,9 +271,9 @@ function TokenPicker({ options, value, onPick, onClose }: {
     return q.trim()
       // An exact ticker or address goes first; among the other real matches, the deepest market wins.
       ? rows.sort((a, b) => rank(b.score) - rank(a.score) || liq(b.t) - liq(a.t)).map(r => r.t)
-      : rows.map(r => r.t).sort((a, b) => Number(held(b) > 0) - Number(held(a) > 0) || usdHeld(b) - usdHeld(a) || liq(b) - liq(a))
+      : rows.map(r => r.t).sort((a, b) => Number(favorites.includes(assetId(b.info))) - Number(favorites.includes(assetId(a.info))) || Number(held(b) > 0) - Number(held(a) > 0) || usdHeld(b) - usdHeld(a) || liq(b) - liq(a))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options, q, bal, px, liquidity])
+  }, [options, q, bal, px, liquidity, favorites])
   useEffect(() => { setActive(0) }, [q])
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-row="${active}"]`)?.scrollIntoView({ block: 'nearest' })
@@ -307,6 +311,10 @@ function TokenPicker({ options, value, onPick, onClose }: {
             style={{ ...field, width: '100%', boxSizing: 'border-box' }} spellCheck={false} autoComplete='off' />
           {!q.trim() && (
             <div style={{ marginTop: SPACE['2'], display: 'grid', gap: 6 }}>
+              {(() => {
+                const favs = favorites.map(id => options.find(t => assetId(t.info) === id)).filter((t): t is TokenOption => !!t).slice(0, 8)
+                return favs.length > 0 ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>★ Starred</span>{favs.map(chip)}</div> : null
+              })()}
               {recent.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>Recent</span>{recent.map(chip)}</div>}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>Deepest</span>{popular.map(chip)}</div>
               <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>Try &ldquo;bitcoin&rdquo;, &ldquo;gold&rdquo;, &ldquo;euro&rdquo;, &ldquo;staked luna&rdquo; or &ldquo;from noble&rdquo;.</div>
@@ -325,6 +333,7 @@ function TokenPicker({ options, value, onPick, onClose }: {
             const h = held(t), usd = usdHeld(t), depth = liq(t)
             const others = (namesakes.get(meta?.name ?? t.label) ?? []).filter(l => l !== t.label)
             const twin = others.length > 0
+            const fav = favorites.includes(id)
             return (
               <div key={id} data-row={i} role='option' aria-selected={id === value} onMouseEnter={() => setActive(i)} onClick={() => pick(t)}
                 style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], padding: '9px 10px', marginTop: 4, borderRadius: 10, cursor: 'pointer', background: i === active ? C.surface : 'transparent', border: `1px solid ${id === value ? C.goldCore : 'transparent'}` }}>
@@ -336,6 +345,11 @@ function TokenPicker({ options, value, onPick, onClose }: {
                   </div>
                   <div style={{ fontSize: TEXT.xs.size, color: twin ? C.goldLit : C.textWhisper }}>{meta?.origin ?? (('token' in t.info) ? 'Terra, cw20' : '')}{twin ? ` · a different token from ${others.join(' and ')}` : ''}</div>
                 </div>
+                <button type='button' aria-label={fav ? `Unstar ${t.label}` : `Star ${t.label}`} title={fav ? 'Starred: shown first' : 'Star it to keep it at the top'}
+                  onClick={e => { e.stopPropagation(); toggleFavorite(id) }}
+                  style={{ background: 'transparent', border: 'none', color: fav ? C.goldLit : C.textWhisper, cursor: 'pointer', fontSize: '1rem', padding: '0 2px', lineHeight: 1 }}>
+                  {fav ? '★' : '☆'}
+                </button>
                 <div style={{ textAlign: 'right', fontSize: TEXT.xs.size, fontVariantNumeric: 'tabular-nums' }}>
                   {h > 0
                     ? <><div style={{ color: C.textPrimary }}>{fmtAmount(h)}</div><div style={{ color: C.textMuted }}>{compactUsd(usd)}</div></>
@@ -574,6 +588,8 @@ function Footer({ height, soundOn, onToggleSound, onSecret, seoul }: { height?: 
       <Link href='/verify' title='check every contract from this browser' style={{ color: C.textSecondary, textDecoration: 'none' }}>verify the contracts</Link>
       <span>·</span>
       <Link href='/stats' title='liquidity, fees, liquid staking against the hubs, routing and uptime' style={{ color: C.textSecondary, textDecoration: 'none' }}>stats</Link>
+      <span>·</span>
+      <Link href='/developers' title='embed a live quote on your site, or call the quote API' style={{ color: C.textSecondary, textDecoration: 'none' }}>build</Link>
       <button type='button' onClick={onToggleSound} title={soundOn ? 'sound on · click to mute' : 'sound off · click for tiny beeps'} style={{
         marginLeft: 'auto', background: 'transparent', border: `1px solid ${C.divider}`, borderRadius: 999, padding: '2px 8px',
         color: soundOn ? C.goldLit : C.textWhisper, cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.7rem',
@@ -1380,6 +1396,11 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   const [checking, setChecking] = useState(false)
   const [moved, setMoved] = useState<{ was: string; now: string } | null>(null)
   const [netFee, setNetFee] = useState<string | null>(null)
+  /** The chain's own simulation of these exact messages says they would fail right now, and why (lib/gas estimateFee). */
+  const [simFail, setSimFail] = useState<{ text: string; fix: TxFix } | null>(null)
+  /** What would fix the swap that just failed. */
+  const [failFix, setFailFix] = useState<TxFix>(null)
+  const retryAfterSlip = useRef(false)
   const [copied, setCopied] = useState(false)
 
   /* The receive side a preset or a shared link asked for, parked until `toOptions` has been rebuilt around the new pay side. */
@@ -1490,12 +1511,12 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   tradeRef.current = trade
   const feeKey = me && trade && micro && micro === quotes?.amountMicro && !insufficient && minOut !== '0' ? `${me}|${micro}|${slip}|${tradeText(trade.parts)}` : ''
   useEffect(() => {
-    setNetFee(null)
+    setNetFee(null); setSimFail(null)
     const t = tradeRef.current
     if (!feeKey || !t) return
     let alive = true
     const timer = setTimeout(() => {
-      estimateFee(me, tradeMsgs(me, t, slip)).then(f => { if (alive) setNetFee(f.uluna) }).catch(() => {})
+      estimateFee(me, tradeMsgs(me, t, slip)).then(f => { if (alive) setNetFee(f.uluna) }).catch(e => { if (alive) setSimFail(explainTx(e)) })
     }, 400)
     return () => { alive = false; clearTimeout(timer) }
   }, [feeKey, me, slip])
@@ -1517,6 +1538,16 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
     Promise.all(moves).then(advise).catch(() => {})
     return () => { alive = false }
   }, [routeKey, perLeg])
+
+  /** The next slippage worth trying after a swap landed past its limit; none once it is already 3%. */
+  const wider = slipPct < 1 ? '1' : slipPct < 3 ? '3' : null
+  // "Try again at 3%": once the new setting is in the plan, the swap goes again. It is a new signature in the wallet.
+  useEffect(() => {
+    if (!retryAfterSlip.current || !canSwap) return
+    retryAfterSlip.current = false
+    void go()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSwap, slip])
 
   /** A link that opens this swap filled in, and unfurls as it in chats (getServerSideProps, /api/og/swap). */
   const share = () => {
@@ -1564,7 +1595,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
 
   const go = async () => {
     if (!canSwap || !route || !trade || !from || !to || !micro) return
-    setErr(null); setReceipt(null)
+    setErr(null); setReceipt(null); setFailFix(null)
     // The quote on screen can be a minute old. Price it again before the wallet opens: if it now delivers
     // more than half the slippage less, show the new number and let the next press sign that.
     let signed = trade
@@ -1610,7 +1641,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
       setAmount('')
       onDone()
       setTimeout(() => setTxHash(null), 6000)
-    } catch (e) { clearTimeout(p2); setPhase(0); setErr(humanizeTxError(e)) }
+    } catch (e) { clearTimeout(p2); setPhase(0); const why = explainTx(e); setErr(why.text); setFailFix(why.fix) }
   }
 
   if (tradable.length === 0) {
@@ -1805,10 +1836,23 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
         </div>
       )}
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
+      {err && failFix === 'slippage' && wider && (
+        <button type='button' onClick={() => { retryAfterSlip.current = true; setErr(null); setFailFix(null); setSlippage(wider) }}
+          style={{ ...ghostBtn, padding: '3px 10px', marginBottom: SPACE['2'], color: C.goldLit, borderColor: C.goldCore }}>
+          Try again at {wider}% slippage
+        </button>
+      )}
+      {/* Checked before anyone signs: the chain's simulation of these exact messages. Shown only for causes a person can act on. */}
+      {!err && simFail && (simFail.fix === 'slippage' || simFail.fix === 'balance') && (
+        <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'], lineHeight: 1.5 }}>
+          Checked against the chain before you sign: as it stands this would fail. {simFail.text}
+          {simFail.fix === 'slippage' && wider && <> <button type='button' onClick={() => setSlippage(wider)} style={{ ...ghostBtn, padding: '1px 8px', color: C.goldLit, borderColor: C.goldCore }}>Use {wider}%</button></>}
+        </div>
+      )}
       {txHash && !err && (
         <div style={{ fontSize: TEXT.xs.size, color: C.success, marginBottom: SPACE['2'], display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <span>{(!LITE && quip) || '✓ Swapped.'}</span>
-          {txHash !== 'ok' && <a href={finderTx(txHash)} target='_blank' rel='noreferrer' style={{ color: C.goldLit, fontWeight: 700 }}>View on Terrascope →</a>}
+          {txHash !== 'ok' && <Link href={`/tx/${txHash}`} style={{ color: C.goldLit, fontWeight: 700 }}>Receipt →</Link>}
         </div>
       )}
       {/* What people do next with what just arrived: check it landed, or put it to work in a pool. */}
@@ -1842,7 +1886,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
           {feeBps > 0 && <div className='terra-receipt-row'><span>protocol fee</span><span>{receipt.fee}</span></div>}
           <div className='terra-receipt-row'><span>{receipt.route ? 'route' : 'pool fee'}</span><span>{receipt.route ?? (LITE ? poolFeeText(pool, poolFeeBps) : `${poolFeeBps} bps → LPs`)}</span></div>
           {receipt.height ? <div className='terra-receipt-row'><span>block</span><span>#{receipt.height.toLocaleString('en-US')}</span></div> : null}
-          <div className='terra-receipt-row'><span>tx</span><span>{receipt.tx === 'ok' ? '—' : <a href={finderTx(receipt.tx)} target='_blank' rel='noreferrer' style={{ color: 'inherit' }}>{receipt.tx.slice(0, 8)}…{receipt.tx.slice(-4)} ↗</a>}</span></div>
+          <div className='terra-receipt-row'><span>tx</span><span>{receipt.tx === 'ok' ? '—' : <Link href={`/tx/${receipt.tx}`} style={{ color: 'inherit' }}>{receipt.tx.slice(0, 8)}…{receipt.tx.slice(-4)} ↗</Link>}</span></div>
           <div className='terra-receipt-f'>{LITE ? 'thank you' : '감사합니다 · thank you · steady lads 🫡'}</div>
         </div>
       )}
@@ -1941,7 +1985,11 @@ function HubAlternative({ from, to, micro, swapOut, blocked, onDone }: {
 
 /** A chain the wallet kit signs for directly, and the one token this panel moves between it and Terra. */
 interface SourceChain {
-  chainName: 'noble' | 'cosmoshub'
+  chainName: 'noble' | 'cosmoshub' | 'neutron' | 'stride'
+  /** what the source chain charges its network fee in, and a way to read that balance */
+  feeDenom: string
+  feeLabel: string
+  feeBalance: (address: string) => Promise<string>
   chainId: string
   name: string
   /** bech32 prefix of its addresses */
@@ -1961,8 +2009,30 @@ interface SourceChain {
   footnote: string
 }
 
-const SOURCE_CHAINS: Record<'noble' | 'cosmoshub', SourceChain> = {
+type SourceKey = 'noble' | 'cosmoshub' | 'neutron-astro' | 'neutron-datom' | 'neutron-fuel' | 'stride-stluna' | 'stride-statom'
+/** Every way into Terra the Bridge tab offers: the chains above, and Injective, which signs differently (InjectiveTransfer). */
+type NetKey = SourceKey | 'injective'
+
+/** A token from Neutron: its fee is NTRN, so a transfer can move all of the token. Checked on both chains 2026-09-15 (lib/neutron). */
+const neutronToken = (label: string, sourceDenom: string, terraDenom: string): SourceChain => ({
+  chainName: 'neutron', chainId: NEUTRON_CHAIN_ID, name: 'Neutron', prefix: 'neutron', terraDenom, sourceDenom, label,
+  toTerra: NEUTRON_TO_TERRA_CHANNEL, fromTerra: TERRA_TO_NEUTRON_CHANNEL, balance: a => neutronBalance(a, sourceDenom), feeReserve: BigInt(0),
+  feeDenom: NEUTRON_FEE_DENOM, feeLabel: 'NTRN', feeBalance: a => neutronBalance(a, NEUTRON_FEE_DENOM),
+  txUrl: h => `https://www.mintscan.io/neutron/tx/${h}`, never: [],
+  footnote: 'Neutron charges its network fee in NTRN, so the Neutron wallet needs a little of it.',
+})
+/** A token from Stride: its fee is STRD. Checked on both chains 2026-09-15 (lib/stride). */
+const strideToken = (label: string, sourceDenom: string, terraDenom: string): SourceChain => ({
+  chainName: 'stride', chainId: STRIDE_CHAIN_ID, name: 'Stride', prefix: 'stride', terraDenom, sourceDenom, label,
+  toTerra: STRIDE_TO_TERRA_CHANNEL, fromTerra: TERRA_TO_STRIDE_CHANNEL, balance: a => strideBalance(a, sourceDenom), feeReserve: BigInt(0),
+  feeDenom: STRIDE_FEE_DENOM, feeLabel: 'STRD', feeBalance: a => strideBalance(a, STRIDE_FEE_DENOM),
+  txUrl: h => `https://www.mintscan.io/stride/tx/${h}`, never: [],
+  footnote: 'Stride charges its network fee in STRD, so the Stride wallet needs a little of it.',
+})
+
+const SOURCE_CHAINS: Record<SourceKey, SourceChain> = {
   noble: {
+    feeDenom: NOBLE_USDC_DENOM, feeLabel: 'USDC', feeBalance: nobleUsdcBalance,
     chainName: 'noble', chainId: NOBLE_CHAIN_ID, name: 'Noble', prefix: 'noble', terraDenom: NOBLE_USDC, sourceDenom: NOBLE_USDC_DENOM, label: 'USDC',
     toTerra: NOBLE_TO_TERRA_CHANNEL, fromTerra: TERRA_TO_NOBLE_CHANNEL, balance: nobleUsdcBalance, feeReserve: BigInt(50_000),
     txUrl: h => `https://www.mintscan.io/noble/tx/${h}`,
@@ -1971,13 +2041,29 @@ const SOURCE_CHAINS: Record<'noble' | 'cosmoshub', SourceChain> = {
     footnote: 'This route carries USDC issued on Noble; USDC.inj from Injective has its own switch above. Noble charges its network fee in USDC.',
   },
   cosmoshub: {
+    feeDenom: HUB_ATOM_DENOM, feeLabel: 'ATOM', feeBalance: hubAtomBalance,
     chainName: 'cosmoshub', chainId: HUB_CHAIN_ID, name: 'Cosmos Hub', prefix: 'cosmos', terraDenom: ATOM_DENOM, sourceDenom: HUB_ATOM_DENOM, label: 'ATOM',
     toTerra: HUB_TO_TERRA_CHANNEL, fromTerra: TERRA_TO_HUB_CHANNEL, balance: hubAtomBalance, feeReserve: BigInt(20_000),
     txUrl: h => `https://www.mintscan.io/cosmos/tx/${h}`,
     never: [],
     footnote: 'The Cosmos Hub charges its network fee in ATOM.',
   },
+  'neutron-astro': neutronToken('ASTRO', NEUTRON_ASTRO, ASTRO_IBC_DENOM),
+  'neutron-datom': neutronToken('dATOM', NEUTRON_DATOM, DATOM_DENOM),
+  'neutron-fuel': neutronToken('FUEL', NEUTRON_FUEL, FUEL_DENOM),
+  'stride-stluna': strideToken('stLUNA', 'stuluna', STLUNA_DENOM),
+  'stride-statom': strideToken('stATOM', 'stuatom', STATOM_DENOM),
 }
+
+/** The Bridge tab's chains, and the tokens each one moves. */
+const BRIDGE_CHAINS: { name: string; tokens: [NetKey, string][] }[] = [
+  { name: 'Noble', tokens: [['noble', 'USDC']] },
+  { name: 'Cosmos Hub', tokens: [['cosmoshub', 'ATOM']] },
+  { name: 'Injective', tokens: [['injective', 'USDC.inj']] },
+  { name: 'Neutron', tokens: [['neutron-astro', 'ASTRO'], ['neutron-datom', 'dATOM'], ['neutron-fuel', 'FUEL']] },
+  { name: 'Stride', tokens: [['stride-stluna', 'stLUNA'], ['stride-statom', 'stATOM']] },
+]
+const isNetKey = (v: string | null): v is NetKey => !!v && BRIDGE_CHAINS.some(c => c.tokens.some(([k]) => k === v))
 
 /**
  * A token between Noble or the Cosmos Hub and Terra without leaving the page.
@@ -2037,6 +2123,12 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
   useEffect(() => {
     if (!srcAddr) { setSrcBal('0'); return }
     net.balance(srcAddr).then(setSrcBal).catch(() => {})
+  }, [srcAddr, net, status?.done])
+  // Neutron and Stride take their fee in their own token, not the one being moved: a wallet without any cannot send.
+  const [feeBal, setFeeBal] = useState<string | null>(null)
+  useEffect(() => {
+    if (!srcAddr || net.feeDenom === net.sourceDenom) { setFeeBal(null); return }
+    net.feeBalance(srcAddr).then(setFeeBal).catch(() => {})
   }, [srcAddr, net, status?.done])
   useEffect(() => {
     if (!me) { setTerraBal('0'); return }
@@ -2133,11 +2225,12 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
     } finally { setBusy(false) }
   }
 
+  const noGas = dir === 'in' && !!srcAddr && feeBal === '0'
   const needSource = dir === 'in' || !sendTo.trim()
   const fromBal = dir === 'in' ? srcBal : terraBal
   const fromDecimals = dir === 'in' ? base.decimals : token.decimals
   const insufficient = !!micro && BigInt(micro) > BigInt(fromBal || '0')
-  const canGo = !!me && !!quote && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!srcAddr && (!gas.active || gas.ready) : !!destination && isSourceAddress(destination))
+  const canGo = !!me && !!quote && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!srcAddr && !noGas && (!gas.active || gas.ready) : !!destination && isSourceAddress(destination))
   const turn = (d: 'in' | 'out') => { setDir(d); setAmount(''); setStatus(null); setErr(null) }
   const terraIcon = <img src='/img/terra-globe.svg' alt='' width={46} height={46} />
 
@@ -2215,6 +2308,7 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
         </div>
       )}
 
+      {noGas && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>This {net.name} wallet has no {net.feeLabel}. {net.name} charges its network fee in {net.feeLabel}, so it needs a little first.</div>}
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
       {status && (
         <div style={{ fontSize: TEXT.xs.size, color: status.failed ? C.alert : status.done ? C.success : C.textSecondary, marginBottom: SPACE['2'], lineHeight: 1.6 }}>
@@ -2331,16 +2425,32 @@ function followIbc(before: string, readDest: () => Promise<string>, setStatus: (
 const injectiveTxUrl = (hash: string) => `https://www.mintscan.io/injective/tx/${hash}`
 
 /** Which token to move: USDC on Noble, ATOM on the Cosmos Hub, or USDC.inj on Injective. The two dollars are separate tokens, never swapped for each other here. */
-function TransferPanel({ routePools, onDone, initialNet = 'noble' }: { routePools: PoolView[]; onDone: () => void; initialNet?: 'noble' | 'cosmoshub' | 'injective' }) {
-  const [net, setNet] = useState<'noble' | 'cosmoshub' | 'injective'>(initialNet)
+function TransferPanel({ routePools, onDone, initialNet = 'noble' }: { routePools: PoolView[]; onDone: () => void; initialNet?: NetKey }) {
+  const [net, setNet] = useState<NetKey>(initialNet)
+  const chain = BRIDGE_CHAINS.find(c => c.tokens.some(([k]) => k === net)) ?? BRIDGE_CHAINS[0]
   const switcher = (
-    <div role='tablist' aria-label='Which token to move' style={{ display: 'flex', flexWrap: 'wrap', gap: SPACE['2'], marginTop: SPACE['2'] }}>
-      {([['noble', 'USDC · Noble'], ['cosmoshub', 'ATOM · Cosmos Hub'], ['injective', 'USDC.inj · Injective']] as const).map(([k, text]) => (
-        <button key={k} type='button' role='tab' aria-selected={net === k} onClick={() => setNet(k)}
-          style={{ ...ghostBtn, padding: '4px 12px', color: net === k ? C.goldLit : C.textMuted, borderColor: net === k ? C.goldCore : C.divider }}>
-          {text}
-        </button>
-      ))}
+    <div style={{ display: 'grid', gap: 6, marginTop: SPACE['2'] }}>
+      <div role='tablist' aria-label='Which chain' style={{ display: 'flex', flexWrap: 'wrap', gap: SPACE['2'] }}>
+        {BRIDGE_CHAINS.map(c => {
+          const on = c === chain
+          return (
+            <button key={c.name} type='button' role='tab' aria-selected={on} onClick={() => setNet(c.tokens[0][0])}
+              style={{ ...ghostBtn, padding: '4px 12px', color: on ? C.goldLit : C.textMuted, borderColor: on ? C.goldCore : C.divider }}>
+              {c.tokens.length === 1 ? `${c.tokens[0][1]} · ${c.name}` : c.name}
+            </button>
+          )
+        })}
+      </div>
+      {chain.tokens.length > 1 && (
+        <div role='tablist' aria-label='Which token to move' style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {chain.tokens.map(([k, label]) => (
+            <button key={k} type='button' role='tab' aria-selected={net === k} onClick={() => setNet(k)}
+              style={{ ...ghostBtn, padding: '2px 10px', borderRadius: 999, display: 'inline-flex', alignItems: 'center', gap: 6, color: net === k ? C.goldLit : C.textMuted, borderColor: net === k ? C.goldCore : C.divider }}>
+              <TokenIcon label={label} size={14} />{label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
   return net === 'injective'
@@ -2961,6 +3071,156 @@ function WalletPanel({ pools, onDone }: { pools: PoolView[]; onDone: () => void 
   )
 }
 
+// ─── Send, and price alerts, in the wallet view ─────────────────
+
+/**
+ * Sending a listed token to another Terra address. The address is checked
+ * before anything is signed: that it is a Terra address, that it is not this
+ * wallet, whether it has ever been used, and whether it is a contract. A memo
+ * goes through exactly as typed, for an exchange that asks for one.
+ */
+function SendPanel({ pools, onDone }: { pools: PoolView[]; onDone: () => void }) {
+  const me = useMyAddress()
+  const send = useTerraMsgs()
+  const tokens = useMemo(() => {
+    const m = new Map<string, KnownToken>([['uluna', LUNA]])
+    for (const p of pools) for (const t of p.tokens) if (KNOWN_TOKENS.some(k => k.key === t.key)) m.set(assetId(t.info), t)
+    return Array.from(m.values())
+  }, [pools])
+  const [tokenId, setTokenId] = useState('uluna')
+  const [to, setTo] = useState('')
+  const [amount, setAmount] = useState('')
+  const [memo, setMemo] = useState('')
+  const [bal, setBal] = useState('0')
+  const [seen, setSeen] = useState<'used' | 'new' | 'unknown' | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [ok, setOk] = useState<{ text: string; tx: string } | null>(null)
+  const token = tokens.find(t => assetId(t.info) === tokenId) ?? LUNA
+  useEffect(() => {
+    if (!me) { setBal('0'); return }
+    queryBalance(me, token.info).then(setBal).catch(() => {})
+  }, [me, token, ok])
+
+  const addr = to.trim()
+  const kind = (() => {
+    try {
+      const { prefix, data } = fromBech32(addr)
+      return prefix === 'terra' && (data.length === 20 || data.length === 32) ? (data.length === 32 ? 'contract' : 'wallet') : null
+    } catch { return null }
+  })()
+  useEffect(() => {
+    setSeen(null)
+    if (!kind) return
+    let alive = true
+    lcdFetch(`/cosmos/auth/v1beta1/accounts/${addr}`)
+      .then(r => { if (alive) setSeen(r.ok ? 'used' : r.status === 404 ? 'new' : 'unknown') })
+      .catch(() => { if (alive) setSeen('unknown') })
+    return () => { alive = false }
+  }, [addr, kind])
+
+  const micro = toMicro(amount, token.decimals)
+  const isLuna = assetId(token.info) === 'uluna'
+  const insufficient = !!micro && BigInt(micro) > BigInt(bal || '0')
+  const self = !!me && addr === me
+  const canSend = !!me && !!kind && !self && !!micro && micro !== '0' && !insufficient && !busy
+
+  const go = async () => {
+    if (!canSend || !micro) return
+    setErr(null); setOk(null); setBusy(true)
+    try {
+      const r = await send.mutateAsync({ msgs: [sendMsg({ sender: me, recipient: addr, info: token.info, amount: micro })], memo: memo.trim(), raw: true }) as { transactionHash?: string }
+      setOk({ text: `Sent ${fromMicro(micro, token.decimals, 6)} ${token.label} to ${addr.slice(0, 10)}…${addr.slice(-6)}.`, tx: r?.transactionHash ?? '' })
+      setAmount('')
+      onDone()
+    } catch (e) { setErr(humanizeTxError(e)) } finally { setBusy(false) }
+  }
+
+  if (!me) return null
+  return (
+    <Card>
+      <Section title='Send' />
+      <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px` }}>
+        Any listed token to another Terra address. A send cannot be undone, so the address is checked before you sign.
+      </p>
+      <label style={label}>Token and amount</label>
+      <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['2'] }}>
+        <input style={field} type='number' min='0' step='any' placeholder='0.0' value={amount} onChange={e => setAmount(e.target.value)} />
+        <TokenSelect value={tokenId} onChange={setTokenId} options={tokens} />
+      </div>
+      <div style={{ ...rowStyle, marginBottom: SPACE['3'] }}>
+        <span>Balance {fromMicro(bal, token.decimals)} {token.label}</span>
+        {BigInt(bal || '0') > BigInt(0) && (
+          <button type='button' style={{ ...ghostBtn, padding: '2px 8px' }} onClick={() => {
+            // Sending all LUNA would leave nothing for this transaction's fee, or the next one.
+            const keep = isLuna ? BigInt(100_000) : BigInt(0)
+            const max = BigInt(bal) > keep ? BigInt(bal) - keep : BigInt(0)
+            setAmount(fromMicro(max.toString(), token.decimals, 6).replace(/,/g, ''))
+          }}>max</button>
+        )}
+      </div>
+      <label style={label}>To this Terra address</label>
+      <input style={{ ...field, width: '100%', boxSizing: 'border-box' }} placeholder='terra1…' value={to} onChange={e => setTo(e.target.value)} spellCheck={false} autoComplete='off' />
+      <div style={{ fontSize: TEXT.xs.size, lineHeight: 1.5, margin: `4px 0 ${SPACE['2']}px`, minHeight: 18 }}>
+        {addr && !kind && <span style={{ color: C.alert }}>That is not a Terra address.</span>}
+        {self && <span style={{ color: C.alert }}>That is this wallet.</span>}
+        {kind && !self && seen === 'new' && <span style={{ color: C.emberLit }}>This address has never been used on Terra. Check every character before sending.</span>}
+        {kind === 'contract' && !self && <span style={{ color: C.emberLit, display: 'block' }}>This is a contract address. Send only if it accepts {token.label}; tokens sent to a contract that does not handle them can be lost.</span>}
+        {kind === 'wallet' && !self && seen === 'used' && <span style={{ color: C.textWhisper }}>An address that has been used on Terra before.</span>}
+      </div>
+      <label style={label}>Memo, only if the receiver asks for one</label>
+      <input style={{ ...field, width: '100%', boxSizing: 'border-box', marginBottom: SPACE['3'] }} placeholder='for example an exchange deposit memo' value={memo} onChange={e => setMemo(e.target.value.slice(0, 256))} spellCheck={false} autoComplete='off' />
+      {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
+      {ok && <div style={{ fontSize: TEXT.xs.size, color: C.success, marginBottom: SPACE['2'] }}>✓ {ok.text}{ok.tx && <> <Link href={`/tx/${ok.tx}`} style={{ color: C.goldLit }}>Receipt →</Link></>}</div>}
+      <button type='button' style={{ ...primaryBtn, opacity: canSend ? 1 : 0.5 }} disabled={!canSend} onClick={go}>
+        {busy ? 'Confirm in wallet…' : insufficient ? `Not enough ${token.label}` : micro && micro !== '0' && kind && !self ? `Send ${fromMicro(micro, token.decimals, 6)} ${token.label} to ${addr.slice(0, 10)}…${addr.slice(-4)}` : 'Send'}
+      </button>
+    </Card>
+  )
+}
+
+/** Price alerts and starred tokens, both kept in this browser only (lib/alerts). */
+function AlertsPanel() {
+  const { alerts, favorites } = usePrefs()
+  const [allowed, setAllowed] = useState(false)
+  useEffect(() => { setAllowed(notificationsAllowed()) }, [alerts])
+  const waiting = alerts.filter(a => !a.firedAt)
+  const starred = favorites.map(id => KNOWN_TOKENS.find(t => assetId(t.info) === id)).filter((t): t is KnownToken => !!t)
+  return (
+    <Card>
+      <Section title='Price alerts and starred tokens' />
+      <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['2']}px` }}>
+        Kept in this browser only. An alert goes off once, when an open Terra Swap page sees the market reference cross its level. Set one on any token&apos;s page, for example <Link href='/token/LUNA' style={{ color: C.goldLit }}>LUNA</Link>; star tokens in the token picker to keep them at the top.
+      </p>
+      {waiting.length > 0 && !allowed && typeof Notification !== 'undefined' && (
+        <button type='button' onClick={async () => setAllowed(await askNotifications())} style={{ ...ghostBtn, padding: '3px 10px', marginBottom: SPACE['2'] }}>Allow browser notifications</button>
+      )}
+      {alerts.length === 0 && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>No alerts set.</div>}
+      {alerts.map(a => (
+        <div key={a.id} style={{ ...rowStyle, alignItems: 'center' }}>
+          <Link href={`/token/${encodeURIComponent(a.key)}`} style={{ color: C.textSecondary, display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}>
+            <TokenIcon label={a.label} size={16} />{a.label} {a.dir} ${fmtUsdPrice(a.usd)}
+          </Link>
+          <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+            <span style={{ color: a.firedAt ? C.success : C.textWhisper }}>{a.firedAt ? `went off at $${fmtUsdPrice(a.firedUsd ?? 0)}` : 'waiting'}</span>
+            <button type='button' aria-label='Remove alert' onClick={() => removeAlert(a.id)} style={{ background: 'transparent', border: 'none', color: C.textMuted, cursor: 'pointer' }}>✕</button>
+          </span>
+        </div>
+      ))}
+      {starred.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: SPACE['2'], alignItems: 'center' }}>
+          <span style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>★ Starred</span>
+          {starred.map(t => (
+            <Link key={t.key} href={`/token/${encodeURIComponent(t.key)}`} style={{ ...ghostBtn, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 999, color: C.textPrimary, textDecoration: 'none' }}>
+              <TokenIcon label={t.label} size={14} />{t.label}
+            </Link>
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
 // ─── History: what a wallet did, read back from the chain ───────
 
 const KIND_TEXT: Record<HistoryRow['kind'], string> = {
@@ -3057,7 +3317,8 @@ function HistoryPanel({ pools }: { pools: PoolView[] }) {
                 <span>Network fee</span>
                 <span style={{ display: 'inline-flex', gap: 10 }}>
                   <span style={{ color: C.textSecondary }}>{row.feeUluna !== '0' ? `${fromMicro(row.feeUluna, 6, 4)} LUNA` : 'paid by the relayer'}</span>
-                  <a href={finderTx(row.hash)} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>tx ↗</a>
+                  <Link href={`/tx/${row.hash}`} style={{ color: C.goldLit }}>receipt</Link>
+                  <a href={finderTx(row.hash)} target='_blank' rel='noreferrer' style={{ color: C.textMuted }}>tx ↗</a>
                 </span>
               </div>
             </div>
@@ -4438,7 +4699,7 @@ type ExploreKey = 'swap' | 'bridge' | 'pools' | 'portfolio' | 'history' | 'lst' 
  */
 function Explore({ pools, gaps, onGo }: { pools: number; gaps: number; onGo: (k: ExploreKey) => void }) {
   const cards: { k: ExploreKey | 'verify' | 'stats'; icon: string; title: string; body: string; cta: string; muted?: boolean }[] = [
-    { k: 'bridge', icon: '🌉', title: 'Bring money in', body: 'USDC from Noble, ATOM from the Cosmos Hub or USDC.inj from Injective, already swapped into another token when it lands.', cta: 'Bridge' },
+    { k: 'bridge', icon: '🌉', title: 'Bring money in', body: 'USDC from Noble, ATOM from the Cosmos Hub, USDC.inj from Injective, ASTRO and dATOM from Neutron, stLUNA from Stride, already swapped into another token when it lands.', cta: 'Bridge' },
     { k: 'pools', icon: '💧', title: 'Provide liquidity', body: `${pools} pools with liquidity on Terra Swap and Astroport. Add both sides or zap in with one token, and see what each pool paid its providers.`, cta: 'Pools' },
     { k: 'portfolio', icon: '🧾', title: 'Everything you hold', body: 'Every position on both sites, closed in one signature, and against simply holding. Sell leftover balances in one go; your history shows each quote beside what arrived.', cta: 'Portfolio' },
     { k: 'lst', icon: '🥩', title: 'Liquid staking against the hubs', body: 'When redeeming ampLUNA or bLUNA at its hub pays more than selling in a pool, and by how much.', cta: 'See the rates' },
@@ -4696,7 +4957,7 @@ function SwapPageInner() {
       const linked = PARAM_TAB[params.get('tab') ?? '']
       if (linked && !(LITE && linked === 'board')) setTab(linked)
       const net = params.get('net')
-      if (net === 'noble' || net === 'cosmoshub' || net === 'injective') setBridgeNet(net)
+      if (isNetKey(net)) setBridgeNet(net)
       const pool = params.get('pool') || ''
       if (/^terra1[0-9a-z]{38,}$/.test(pool)) wantPool.current = pool
       const who = params.get('who') || ''
@@ -4879,6 +5140,19 @@ function SwapPageInner() {
   const routePoolsAll = useMemo(() => [...(data?.pools ?? []).filter(p => !p.empty), ...venuePools], [data, venuePools])
   // Every token picker ranks by these.
   useEffect(() => { publishTokenData({ px: marketPx, liquidity: liquidityByToken(routePoolsAll) }) }, [marketPx, routePoolsAll])
+
+  // Price alerts (lib/alerts): read the market reference once a minute while any alert is waiting, and say so when one goes off.
+  const { alerts: priceAlerts } = usePrefs()
+  const alertsArmed = priceAlerts.some(a => !a.firedAt)
+  const [alertPx, setAlertPx] = useState<Record<string, number> | null>(null)
+  useEffect(() => {
+    if (!alertsArmed) return
+    let alive = true
+    const read = () => fetch('/api/dex-market').then(r => (r.ok ? r.json() : null)).then((j: { px?: Record<string, number> } | null) => { if (alive && j?.px) setAlertPx(j.px) }).catch(() => {})
+    const t = setInterval(read, 60_000)
+    return () => { alive = false; clearInterval(t) }
+  }, [alertsArmed])
+  useAlertWatcher(alertPx ?? marketPx, fired => setToast({ msg: fired.map(f => `${f.label} is ${f.dir} $${fmtUsdPrice(f.usd)}: $${fmtUsdPrice(f.firedUsd ?? 0)} now.`).join(' ') }))
   /** "Take it" opens the round trip in one transaction. The one-sided trade stays as the fallback. */
   const [loopFor, setLoopFor] = useState<ArbPlan | null>(null)
   const [preset, setPreset] = useState<SwapPreset | null>(null)
@@ -4907,7 +5181,14 @@ function SwapPageInner() {
 
   // ── Finding things: the search palette, and the ways into each part of the site ──
   const [palette, setPalette] = useState(false)
-  const [bridgeNet, setBridgeNet] = useState<'noble' | 'cosmoshub' | 'injective'>('noble')
+  const [bridgeNet, setBridgeNet] = useState<NetKey>('noble')
+  // Installing as an app: browsers that offer it hand over the prompt, which search then offers (see paletteItems).
+  const [installPrompt, setInstallPrompt] = useState<{ prompt: () => Promise<void> } | null>(null)
+  useEffect(() => {
+    const on = (e: Event) => { e.preventDefault(); setInstallPrompt(e as unknown as { prompt: () => Promise<void> }) }
+    window.addEventListener('beforeinstallprompt', on)
+    return () => window.removeEventListener('beforeinstallprompt', on)
+  }, [])
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(p => !p) }
@@ -4916,7 +5197,7 @@ function SwapPageInner() {
     return () => window.removeEventListener('keydown', on)
   }, [])
   const openTab = useCallback((t: Tab) => { setTab(t); window.scrollTo({ top: 0, behavior: 'smooth' }) }, [])
-  const openBridge = useCallback((net: 'noble' | 'cosmoshub' | 'injective') => { setBridgeNet(net); openTab('transfer') }, [openTab])
+  const openBridge = useCallback((net: NetKey) => { setBridgeNet(net); openTab('transfer') }, [openTab])
   /** Open the Pools tab on something in it, clearing whatever would hide it. */
   const openInPools = useCallback((elementId: string, dust = false) => {
     setVenueFilter('all'); setPoolQuery(''); if (dust) setShowDust(true)
@@ -4943,6 +5224,8 @@ function SwapPageInner() {
       { id: 'do-bridge-noble', group: 'Do', label: 'Bring USDC in from Noble', hint: 'arrives as USDC, or already swapped into another token', keywords: 'bridge deposit transfer ibc noble usdc move in', icon: icon('🌉'), run: () => openBridge('noble') },
       { id: 'do-bridge-hub', group: 'Do', label: 'Bring ATOM in from the Cosmos Hub', hint: 'arrives as ATOM, or already swapped into another token', keywords: 'bridge deposit transfer ibc cosmos hub atom move in', icon: icon('⚛️'), run: () => openBridge('cosmoshub') },
       { id: 'do-bridge-inj', group: 'Do', label: 'Bring USDC.inj in from Injective', hint: 'arrives as USDC.inj, or already swapped into another token', keywords: 'bridge deposit transfer ibc injective usdc.inj move in', icon: icon('🌊'), run: () => openBridge('injective') },
+      { id: 'do-bridge-neutron', group: 'Do', label: 'Bring ASTRO, dATOM or FUEL in from Neutron', hint: 'arrives as itself, or already swapped into another token', keywords: 'bridge deposit transfer ibc neutron astro datom drop fuel move in', icon: icon('⚡'), run: () => openBridge('neutron-astro') },
+      { id: 'do-bridge-stride', group: 'Do', label: 'Bring stLUNA or stATOM in from Stride', hint: 'arrives as itself, or already swapped into another token', keywords: 'bridge deposit transfer ibc stride stluna statom staked move in', icon: icon('🏃'), run: () => openBridge('stride-stluna') },
       { id: 'do-lst', group: 'Do', label: 'Liquid staking against the hubs', hint: 'when redeeming ampLUNA or bLUNA at its hub beats selling in the pool', keywords: 'lst stake unstake redeem mint ampluna bluna eris backbone hub', icon: icon('🥩'), run: () => openInPools('lst') },
       ...(arbs[0] ? [{ id: 'do-gap', group: 'Do', label: 'Close the biggest gap', hint: `${arbs[0].pool.label} is ${arbs[0].off.toFixed(1)}× off the market`, keywords: 'arbitrage arb drift gap off market', icon: icon('⚡'), run: () => takeArb(arbs[0]) }] : []),
       { id: 'do-open-pool', group: 'Do', label: 'Open a pool', hint: "on Terra Swap's or Astroport's factory, one signature", keywords: 'create new pair pool list token factory', icon: icon('🏗️'), run: () => openTab('create') },
@@ -4950,12 +5233,19 @@ function SwapPageInner() {
       { id: 'do-keys', group: 'Do', label: 'Keyboard shortcuts', hint: '⌘K search · / amount · f flip the pair', keywords: 'keys hotkeys keyboard', icon: icon('⌨️'), run: () => setShortcuts(true) },
       { id: 'go-swap', group: 'Go to', label: 'Swap', hint: "the best route through Terra Swap's and Astroport's pools", keywords: 'trade exchange buy sell convert', icon: icon('🔀'), run: () => openTab('swap') },
       { id: 'go-pools', group: 'Go to', label: 'Pools', hint: `${allPools.length} pools on both sites: add, zap in, remove`, keywords: 'liquidity lp provide add remove zap fees', icon: icon('💧'), run: () => openTab('pools') },
-      { id: 'go-bridge', group: 'Go to', label: 'Bridge', hint: 'USDC from Noble, ATOM from the Cosmos Hub, USDC.inj from Injective, and back', keywords: 'transfer ibc deposit withdraw move chains', icon: icon('🌉'), run: () => openTab('transfer') },
+      { id: 'go-bridge', group: 'Go to', label: 'Bridge', hint: 'USDC from Noble, ATOM from the Cosmos Hub, USDC.inj from Injective, ASTRO and dATOM from Neutron, stLUNA from Stride, and back', keywords: 'transfer ibc deposit withdraw move chains', icon: icon('🌉'), run: () => openTab('transfer') },
       { id: 'go-positions', group: 'Go to', label: 'Portfolio', hint: 'every position on both sites, staked LP included, and a way out of each', keywords: 'positions lp exit withdraw staked rewards claim holdings', icon: icon('🧾'), run: () => openTab('positions') },
       { id: 'go-history', group: 'Go to', label: 'History', hint: 'your swaps, liquidity and transfers, each quote beside what arrived', keywords: 'transactions receipts activity past', icon: icon('🕘'), run: () => openTab('history') },
       ...(!LITE ? [{ id: 'go-board', group: 'Go to', label: 'Board', hint: 'who was here first, and what they did', keywords: 'leaderboard points badges ranks', icon: icon('🏆'), run: () => openTab('board') }] : []),
       { id: 'page-stats', group: 'Pages', label: 'Stats', hint: 'liquidity, fees paid to providers, liquid staking, routing and uptime', keywords: 'analytics numbers volume tvl uptime data', icon: icon('📊'), run: () => { window.location.href = '/stats' } },
       { id: 'page-verify', group: 'Pages', label: 'Verify the contracts', hint: 'no owner, no admin, no fee: checked from your own browser', keywords: 'security audit renounced keys checksum trust safe', icon: icon('✓'), run: () => { window.location.href = '/verify' } },
+      { id: 'page-developers', group: 'Pages', label: 'Build with Terra Swap', hint: 'embed a live quote on your site, or call the quote API', keywords: 'developers api embed widget iframe quote integrate', icon: icon('🧩'), run: () => { window.location.href = '/developers' } },
+      { id: 'do-alerts', group: 'Do', label: 'Price alerts and favourites', hint: 'kept in this browser; set an alert on any token page', keywords: 'alert notify notification price watch favourite favorite star', icon: icon('🔔'), run: () => openTab('wallet') },
+      {
+        id: 'do-install', group: 'Do', label: 'Install Terra Swap as an app', hint: installPrompt ? 'on this device, with its own icon' : 'on a phone: Share, then Add to Home Screen',
+        keywords: 'install app pwa home screen phone mobile desktop', icon: icon('📲'),
+        run: () => { if (installPrompt) installPrompt.prompt().catch(() => {}); else setToast({ msg: 'On a phone: open the browser menu or Share, then Add to Home Screen.' }) },
+      },
       { id: 'page-source', group: 'Pages', label: 'Source code', hint: 'MIT licensed; anyone can run their own copy', keywords: 'github open source code repository', icon: icon('⌥'), run: () => { window.open('https://github.com/solid-online/terra-swap', '_blank', 'noopener') } },
     ]
     const tokens = new Map<string, KnownToken>()
@@ -4983,7 +5273,7 @@ function SwapPageInner() {
     }
     return items
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allPools, routePoolsAll, arbs, openBridge, openInPools, openSwap, openTab, takeArb])
+  }, [allPools, routePoolsAll, arbs, openBridge, openInPools, openSwap, openTab, takeArb, installPrompt])
   const load = useCallback(async () => {
     setSyncing(true)
     try {
@@ -5205,7 +5495,13 @@ function SwapPageInner() {
               )}
               {(tab === 'positions' || tab === 'wallet' || tab === 'history') && <PortfolioSwitch view={tab} onView={setTab} />}
               {tab === 'positions' && <PositionsPanel onDone={refresh} flows={me ? board?.flows : undefined} />}
-              {tab === 'wallet' && <WalletPanel pools={routePoolsAll} onDone={refresh} />}
+              {tab === 'wallet' && (
+                <div style={{ display: 'grid', gap: SPACE['3'] }}>
+                  <WalletPanel pools={routePoolsAll} onDone={refresh} />
+                  <SendPanel pools={routePoolsAll} onDone={refresh} />
+                  <AlertsPanel />
+                </div>
+              )}
               {tab === 'history' && <HistoryPanel pools={allPools} />}
               {tab === 'transfer' && <TransferPanel key={bridgeNet} initialNet={bridgeNet} routePools={routePoolsAll} onDone={refresh} />}
               {tab === 'create' && <CreatePanel pools={allPools} marketPx={marketPx} onDone={refresh} onCreated={() => setTab('pools')} onBack={() => setTab('pools')} onParty={setParty} />}

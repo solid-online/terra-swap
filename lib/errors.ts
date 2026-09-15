@@ -151,6 +151,15 @@ export function humanizeTxError(err: unknown): string {
     return 'Price must be greater than zero.'
   }
 
+  // ─── Price moved past the limit (swaps) ───────────────────────────
+  // Astroport's pairs: "Operation exceeds max spread limit"; the routers: "Assertion failed; minimum receive amount …".
+  if (SLIPPAGE_ERROR.test(raw)) {
+    return 'The price moved past your slippage limit before this could land, so nothing was swapped. Try again, or allow a little more slippage.'
+  }
+  if (/insufficient funds/i.test(raw)) {
+    return 'Not enough balance for this, counting the network fee in LUNA.'
+  }
+
   // ─── User rejected in wallet ──────────────────────────────────────
   if (/user denied|rejected by user|request rejected/i.test(raw)) {
     return 'Transaction cancelled in your wallet.'
@@ -178,3 +187,19 @@ export function humanizeTxError(err: unknown): string {
 }
 
 export const ATRIUM_ERROR_TOKENS = { SOLID_CW20, CAPA_CW20 } as const
+
+/** A swap that landed past its price limit: Astroport's pairs and both routers word it differently. */
+const SLIPPAGE_ERROR = /max spread limit|minimum receive|belief price|spread assertion/i
+
+/** What would fix a failed transaction, for a panel that can offer the fix. */
+export type TxFix = 'slippage' | 'balance' | 'gas' | null
+
+/** humanizeTxError, plus the fix a panel can offer beside it. */
+export function explainTx(err: unknown): { text: string; fix: TxFix } {
+  const raw = err instanceof Error ? err.message : String(err || '')
+  const fix: TxFix = SLIPPAGE_ERROR.test(raw) ? 'slippage'
+    : /insufficient funds|spendable balance|Cannot Sub/i.test(raw) ? 'balance'
+    : /out of gas/i.test(raw) ? 'gas'
+    : null
+  return { text: humanizeTxError(err), fix }
+}

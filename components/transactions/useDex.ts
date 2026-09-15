@@ -137,10 +137,10 @@ export const useLstWithdraw = () => {
   return useMutation(async (a: { hub: string; sender: string }) => broadcast([withdrawUnbondedMsg(a)], `${MEMO}: withdraw unstaked LUNA`))
 }
 
-/** Messages already built and checked in lib/msgs, signed on Terra. */
+/** Messages already built and checked in lib/msgs, signed on Terra. `raw` sends the memo exactly as given, for a receiver that needs one (an exchange's deposit memo). */
 export const useTerraMsgs = () => {
   const broadcast = useDexBroadcast()
-  return useMutation(async (a: { msgs: EncodeObject[]; memo: string }) => broadcast(a.msgs, `${MEMO}: ${a.memo}`))
+  return useMutation(async (a: { msgs: EncodeObject[]; memo: string; raw?: boolean }) => broadcast(a.msgs, a.raw ? a.memo : `${MEMO}: ${a.memo}`))
 }
 
 /**
@@ -149,7 +149,9 @@ export const useTerraMsgs = () => {
  * Cosmos Hub. The component calling it is keyed by chain, so the chain never
  * changes under a mounted hook.
  */
-export function useCosmosBroadcast(chainName: 'noble' | 'cosmoshub', label: string) {
+export type CosmosSource = 'noble' | 'cosmoshub' | 'neutron' | 'stride'
+
+export function useCosmosBroadcast(chainName: CosmosSource, label: string) {
   const chain = useChain(chainName)
   const { txAllowed, country } = useTxRegionGate()
   return useCallback(async (msgs: EncodeObject[], memo: string) => {
@@ -170,7 +172,7 @@ export function useCosmosBroadcast(chainName: 'noble' | 'cosmoshub', label: stri
   }, [chain, label, txAllowed, country])
 }
 
-export const useCosmosMsgs = (chainName: 'noble' | 'cosmoshub', label: string) => {
+export const useCosmosMsgs = (chainName: CosmosSource, label: string) => {
   const broadcast = useCosmosBroadcast(chainName, label)
   return useMutation(async (a: { msgs: EncodeObject[]; memo: string }) => broadcast(a.msgs, `${MEMO}: ${a.memo}`))
 }

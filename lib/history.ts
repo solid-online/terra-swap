@@ -20,7 +20,7 @@ const UA = { 'User-Agent': 'Mozilla/5.0 terra-swap-history', accept: 'applicatio
 /** Terra's fee collector. What a wallet pays it, or is refunded by it, is the network fee, not a trade. */
 const FEE_COLLECTOR = 'terra17xpfvakm2amg962yls6f84z3kell8c5lkaeqfa'
 /** Terra's IBC channels to the chains the Transfer tab moves tokens with. */
-const CHANNEL_CHAIN: Record<string, string> = { 'channel-253': 'Noble', 'channel-0': 'Cosmos Hub', 'channel-255': 'Injective' }
+const CHANNEL_CHAIN: Record<string, string> = { 'channel-253': 'Noble', 'channel-0': 'Cosmos Hub', 'channel-255': 'Injective', 'channel-229': 'Neutron', 'channel-46': 'Stride' }
 
 export type HistoryKind =
   | 'swap' | 'zap' | 'add liquidity' | 'remove liquidity' | 'stake' | 'unstake' | 'claim'
