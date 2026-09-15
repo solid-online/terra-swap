@@ -3348,6 +3348,8 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
   // ── zap: one token in, swap-half-then-provide in a single signature ──
   const zap = useZap()
   const [side, setSide] = useState<'both' | 'zap'>('both')
+  /** A pool of USDC from Noble and USDC.inj takes both sides only: a zap would swap one dollar for the other, which this site never does. */
+  const twoDollars = p.tokens.some(t => assetId(t.info) === NOBLE_USDC) && p.tokens.some(t => assetId(t.info) === USDC_INJ_DENOM)
   const [zIdx, setZIdx] = useState<0 | 1>(0)
   const [zAmt, setZAmt] = useState('')
   const [zBal, setZBal] = useState('0')
@@ -3552,7 +3554,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
             </div>
           )}
           {/* Zap sizing is constant-product maths, so it is offered on xyk pools only. */}
-          {!p.empty && p.pairType === 'xyk' && (
+          {!p.empty && p.pairType === 'xyk' && !twoDollars && (
             <div style={{ display: 'flex', gap: SPACE['2'] }}>
               {(['both', 'zap'] as const).map(sd => (
                 <button key={sd} type='button' onClick={() => setSide(sd)} style={{ ...ghostBtn, padding: '3px 10px', color: side === sd ? C.goldLit : C.textMuted, borderColor: side === sd ? C.goldCore : C.divider }}>
@@ -3561,7 +3563,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
               ))}
             </div>
           )}
-          {side === 'both' || p.empty || p.pairType !== 'xyk' ? (
+          {side === 'both' || p.empty || p.pairType !== 'xyk' || twoDollars ? (
             <>
               <div style={{ display: 'flex', gap: SPACE['2'] }}>
                 <input style={field} type='number' min='0' step='any' placeholder={`0.0 ${t0.label}`} value={a0} onChange={e => onA0(e.target.value)} />

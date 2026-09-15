@@ -28,9 +28,22 @@
  */
 
 import {
-  assetId, priceLimit, sameAsset, simulateSwap, toMicro, TERRA_SWAP_ROUTER, VENUE_NAME,
+  NOBLE_USDC, USDC_INJ_DENOM, assetId, priceLimit, sameAsset, simulateSwap, toMicro, TERRA_SWAP_ROUTER, VENUE_NAME,
   type KnownToken, type PoolView, type Venue,
 } from 'lib/dex'
+
+/**
+ * USDC from Noble and USDC.inj are two different dollars, and this site never
+ * exchanges one for the other: not directly, not through a pool that holds
+ * both, and not along a longer path that starts or passes through one and
+ * ends in or passes through the other. A path is dropped here if its tokens
+ * include both, so every swap, split, zap, loop, sweep and swap on arrival
+ * keeps to it without having to remember.
+ */
+const mixesDollars = (tokens: KnownToken[]) => {
+  const ids = tokens.map(t => assetId(t.info))
+  return ids.includes(NOBLE_USDC) && ids.includes(USDC_INJ_DENOM)
+}
 
 /** Pools under this much liquidity are never routed through. */
 const MIN_TVL_USD = 5
@@ -109,7 +122,7 @@ function paths(pools: PoolView[], from: KnownToken, to: KnownToken): Path[] {
     const second = perVenue(live.filter(q => has(q, m) && has(q, to)))
     for (const a of first) for (const b of second) out.push({ pools: [a, b], tokens: [from, m, to] })
   })
-  return out
+  return out.filter(p => !mixesDollars(p.tokens))
 }
 
 /** Three pools through two intermediate tokens, each hop through the deepest pool for its pair. */
@@ -129,7 +142,7 @@ function paths3(pools: PoolView[], from: KnownToken, to: KnownToken): Path[] {
       if (a && b && c) out.push({ pools: [a, b, c], tokens: [from, m1, m2, to] })
     }
   }
-  return out
+  return out.filter(p => !mixesDollars(p.tokens))
 }
 
 /** Every token reachable from `from` through one, two or three pools. */

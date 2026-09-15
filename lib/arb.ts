@@ -21,7 +21,7 @@
  *   • the gap is first-come. Anyone can take it, and it moves on every trade.
  */
 
-import { assetId, toMicro, type KnownToken, type PoolView } from 'lib/dex'
+import { NOBLE_USDC, USDC_INJ_DENOM, assetId, toMicro, type KnownToken, type PoolView } from 'lib/dex'
 import { POOL_FEE_BPS } from 'lib/dex'
 
 export interface ArbPlan {
@@ -62,6 +62,9 @@ export function arbPlans(pools: PoolView[], px: Record<string, number> | null): 
   for (const pool of pools) {
     if (pool.empty) continue
     const [a, b] = pool.tokens
+    // Closing a gap in a pool of USDC from Noble and USDC.inj would exchange one dollar for the other, which this site never does.
+    const ids = [assetId(a.info), assetId(b.info)]
+    if (ids.includes(NOBLE_USDC) && ids.includes(USDC_INJ_DENOM)) continue
     const pa = px[assetId(a.info)], pb = px[assetId(b.info)]
     if (!(pa > 0) || !(pb > 0)) continue
 
