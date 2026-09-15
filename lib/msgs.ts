@@ -20,7 +20,7 @@ import { MsgExecuteContract } from 'cosmjs-types/cosmwasm/wasm/v1/tx'
 import { MsgSend } from 'cosmjs-types/cosmos/bank/v1beta1/tx'
 import { MsgTransfer } from 'cosmjs-types/ibc/applications/transfer/v1/tx'
 import { toUtf8 } from '@cosmjs/encoding'
-import { ASTRO_ROUTER, TERRA_SWAP_ROUTER, VENUE_FACTORY, type Asset, type AssetInfo } from 'lib/dex'
+import { ASTRO_ROUTER, TERRA_SWAP_ROUTER, VENUE_FACTORY, type Asset, type AssetInfo, type Venue } from 'lib/dex'
 import type { ExecLeg, RoutePlan, TradePlan } from 'lib/route'
 
 type Coin = { denom: string; amount: string }
@@ -154,9 +154,15 @@ export interface ProvideArgs {
   /** 0.01 = 1% */
   slippage: number
   sender: string
+  /** the pool's venue: White Whale's pairs (Skeleton Swap) refuse a provide_liquidity that carries auto_stake */
+  venue?: Venue
 }
 
-/** Allowances for any cw20 side (the pair pulls it with transfer_from), then provide_liquidity with the native side as funds. */
+/**
+ * Allowances for any cw20 side (the pair pulls it with transfer_from), then provide_liquidity with the native side as funds.
+ * Astroport's pairs take auto_stake; White Whale's refuse it ("unknown field `auto_stake`", simulated 2026-09-15), so a
+ * Skeleton Swap pool gets the message without it.
+ */
 export function provideMsgs(a: ProvideArgs): EncodeObject[] {
   const msgs: EncodeObject[] = []
   const funds: Coin[] = []
@@ -164,7 +170,8 @@ export function provideMsgs(a: ProvideArgs): EncodeObject[] {
     if ('token' in asset.info) msgs.push(exec(a.sender, asset.info.token.contract_addr, { increase_allowance: { spender: a.pair, amount: asset.amount } }))
     else funds.push({ denom: asset.info.native_token.denom, amount: asset.amount })
   }
-  msgs.push(exec(a.sender, a.pair, { provide_liquidity: { assets: a.assets, slippage_tolerance: a.slippage.toFixed(3), auto_stake: false } }, funds))
+  const provide = { assets: a.assets, slippage_tolerance: a.slippage.toFixed(3), ...(a.venue === 'skeleton' ? {} : { auto_stake: false }) }
+  msgs.push(exec(a.sender, a.pair, { provide_liquidity: provide }, funds))
   return msgs
 }
 
@@ -181,6 +188,8 @@ export interface ZapArgs {
   provide: [Asset, Asset]
   slippage: number
   sender: string
+  /** the pool's venue, for the provide leg (provideMsgs) */
+  venue?: Venue
 }
 
 /**
@@ -195,7 +204,7 @@ export function zapMsgs(a: ZapArgs): EncodeObject[] {
   if (a.route) swaps = routeMsgs(a.sender, a.route, a.maxSpread)
   else if (a.offer && a.limitReturn) swaps = [swapMsg(a.sender, a.pair, a.offer, a.limitReturn, a.maxSpread)]
   else throw new Error('Nothing to swap')
-  return [...swaps, ...provideMsgs({ pair: a.pair, assets: a.provide, slippage: a.slippage, sender: a.sender })]
+  return [...swaps, ...provideMsgs({ pair: a.pair, assets: a.provide, slippage: a.slippage, sender: a.sender, venue: a.venue })]
 }
 
 export interface ExitArgs {

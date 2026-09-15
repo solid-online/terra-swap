@@ -12,12 +12,13 @@
  */
 
 import {
-  ASTRO_CONVERTER, ASTRO_CW20, ASTRO_FACTORY, ASTRO_IBC_DENOM, ASTRO_STAKING, TERRA_SWAP_FACTORY, VENUE_INCENTIVES, XASTRO_CW20,
+  ASTRO_CONVERTER, ASTRO_CW20, ASTRO_FACTORY, ASTRO_IBC_DENOM, ASTRO_STAKING, SKELETON_FACTORY, TERRA_SWAP_FACTORY, VENUE_INCENTIVES, XASTRO_CW20,
   assetId, knownPairs, marketPrices, queryCw20Balance, queryNativeBalance, queryPairsOf, queryPool,
   resolveToken, smart, toPoolView,
   type Asset, type KnownToken, type PairInfo, type PoolView, type Venue,
 } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
+import { withPlainLp } from 'lib/skeleton'
 import { parseAssets, type LpFlow } from 'lib/dex-ledger'
 
 const UA = { 'User-Agent': 'Mozilla/5.0 terra-pools-positions', accept: 'application/json' }
@@ -201,17 +202,21 @@ export async function readAstroLegacy(address: string): Promise<AstroLegacy> {
 }
 
 export async function readPositions(address: string): Promise<Position[]> {
-  const [tsPairs, astroPairs, touched, px] = await Promise.all([
-    queryPairsOf(TERRA_SWAP_FACTORY), queryPairsOf(ASTRO_FACTORY), historyTouches(address), marketPrices(),
+  const [tsPairs, astroPairs, skeletonPairs, touched, px] = await Promise.all([
+    queryPairsOf(TERRA_SWAP_FACTORY), queryPairsOf(ASTRO_FACTORY),
+    queryPairsOf(SKELETON_FACTORY).then(ps => ps.map(withPlainLp)).catch(() => [] as PairInfo[]),
+    historyTouches(address), marketPrices(),
   ])
   const byAddr = new Map<string, { pair: PairInfo; venue: Venue }>()
   const byLp = new Map<string, string>()
   for (const p of tsPairs) { byAddr.set(p.contract_addr, { pair: p, venue: 'terraswap' }); byLp.set(p.liquidity_token, p.contract_addr) }
   for (const p of astroPairs) { byAddr.set(p.contract_addr, { pair: p, venue: 'astroport' }); byLp.set(p.liquidity_token, p.contract_addr) }
+  for (const p of skeletonPairs) { byAddr.set(p.contract_addr, { pair: p, venue: 'skeleton' }); byLp.set(p.liquidity_token, p.contract_addr) }
 
-  // Every Terra Swap pool, every Astroport pool of a listed token, and whatever the wallet itself touched.
+  // Every Terra Swap pool, every Astroport and Skeleton Swap pool of a listed token, and whatever the wallet itself touched.
   const want = new Set<string>(tsPairs.map(p => p.contract_addr))
   knownPairs(astroPairs).forEach(p => want.add(p.contract_addr))
+  knownPairs(skeletonPairs).forEach(p => want.add(p.contract_addr))
   touched.pairs.forEach(a => { if (byAddr.has(a)) want.add(a) })
   touched.lpTokens.forEach(lp => { const a = byLp.get(lp); if (a) want.add(a) })
 

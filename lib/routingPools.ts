@@ -7,14 +7,14 @@
 
 import { annotateValues, type PoolView } from 'lib/dex'
 import { sitePools } from 'lib/sitePools'
-import { skeletonPools } from 'lib/skeleton'
+import { skeletonPools, swappable } from 'lib/skeleton'
 
 const FRESH_MS = 60_000
 let mem: { at: number; pools: PoolView[] } | null = null
 let inflight: Promise<PoolView[]> | null = null
 
 async function build(): Promise<PoolView[]> {
-  const [site, skeleton] = await Promise.all([sitePools(), skeletonPools().catch(() => [] as PoolView[])])
+  const [site, skeleton] = await Promise.all([sitePools(), skeletonPools().then(swappable).catch(() => [] as PoolView[])])
   annotateValues(skeleton, site.px)
   return [...site.pools, ...skeleton]
 }

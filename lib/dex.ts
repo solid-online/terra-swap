@@ -495,6 +495,12 @@ export interface PoolView extends PairInfo {
   deviation?: number
   /** USD standing on each side, at the market reference. */
   sideUsd?: [number, number]
+  /** Skeleton Swap's pools: each swap's fee in basis points, split as the pool reports it (to LPs, to White Whale's fee collector, burned). */
+  fees?: { lpBps: number; protocolBps: number; burnBps: number }
+  /** Skeleton Swap's pools: switches the pool's owner can turn off, each on its own. Absent on Terra Swap's and Astroport's pools. */
+  swapsEnabled?: boolean
+  depositsEnabled?: boolean
+  withdrawalsEnabled?: boolean
 }
 
 /**

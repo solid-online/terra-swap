@@ -95,10 +95,12 @@ const poolFeeText = (p: PoolView | null | undefined, poolFeeBps: number) => {
   return p.pairType === 'xyk' ? '0.3%, set by the pool' : p.pairType === 'stable' ? '0.05%, set by the pool' : 'dynamic, set by the pool'
 }
 /** One leg's pool fee, for a pool on any venue. Terra Swap's factory sends all of it to LPs; Skeleton Swap's pools each set their own. */
+/** A share of a swap in basis points as a short percentage: 30 → "0.3%". */
+const bpsPct = (bps: number) => `${(bps / 100).toFixed(2).replace(/\.?0+$/, '')}%`
 const poolFeeTextFor = (p: PoolView) => p.venue === 'terraswap'
   ? '0.3% to LPs on Terra Swap'
   : p.venue === 'skeleton'
-    ? 'fee set by the pool, on Skeleton Swap'
+    ? p.fees ? `${bpsPct(p.fees.lpBps + p.fees.protocolBps + p.fees.burnBps)}, ${bpsPct(p.fees.lpBps)} of it to LPs, on Skeleton Swap` : 'fee set by the pool, on Skeleton Swap'
     : `${p.pairType === 'xyk' ? '0.3%' : p.pairType === 'stable' ? '0.05%' : 'dynamic'} on Astroport`
 
 // Retro Terra 2020 palette — deep royal navy, electric Terra blue, cool white.
@@ -3759,7 +3761,12 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
   const [ok, setOk] = useState<string | null>(null)
   const [t0, t1] = p.tokens
 
-  useEffect(() => { if (me) queryCw20Balance(p.liquidity_token, me).then(setLp) }, [me, p.liquidity_token, ok])
+  // A cw20 LP token answers its own balance query; a TokenFactory LP denom (Skeleton Swap's pools, Astroport's newer ones) sits in the bank.
+  useEffect(() => {
+    if (!me) return
+    const read = p.liquidity_token.startsWith('terra1') ? queryCw20Balance(p.liquidity_token, me) : queryBalance(me, { native_token: { denom: p.liquidity_token } })
+    read.then(setLp)
+  }, [me, p.liquidity_token, ok])
   // LP staked in Astroport's incentives contract is still this wallet's. Count
   // it, and let Remove unstake whatever the wallet does not hold.
   const [staked, setStaked] = useState('0')
@@ -3889,7 +3896,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
     setErr(null); setOk(null)
     try {
       const wasEmpty = p.empty
-      await provide.mutateAsync({ pair: p.contract_addr, assets: [{ info: t0.info, amount: m0 }, { info: t1.info, amount: m1 }], slippage: 0.01, sender: me })
+      await provide.mutateAsync({ pair: p.contract_addr, assets: [{ info: t0.info, amount: m0 }, { info: t1.info, amount: m1 }], slippage: 0.01, sender: me, venue: p.venue })
       setOk('Liquidity added.'); setA0(''); setA1(''); setMode('none'); onDone()
       if (wasEmpty) onParty({ emoji: '🌊', title: 'FIRST HAND', sub: `First liquidity into ${p.label}. +100 points, and it is written down. 대박.` })
     } catch (e) { setErr(humanizeTxError(e)) }
@@ -3911,7 +3918,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
         <div style={{ fontSize: TEXT.md.size, fontWeight: 700, color: C.textPrimary, display: 'flex', alignItems: 'center' }}>
           <PairIcons a={p.tokens[0].label} b={p.tokens[1].label} />{p.label}
           {p.venue !== HOME_VENUE && <span style={{ marginLeft: 8, fontSize: TEXT.caption.size, letterSpacing: '0.1em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600 }}>{VENUE_NAME[p.venue]}</span>}
-          <Link href={`/pool/${p.contract_addr}`} title='Its own page: liquidity, price impact, fees paid and recent trades' style={{ marginLeft: 8, fontSize: TEXT.xs.size, color: C.textMuted, fontWeight: 500, textDecoration: 'none' }}>details ↗</Link>
+          {p.venue !== 'skeleton' && <Link href={`/pool/${p.contract_addr}`} title='Its own page: liquidity, price impact, fees paid and recent trades' style={{ marginLeft: 8, fontSize: TEXT.xs.size, color: C.textMuted, fontWeight: 500, textDecoration: 'none' }}>details ↗</Link>}
         </div>
         {badge && <span style={{ fontSize: '0.6rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: badge === 'deepest' ? C.goldLit : C.korea, fontWeight: 800 }}>{badge === 'deepest' ? '🏆 deepest' : '🔥 most traded'}</span>}
         {(() => {
@@ -3959,11 +3966,22 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
                 : <>{fromMicro(p.reserves[0], t0.decimals)} {t0.label} · {fromMicro(p.reserves[1], t1.decimals)} {t1.label}</>}
             </span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: SPACE['2'] }}>
-          {!p.empty && <button type='button' style={{ ...ghostBtn, color: mode === 'trades' ? C.goldLit : C.textSecondary, borderColor: mode === 'trades' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'trades' ? 'none' : 'trades')} title='chart, tape and the wallets behind it'>Trades</button>}
-          <button type='button' style={{ ...ghostBtn, color: mode === 'add' ? C.goldLit : C.textSecondary, borderColor: mode === 'add' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'add' ? 'none' : 'add')}>Add</button>
-          {Number(lpAll) > 0 && <button type='button' style={{ ...ghostBtn, color: mode === 'remove' ? C.goldLit : C.textSecondary, borderColor: mode === 'remove' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'remove' ? 'none' : 'remove')}>Remove</button>}
+          {/* This site's trade tape reads its own ledger, which does not follow Skeleton Swap's pools. */}
+          {!p.empty && p.venue !== 'skeleton' && <button type='button' style={{ ...ghostBtn, color: mode === 'trades' ? C.goldLit : C.textSecondary, borderColor: mode === 'trades' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'trades' ? 'none' : 'trades')} title='chart, tape and the wallets behind it'>Trades</button>}
+          {p.depositsEnabled !== false && <button type='button' style={{ ...ghostBtn, color: mode === 'add' ? C.goldLit : C.textSecondary, borderColor: mode === 'add' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'add' ? 'none' : 'add')}>Add</button>}
+          {Number(lpAll) > 0 && p.withdrawalsEnabled !== false && <button type='button' style={{ ...ghostBtn, color: mode === 'remove' ? C.goldLit : C.textSecondary, borderColor: mode === 'remove' ? C.goldCore : C.divider }} onClick={() => setMode(mode === 'remove' ? 'none' : 'remove')}>Remove</button>}
         </div>
       </div>
+      {/* Skeleton Swap's pools set their own fee and split it, and their owner can pause swaps, deposits or withdrawals: say both, from the pool's own config. */}
+      {p.venue === 'skeleton' && (
+        <div style={{ ...rowStyle, marginTop: 4 }}>
+          <span>{p.fees ? `Fee ${bpsPct(p.fees.lpBps + p.fees.protocolBps + p.fees.burnBps)} per swap` : 'Fee set by the pool'}</span>
+          <span style={{ color: C.textSecondary }}>
+            {p.fees ? `${bpsPct(p.fees.lpBps)} to LPs · ${bpsPct(p.fees.protocolBps)} to White Whale${p.fees.burnBps > 0 ? ` · ${bpsPct(p.fees.burnBps)} burned` : ''}` : ''}
+            {[p.swapsEnabled === false ? 'swaps paused' : '', p.depositsEnabled === false ? 'deposits paused' : '', p.withdrawalsEnabled === false ? 'withdrawals paused' : ''].filter(Boolean).map(s => ` · ${s}`).join('')}
+          </span>
+        </div>
+      )}
       {/* The gap, sized. Without the number, "1.9× off market" is a warning
           nobody can act on; with it, it is a trade with a known size. */}
       {arb && (
@@ -4010,7 +4028,8 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
         )
       })()}
 
-      {!p.empty && (p.tvlUsd ?? 0) >= 10 && <PoolFees pair={p.contract_addr} />}
+      {/* Fees paid are read from Astroport-code swap events; White Whale's pairs write theirs differently. */}
+      {!p.empty && p.venue !== 'skeleton' && (p.tvlUsd ?? 0) >= 10 && <PoolFees pair={p.contract_addr} />}
 
       {/* An LP balance is a claim on a fraction of the pool. Say which fraction,
           of what, and what it is worth. The raw token count said none of that. */}
@@ -4041,8 +4060,8 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
               ⚠ This pool is {(p.deviation > 1 ? p.deviation : 1 / p.deviation).toFixed(1)}× off market. Adding at this ratio hands the difference to whoever arbitrages it. Swap it back toward {fmtPrice(p.marketPrice ?? 0)} {t1.label} per {t0.label} first, or accept that you are the exit liquidity.
             </div>
           )}
-          {/* Zap sizing is constant-product maths, so it is offered on xyk pools only. */}
-          {!p.empty && p.pairType === 'xyk' && !twoDollars && (
+          {/* Zap sizing is constant-product maths, so it is offered on xyk pools only. Not on Skeleton Swap's: its in-pool swap limit is Astroport-shaped. */}
+          {!p.empty && p.pairType === 'xyk' && !twoDollars && p.venue !== 'skeleton' && (
             <div style={{ display: 'flex', gap: SPACE['2'] }}>
               {(['both', 'zap'] as const).map(sd => (
                 <button key={sd} type='button' onClick={() => setSide(sd)} style={{ ...ghostBtn, padding: '3px 10px', color: side === sd ? C.goldLit : C.textMuted, borderColor: side === sd ? C.goldCore : C.divider }}>
@@ -4051,7 +4070,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
               ))}
             </div>
           )}
-          {side === 'both' || p.empty || p.pairType !== 'xyk' || twoDollars ? (
+          {side === 'both' || p.empty || p.pairType !== 'xyk' || twoDollars || p.venue === 'skeleton' ? (
             <>
               <div style={{ display: 'flex', gap: SPACE['2'] }}>
                 <input style={field} type='number' min='0' step='any' placeholder={`0.0 ${t0.label}`} value={a0} onChange={e => onA0(e.target.value)} />
@@ -5322,8 +5341,8 @@ function SwapPageInner() {
     return () => { alive = false; clearInterval(iv) }
   }, [])
   /**
-   * Skeleton Swap's pools (lib/skeleton): routed through by the swap, and nothing else. Not listed in Pools,
-   * not used by zaps or swaps on arrival, which need a router that cannot reach them. Arrives on the side too.
+   * Skeleton Swap's pools (lib/skeleton): listed in Pools, and routed through by the swap when their swaps are on.
+   * Not used by zaps or swaps on arrival, which need a router that cannot reach them. Arrives on the side too.
    */
   const [skeletonPools, setSkeletonPools] = useState<PoolView[]>([])
   useEffect(() => {
@@ -5335,13 +5354,15 @@ function SwapPageInner() {
     pull(); const iv = setInterval(pull, 60_000)
     return () => { alive = false; clearInterval(iv) }
   }, [])
-  const swapVenuePools = useMemo(() => [...venuePools, ...skeletonPools], [venuePools, skeletonPools])
-  /** Both sites' pools in one list, since pools.terraluna.app was folded into this page (2026-09-14). */
+  const swapVenuePools = useMemo(() => [...venuePools, ...skeletonPools.filter(p => p.swapsEnabled === true)], [venuePools, skeletonPools])
+  /** Every venue's pools in one list: both sites', since pools.terraluna.app was folded into this page (2026-09-14), and Skeleton Swap's (2026-09-15). */
   const allPools = useMemo(() => {
     const own = data?.pools ?? []
     const seen = new Set(own.map(p => p.contract_addr))
-    return [...own, ...venuePools.filter(p => !seen.has(p.contract_addr))]
-  }, [data, venuePools])
+    const away = venuePools.filter(p => !seen.has(p.contract_addr))
+    away.forEach(p => seen.add(p.contract_addr))
+    return [...own, ...away, ...skeletonPools.filter(p => !seen.has(p.contract_addr))]
+  }, [data, venuePools, skeletonPools])
   const [venueFilter, setVenueFilter] = useState<'all' | Venue>('all')
   /** Find a pool by any of its tokens: "luna", "sol usdc". Every word has to match. */
   const [poolQuery, setPoolQuery] = useState('')
@@ -5478,7 +5499,7 @@ function SwapPageInner() {
       { id: 'do-sweep', group: 'Do', label: 'Sell small balances in one go', hint: 'leftover tokens into USDC or LUNA, one signature', keywords: 'sweep dust leftovers clean wallet balances sell all convert', icon: icon('🧹'), run: () => openTab('wallet') },
       { id: 'do-keys', group: 'Do', label: 'Keyboard shortcuts', hint: '⌘K search · / amount · f flip the pair', keywords: 'keys hotkeys keyboard', icon: icon('⌨️'), run: () => setShortcuts(true) },
       { id: 'go-swap', group: 'Go to', label: 'Swap', hint: "the best route through Terra Swap's, Astroport's and Skeleton Swap's pools", keywords: 'trade exchange buy sell convert skeleton white whale', icon: icon('🔀'), run: () => openTab('swap') },
-      { id: 'go-pools', group: 'Go to', label: 'Pools', hint: `${allPools.length} pools on both sites: add, zap in, remove`, keywords: 'liquidity lp provide add remove zap fees', icon: icon('💧'), run: () => openTab('pools') },
+      { id: 'go-pools', group: 'Go to', label: 'Pools', hint: `${allPools.length} pools on Terra Swap, Astroport and Skeleton Swap: add, zap in, remove`, keywords: 'liquidity lp provide add remove zap fees skeleton white whale', icon: icon('💧'), run: () => openTab('pools') },
       { id: 'go-bridge', group: 'Go to', label: 'Bridge', hint: 'USDC from Noble, ATOM from the Cosmos Hub, USDC.inj from Injective, ASTRO and dATOM from Neutron, stLUNA from Stride, and back', keywords: 'transfer ibc deposit withdraw move chains', icon: icon('🌉'), run: () => openTab('transfer') },
       { id: 'go-positions', group: 'Go to', label: 'Portfolio', hint: 'every position on both sites, staked LP included, and a way out of each', keywords: 'positions lp exit withdraw staked rewards claim holdings', icon: icon('🧾'), run: () => openTab('positions') },
       { id: 'go-history', group: 'Go to', label: 'History', hint: 'your swaps, liquidity and transfers, each quote beside what arrived', keywords: 'transactions receipts activity past', icon: icon('🕘'), run: () => openTab('history') },
@@ -5714,7 +5735,7 @@ function SwapPageInner() {
                         </button>
                       </div>
                       <div style={{ display: 'flex', gap: SPACE['2'], flexWrap: 'wrap' }}>
-                        {(['all', 'terraswap', 'astroport'] as const).map(v => (
+                        {(['all', 'terraswap', 'astroport', 'skeleton'] as const).filter(v => v !== 'skeleton' || allPools.some(p => p.venue === 'skeleton')).map(v => (
                           <button key={v} type='button' onClick={() => { setVenueFilter(v); setShowDust(false) }}
                             style={{ ...ghostBtn, padding: '3px 10px', color: venueFilter === v ? C.goldLit : C.textMuted, borderColor: venueFilter === v ? C.goldCore : C.divider }}>
                             {v === 'all' ? `All · ${allPools.length}` : `${VENUE_NAME[v]} · ${allPools.filter(p => p.venue === v).length}`}
@@ -5726,9 +5747,14 @@ function SwapPageInner() {
                           No pool here holds that. <button type='button' onClick={() => setTab('create')} style={{ background: 'transparent', border: 'none', color: C.goldLit, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit', padding: 0 }}>Open one</button>, it takes one signature.
                         </div>
                       )}
-                      {venueFilter !== 'terraswap' && allPools.some(p => p.venue === 'astroport') && (
+                      {(venueFilter === 'all' || venueFilter === 'astroport') && allPools.some(p => p.venue === 'astroport') && (
                         <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5 }}>
                           Astroport&apos;s pools are its own contracts, reached here directly: swaps, deposits and withdrawals go straight to them. Not affiliated with Astroport.
+                        </div>
+                      )}
+                      {(venueFilter === 'all' || venueFilter === 'skeleton') && allPools.some(p => p.venue === 'skeleton') && (
+                        <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5 }}>
+                          Skeleton Swap&apos;s pools run on White Whale&apos;s pool contracts, reached here directly: swaps, deposits and withdrawals go straight to them. Each pool sets its own fee, part of it to White Whale, and its owner can change fees and pause swaps, deposits or withdrawals. Not affiliated with Skeleton Swap or White Whale.
                         </div>
                       )}
                     </div>
@@ -5743,7 +5769,7 @@ function SwapPageInner() {
                     const counts = board?.poolActivity ?? {}
                     const hottest = data.pools.reduce((b, q) => ((counts[q.contract_addr]?.count ?? 0) > (b ? (counts[b.contract_addr]?.count ?? 0) : 0) ? q : b), null as PoolView | null)
                     return deepest?.contract_addr === p.contract_addr && (p.tvlUsd ?? 0) > 0 ? 'deepest' : hottest?.contract_addr === p.contract_addr && (counts[p.contract_addr]?.count ?? 0) >= 3 ? 'hottest' : undefined
-                  })()} spark={allPools.filter(q => (q.tvlUsd ?? 0) > 0).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0)).slice(0, 4).some(q => q.contract_addr === p.contract_addr)} arb={arbs.find(a => a.pool.contract_addr === p.contract_addr)} onTake={takeArb} holders={holders[p.contract_addr]} flow={me ? board?.flows?.[`${me}|${p.contract_addr}`] : undefined} /></div>)}
+                  })()} spark={allPools.filter(q => q.venue !== 'skeleton' && (q.tvlUsd ?? 0) > 0).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0)).slice(0, 4).some(q => q.contract_addr === p.contract_addr)} arb={arbs.find(a => a.pool.contract_addr === p.contract_addr)} onTake={takeArb} holders={holders[p.contract_addr]} flow={me ? board?.flows?.[`${me}|${p.contract_addr}`] : undefined} /></div>)}
                     {dustCount > 0 && (
                       <button type='button' style={{ ...ghostBtn, justifySelf: 'center' }} onClick={() => setShowDust(s => !s)}>
                         {showDust ? 'Hide the empty ones' : `Show ${dustCount} pool${dustCount === 1 ? '' : 's'} under $${DUST_USD}`}

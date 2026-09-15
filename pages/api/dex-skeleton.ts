@@ -1,9 +1,11 @@
 /**
- * GET /api/dex-skeleton: Skeleton Swap's pools, for routing swaps (lib/skeleton).
+ * GET /api/dex-skeleton: Skeleton Swap's pools (lib/skeleton), for the swap and
+ * the Pools tab, each with its fee parts and its owner's switches. The swap
+ * page routes only through those with swaps on.
  *
- * Valued at the same market reference as the other pools, so the swap page
- * ranks them by the same dollar depth. Cached briefly per instance; the page
- * loads it on the side, and swaps work without it.
+ * Valued at the same market reference as the other pools, so the page ranks
+ * them by the same dollar depth. Cached briefly per instance; the page loads it
+ * on the side, and swaps work without it.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
