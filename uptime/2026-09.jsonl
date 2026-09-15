@@ -285,3 +285,5 @@
 {"t":"2026-09-15T18:00Z","site":"atrium.markets","ok":true,"ms":185,"detail":null}
 {"t":"2026-09-15T18:10Z","site":"swap.terraluna.app","ok":true,"ms":2284,"detail":null}
 {"t":"2026-09-15T18:10Z","site":"atrium.markets","ok":true,"ms":306,"detail":null}
+{"t":"2026-09-15T18:20Z","site":"swap.terraluna.app","ok":true,"ms":987,"detail":null}
+{"t":"2026-09-15T18:20Z","site":"atrium.markets","ok":true,"ms":337,"detail":null}
