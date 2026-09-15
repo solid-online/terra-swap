@@ -145,15 +145,40 @@ export function parseTx(r: TxResponse, body: TxBody | undefined, address: string
   }
 }
 
-async function search(query: string, limit: number): Promise<{ r: TxResponse; body?: TxBody }[]> {
+type Found = { r: TxResponse; body?: TxBody }
+
+/**
+ * One page of a transaction search, newest first. Null when no endpoint
+ * answered, which is not the same as no transactions. A page past the last
+ * one is refused with a 400; that is the end of the results.
+ */
+async function searchPage(query: string, limit: number, page: number): Promise<Found[] | null> {
   try {
-    const res = await lcdFetch(`/cosmos/tx/v1beta1/txs?query=${encodeURIComponent(query)}&order_by=ORDER_BY_DESC&limit=${limit}&page=1`, { headers: UA, kind: 'txs', timeoutMs: 20_000 })
-    if (!res.ok) return []
+    const res = await lcdFetch(`/cosmos/tx/v1beta1/txs?query=${encodeURIComponent(query)}&order_by=ORDER_BY_DESC&limit=${limit}&page=${page}`, { headers: UA, kind: 'txs', timeoutMs: 20_000 })
+    if (res.status === 400 && page > 1) return []
+    if (!res.ok) return null
     const j = await res.json()
     const rs: TxResponse[] = j?.tx_responses ?? []
     const txs: { body?: TxBody }[] = j?.txs ?? []
     return rs.map((r, i) => ({ r, body: txs[i]?.body }))
-  } catch { return [] }
+  } catch { return null }
+}
+
+/** What a wallet signed, what was transferred to it, and what Terra Swap's router paid it. */
+const walletQueries = (address: string) => [`message.sender='${address}'`, `transfer.recipient='${address}'`, `wasm.receiver='${address}'`]
+
+/** The transactions this wallet signed, and the ones that brought it tokens over IBC, as rows, newest first. */
+function rowsFor(found: Map<string, Found>, address: string): HistoryRow[] {
+  const rows: HistoryRow[] = []
+  found.forEach(({ r, body }) => {
+    const row = parseTx(r, body, address)
+    const signer = String(body?.messages?.[0]?.sender ?? '')
+    const arrived = row.kind === 'transfer in' || row.kind === 'arrived swapped'
+    if (signer !== address && !arrived) return
+    if (arrived && row.in.length === 0) return
+    rows.push(row)
+  })
+  return rows.sort((a, b) => b.height - a.height)
 }
 
 /**
@@ -162,21 +187,36 @@ async function search(query: string, limit: number): Promise<{ r: TxResponse; bo
  * Terra Swap's router swapped on arrival and paid to it.
  */
 export async function readHistory(address: string, max = 60): Promise<HistoryRow[]> {
-  const found = await Promise.all([
-    search(`message.sender='${address}'`, 60),
-    search(`transfer.recipient='${address}'`, 30),
-    search(`wasm.receiver='${address}'`, 30),
-  ])
-  const byHash = new Map<string, { r: TxResponse; body?: TxBody }>()
-  for (const list of found) for (const x of list) if (!byHash.has(x.r.txhash)) byHash.set(x.r.txhash, x)
-  const rows: HistoryRow[] = []
-  byHash.forEach(({ r, body }) => {
-    const row = parseTx(r, body, address)
-    const signer = String(body?.messages?.[0]?.sender ?? '')
-    const arrived = row.kind === 'transfer in' || row.kind === 'arrived swapped'
-    if (signer !== address && !arrived) return
-    if (arrived && row.in.length === 0) return
-    rows.push(row)
-  })
-  return rows.sort((a, b) => b.height - a.height).slice(0, max)
+  const [signed, transfers, routed] = walletQueries(address)
+  const found = await Promise.all([searchPage(signed, 60, 1), searchPage(transfers, 30, 1), searchPage(routed, 30, 1)])
+  const byHash = new Map<string, Found>()
+  for (const list of found) for (const x of list ?? []) if (!byHash.has(x.r.txhash)) byHash.set(x.r.txhash, x)
+  return rowsFor(byHash, address).slice(0, max)
+}
+
+/** Pages read per search for an export, 100 transactions each. */
+const EXPORT_PAGES = 20
+
+/**
+ * Every transaction of a wallet between two times, for the CSV export: the
+ * same three searches as readHistory, each read page by page until it passes
+ * `fromMs`. `complete` is false when a search stopped at EXPORT_PAGES or an
+ * endpoint gave up before reaching `fromMs`, so the file can say it is partial.
+ */
+export async function readHistoryBetween(address: string, fromMs: number, toMs: number): Promise<{ rows: HistoryRow[]; complete: boolean }> {
+  const byHash = new Map<string, Found>()
+  let complete = true
+  await Promise.all(walletQueries(address).map(async q => {
+    for (let page = 1; page <= EXPORT_PAGES; page++) {
+      const list = await searchPage(q, 100, page)
+      if (list === null) { complete = false; return }
+      for (const x of list) {
+        const t = Date.parse(x.r.timestamp)
+        if (t >= fromMs && t < toMs && !byHash.has(x.r.txhash)) byHash.set(x.r.txhash, x)
+      }
+      if (list.length < 100 || Date.parse(list[list.length - 1].r.timestamp) < fromMs) return
+      if (page === EXPORT_PAGES) complete = false
+    }
+  }))
+  return { rows: rowsFor(byHash, address), complete }
 }

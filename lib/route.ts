@@ -424,6 +424,52 @@ export function tradeText(parts: SplitPart[]): string {
   return parts.map((p, i) => `${i === 0 ? first : 100 - first}% ${routeText(p.quote)}`).join(' · ')
 }
 
+// ─── Receiving an exact amount ──────────────────────────────────
+
+export interface ExactOut {
+  /** what to pay, smallest units of the input token */
+  amountMicro: string
+  quotes: Quotes
+  trade: TradePlan
+}
+
+/**
+ * The least input found that makes a swap deliver at least `wantMicro`, for
+ * "receive exactly". What is matched is the trade's minimum, the least the
+ * signed transaction lets arrive at `slip`, so the wanted amount arrives even
+ * when the price moves as far as the slippage allows; when the price holds, a
+ * little more arrives. A first amount comes from the pools' prices; each quote
+ * over the full routing (split included) then scales it by how far its
+ * minimum fell short or overshot, until the minimum sits within 0.3% above the
+ * wanted amount. Price impact only ever slows the output, so the steps close in
+ * from one side and settle in two to four quotes.
+ */
+export async function quoteExactOut(pools: PoolView[], from: KnownToken, to: KnownToken, wantMicro: string, home?: Venue, opts: { slip?: number } = {}): Promise<ExactOut | null> {
+  const slip = opts.slip ?? 0.01
+  const want = BigInt(/^\d+$/.test(wantMicro) ? wantMicro : '0')
+  if (want <= BigInt(0) || sameAsset(from.info, to.info)) return null
+  // The pools' own prices for a sliver, along the best path the ranking knows: a starting point, not a quote.
+  const sliver = 1e-6
+  const rate = [...paths(pools, from, to), ...paths3(pools, from, to)]
+    .reduce((best, path) => Math.max(best, path.pools.reduce((x, p, i) => estimateHop(p, path.tokens[i], x), sliver) / sliver), 0)
+  if (!(rate > 0)) return null
+  const first = ((Number(want) / 10 ** to.decimals) / rate / (1 - slip)) * 1.003
+  let guess = BigInt(toMicro(first.toFixed(Math.min(from.decimals, 18)), from.decimals) ?? '0')
+  if (guess <= BigInt(0)) guess = BigInt(1)
+  let best: ExactOut | null = null
+  for (let i = 0; i < 6; i++) {
+    const quotes = await quoteBest(pools, from, to, guess.toString(), home, { slip, split: true })
+    if (!quotes.best) break
+    const trade = planTrade(quotes.split ?? [{ quote: quotes.best, share: 1 }], slip)
+    const min = BigInt(trade.minOut)
+    if (min >= want && (!best || guess < BigInt(best.amountMicro))) best = { amountMicro: guess.toString(), quotes, trade }
+    if (min >= want && min * BigInt(1000) <= want * BigInt(1003)) break
+    const next = min > BigInt(0) ? (guess * want * BigInt(1001)) / (min * BigInt(1000)) : guess * BigInt(2)
+    guess = next === guess ? guess + BigInt(1) : next
+  }
+  return best
+}
+
 // ─── Closing a gap in one transaction ───────────────────────────
 
 export interface Loop {

@@ -1,10 +1,10 @@
 /**
- * /pool/[addr]: a page per pool. Its liquidity and both sides, its price and
- * how far that sits from the market, how much $100 and $1,000 move it, what
- * its swaps paid its providers, its recent trades, and the ways in: a swap
- * either way, or adding liquidity. Read in the browser from the same endpoints
- * as /stats, and the price impact from the pool's own simulation; the title is
- * rendered on the server from the pool's pair query.
+ * /pool/[addr]: a page per pool. Its liquidity and both sides, its price over
+ * time beside the market for the same pair, how much trades before its price
+ * moves either way, what its swaps paid its providers, its recent trades, and
+ * the ways in: a swap either way, or adding liquidity. Read in the browser from
+ * the same endpoints as /stats; the title is rendered on the server from the
+ * pool's pair query.
  */
 
 import Link from 'next/link'
@@ -13,8 +13,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { SPACE, TEXT } from 'components/tokens'
 import { C, Figure, Page, Panel, fmtNum, linkBtn, row } from 'components/PageShell'
 import { PairIcons, TokenIcon } from 'components/TokenIcon'
+import PriceHistoryChart from 'components/PriceHistoryChart'
+import DepthCurve, { markLine } from 'components/DepthCurve'
 import {
-  KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, VENUE_NAME, annotateMarket, annotateValues, assetId, fromMicro, simulateSwap, smart, toMicro, tokenFor,
+  KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, VENUE_NAME, annotateMarket, annotateValues, assetId, fromMicro, smart, tokenFor,
   type AssetInfo, type PoolView,
 } from 'lib/dex'
 import { fmtAmount, fmtUsd } from 'lib/arb'
@@ -22,6 +24,7 @@ import type { DexResponse } from 'pages/api/dex'
 import type { VenueResponse } from 'pages/api/dex-venue'
 import type { PoolFeesResponse } from 'pages/api/pool-fees'
 import type { PricesResponse } from 'pages/api/dex-prices'
+import type { DepthResponse } from 'pages/api/depth'
 
 const ADDR = /^terra1[02-9ac-hj-np-z]{38,58}$/
 const enc = encodeURIComponent
@@ -52,7 +55,7 @@ export const getServerSideProps: GetServerSideProps = async ctx => {
       label,
       og: {
         title: label ? `${label} pool on Terra` : 'A pool on Terra',
-        description: `${label ? `The ${label} pool: its` : 'Its'} liquidity, price against the market, what it paid its providers and its recent trades, read from the chain, with a swap and a way to add liquidity.`,
+        description: `${label ? `The ${label} pool: its` : 'Its'} liquidity, price over time against the market, how much trades before its price moves, what it paid its providers and its recent trades, read from the chain.`,
         image: `${base}/api/og/swap${share}`,
         url: `${base}/pool/${addr}`,
         type: 'website',
@@ -84,7 +87,7 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
   const [fees, setFees] = useState<PoolFeesResponse | null>(null)
   const [feesFailed, setFeesFailed] = useState(false)
   const [prices, setPrices] = useState<PricesResponse | null>(null)
-  const [impact, setImpact] = useState<{ usd: number; pct: number }[] | null>(null)
+  const [depth, setDepth] = useState<DepthResponse | null | 'failed'>(null)
 
   useEffect(() => {
     let alive = true
@@ -93,6 +96,7 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
       .then(([d, v, m]) => { if (!alive) return; setDex(d); setVenue(v); setPx(m?.px ?? null); setDone(true) })
     json<PoolFeesResponse>(`/api/pool-fees?pair=${addr}`).then(f => { if (!alive) return; if (f) setFees(f); else setFeesFailed(true) })
     json<PricesResponse>(`/api/dex-prices?pair=${addr}`).then(p => { if (alive && p) setPrices(p) })
+    json<DepthResponse>(`/api/depth?pool=${addr}`).then(d => { if (alive) setDepth(d ?? 'failed') })
     return () => { alive = false }
   }, [addr])
 
@@ -101,27 +105,6 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
     if (px) { const live = own.filter(p => !p.empty); annotateMarket(live, px); annotateValues(live, px) }
     return [...own, ...(venue?.pools ?? [])].find(p => p.contract_addr === addr) ?? null
   }, [dex, venue, px, addr])
-
-  // What $100 and $1,000 of the first token do to the price, from the pool's own simulation.
-  const impactKey = pool && px && !pool.empty ? `${pool.contract_addr}|${pool.price}|${px[assetId(pool.tokens[0].info)] ?? 0}` : ''
-  useEffect(() => {
-    if (!impactKey || !pool || !px) return
-    const [t0, t1] = pool.tokens
-    const p0 = px[assetId(t0.info)]
-    if (!(p0 > 0) || !(pool.price > 0)) return
-    let alive = true
-    Promise.all([100, 1000].map(async usd => {
-      const micro = toMicro((usd / p0).toFixed(Math.min(t0.decimals, 8)), t0.decimals)
-      if (!micro || micro === '0') return null
-      const s = await simulateSwap(pool.contract_addr, { info: t0.info, amount: micro }).catch(() => null)
-      if (!s) return null
-      const got = (Number(s.return_amount) + Number(s.commission_amount)) / 10 ** t1.decimals
-      const fair = (Number(micro) / 10 ** t0.decimals) * pool.price
-      return fair > 0 ? { usd, pct: Math.max(0, (1 - got / fair) * 100) } : null
-    })).then(r => { if (alive) setImpact(r.filter((x): x is { usd: number; pct: number } => x !== null)) })
-    return () => { alive = false }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [impactKey])
 
   const title = pool?.label ?? (label || 'A pool')
   if (!pool) {
@@ -154,6 +137,8 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
   }
   const series = (prices?.points ?? []).map(p => p.p).filter(v => Number.isFinite(v) && v > 0)
   const known = (key: string) => KNOWN_TOKENS.some(k => k.key === key)
+  const charted = known(t0.key) && known(t1.key)
+  const sides = depth && depth !== 'failed' && depth.kind === 'pool' ? [depth.sell0, depth.sell1] : null
 
   return (
     <Page>
@@ -190,13 +175,30 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
             <span style={{ color: C.textSecondary, fontVariantNumeric: 'tabular-nums' }}>{fromMicro(pool.reserves[i], t.decimals)}{pool.sideUsd ? ` · ${fmtUsd(pool.sideUsd[i])}` : ''}</span>
           </div>
         ))}
-        {impact && impact.length > 0 && (
-          <div style={row}>
-            <span>Price impact, selling {t0.label}</span>
-            <span style={{ color: C.textSecondary, fontVariantNumeric: 'tabular-nums' }}>{impact.map(x => `$${x.usd.toLocaleString('en-US')}: ${x.pct < 0.01 ? 'under 0.01' : x.pct.toFixed(2)}%`).join(' · ')}</span>
-          </div>
-        )}
       </Panel>
+
+      {charted && !pool.empty && (
+        <Panel title='Price over time' note={`${t1.label} per ${t0.label}: this pool's own price each hour, beside the market for the same pair from the two tokens' reference prices, both as this site wrote them down. Where the lines part, the pool drifted.`}>
+          <PriceHistoryChart query={`pool=${pool.contract_addr}&base=${enc(t0.key)}&quote=${enc(t1.key)}`} unit={t1.label} marketName='Market' />
+        </Panel>
+      )}
+
+      {!pool.empty && (
+        <Panel title='How much trades before the price moves' note="Selling each side into this pool alone, from its own simulation, with the fee added back so the number is the move. The swap page routes around a thin pool; this is the pool by itself.">
+          {depth === null && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Pricing a dozen sizes…</div>}
+          {depth === 'failed' && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>No market price for its tokens right now.</div>}
+          {sides && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: SPACE['3'] }}>
+              {sides.map((d, i) => (
+                <div key={i} style={{ display: 'grid', gap: 6 }}>
+                  <div style={{ fontSize: TEXT.sm.size, color: C.textPrimary, fontWeight: 600 }}>Selling {pool.tokens[i].label}</div>
+                  {d ? <><div style={{ fontSize: TEXT.xs.size, color: C.textSecondary }}>Price impact {markLine(d)}</div><DepthCurve depth={d} /></> : <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>No market price for {pool.tokens[i].label}.</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      )}
 
       <Panel title='Paid to its providers' note="What this pool's swaps paid its liquidity providers, less Astroport's share on Astroport's pools, at today's prices. Past fees, not a forecast.">
         {!fees && !feesFailed && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Reading its swaps…</div>}

@@ -1,0 +1,26 @@
+/**
+ * GET /api/price-record — writes the current ten-minute slot of the price
+ * history (lib/priceHistory), if it is not written yet.
+ *
+ * Called every ten minutes from outside by the uptime workflow. Anyone may
+ * call it: a slot that holds prices already is left alone and answered
+ * straight away, so extra calls cost one read.
+ */
+
+import type { NextApiRequest, NextApiResponse } from 'next'
+import { recordPrices, slotRecorded, type RecordResult } from 'lib/priceHistory'
+import { sitePools } from 'lib/sitePools'
+
+export const config = { maxDuration: 60 }
+
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<RecordResult | { recorded: false; reason: string }>) {
+  res.setHeader('Cache-Control', 'no-store')
+  try {
+    if (await slotRecorded()) return res.status(200).json({ recorded: false, reason: 'this slot is already written' })
+    const { pools, px } = await sitePools()
+    if (pools.length === 0) return res.status(503).json({ recorded: false, reason: 'the pools did not answer' })
+    return res.status(200).json(await recordPrices(px, pools))
+  } catch {
+    return res.status(503).json({ recorded: false, reason: 'the chain or the store did not answer' })
+  }
+}

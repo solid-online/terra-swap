@@ -10,6 +10,10 @@
 # restarts the chain if a handover ever fails. Runs share one concurrency group, so
 # they never overlap: a run started while another watches waits its turn. To stop
 # the checks, disable this workflow in the Actions tab.
+#
+# The same ten-minute beat writes down prices for the charts (/api/price-record,
+# lib/priceHistory) and sends price alerts to browsers with the page closed
+# (/api/push-check, lib/push). Both ignore a second call in the same slot.
 name: uptime
 
 on:
@@ -60,6 +64,8 @@ jobs:
               done
               echo "could not push this result; the next one carries it"
             )
+            curl -fsS -m 90 -o /dev/null https://swap.terraluna.app/api/price-record || echo "price record did not answer"
+            curl -fsS -m 90 -o /dev/null https://swap.terraluna.app/api/push-check || echo "alert check did not answer"
             now=$(date +%s)
             next=$(( (now / 600 + 1) * 600 ))
             if [ "$next" -ge "$end" ]; then break; fi

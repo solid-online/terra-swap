@@ -32,6 +32,14 @@ const nextConfig = {
         ],
       },
       {
+        // The service worker (price alerts with the page closed) is checked for a new version on every visit.
+        source: '/sw.js',
+        headers: [
+          { key: 'Cache-Control', value: 'no-cache' },
+          { key: 'Service-Worker-Allowed', value: '/' },
+        ],
+      },
+      {
         // The embed is made to be framed anywhere. It holds no wallet and signs nothing; its button opens Terra Swap in a new tab.
         source: '/embed',
         headers: [

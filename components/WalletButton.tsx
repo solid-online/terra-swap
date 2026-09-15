@@ -16,6 +16,7 @@ import { useChainWallet } from '@cosmos-kit/react'
 import { wallets as keplrWallets } from '@cosmos-kit/keplr-extension'
 import { customWallets, mobileWallets } from 'constants/wallet'
 import { defaultChain } from 'constants/chain'
+import { useLang } from 'lib/i18n'
 import useMyAddress from './hooks/useMyAddress'
 import { useWallet } from './providers/WalletProvider'
 import { useTxRegionGate } from './RegionGate'
@@ -66,6 +67,7 @@ export default function WalletButton({ className, onClick }: { className?: strin
   const { disconnect } = useWallet()
   const me = useMyAddress()
   const { txAllowed, country } = useTxRegionGate()
+  const { t } = useLang()
   const [wallets, setWallets] = useState<WalletList>(customWallets)
   const [open, setOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
@@ -97,14 +99,14 @@ export default function WalletButton({ className, onClick }: { className?: strin
         title={`Wallet actions are not available in ${country ?? 'your region'}. Everything else stays open. The contracts are permissionless and reachable with any Terra wallet.`}
         onClick={() => { /* explanation lives in the title and the banner */ }}
       >
-        ⓘ Browse-only
+        ⓘ {t('Browse-only')}
       </button>
     )
   }
 
   return (
     <>
-      <button type='button' className={className} style={pill} onClick={() => setOpen(true)}>Connect</button>
+      <button type='button' className={className} style={pill} onClick={() => setOpen(true)}>{t('Connect')}</button>
       {mounted && open && createPortal(
         <div
           onClick={e => { if (e.target === e.currentTarget) setOpen(false) }}
@@ -112,10 +114,10 @@ export default function WalletButton({ className, onClick }: { className?: strin
         >
           <section style={{ width: 'min(92vw, 380px)', background: '#0b0f1c', border: '1px solid rgba(255,216,61,0.28)', borderRadius: 18, padding: '1.2rem', color: '#f4f1e8', fontFamily: 'inherit' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>Connect a wallet</h3>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>{t('Connect a wallet')}</h3>
               <button type='button' onClick={() => setOpen(false)} aria-label='Close' style={{ background: 'transparent', border: 'none', color: '#9a927f', fontSize: '1.2rem', cursor: 'pointer' }}>×</button>
             </div>
-            <p style={{ margin: '0 0 12px', fontSize: '0.8rem', color: '#9a927f', lineHeight: 1.5 }}>Terra, phoenix-1. Nothing is stored; the wallet signs, the chain does the rest.</p>
+            <p style={{ margin: '0 0 12px', fontSize: '0.8rem', color: '#9a927f', lineHeight: 1.5 }}>{t('Terra, phoenix-1. Nothing is stored; the wallet signs, the chain does the rest.')}</p>
             <div style={{ display: 'grid', gap: 8 }}>
               {wallets.length === 0 && <div style={{ fontSize: '0.8rem', color: '#9a927f' }}>No wallet available in this browser. Open this page inside Keplr Mobile, or use a desktop browser with the Keplr extension.</div>}
               {wallets.map(w => <WalletRow key={w.walletName} wallet={w} onDone={() => setOpen(false)} />)}

@@ -23,7 +23,7 @@ import { SPACE, RADIUS, TEXT } from 'components/tokens'
 import { isCrystalHolder } from 'lib/holders'
 import {
   KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, ATOM_DENOM, TERRA_SWAP_ROUTER, assetId, sameAsset, tokenFor, toMicro, fromMicro,
-  simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues,
+  simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues, resolveToken,
   lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_FACTORY, VENUE_NAME, VENUE_INCENTIVES, smart, type Venue,
   COIN_REGISTRY, ASTRO_STAKING, XASTRO_CW20, ASTRO_CONVERTER, ASTRO_CW20, ASTRO_IBC_DENOM, DATOM_DENOM, FUEL_DENOM, STLUNA_DENOM, STATOM_DENOM,
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
@@ -38,7 +38,13 @@ import type { PositionsResponse } from 'pages/api/positions'
 import type { HistoryResponse } from 'pages/api/history'
 import type { HistoryRow, Moved } from 'lib/history'
 import type { PoolFeesResponse } from 'pages/api/pool-fees'
-import { quoteBest, planRoute, planTrade, routeText, tradeText, tradeMemo, reachable, quoteLoop, planRoutedZap, routerPlan, type Quotes, type Loop, type RoutedZap, type RoutePlan, type TradePlan } from 'lib/route'
+import { quoteBest, quoteExactOut, planRoute, planTrade, routeText, tradeText, tradeMemo, reachable, quoteLoop, planRoutedZap, routerPlan, type Quotes, type Loop, type RoutedZap, type RoutePlan, type TradePlan } from 'lib/route'
+import DepthCurve from 'components/DepthCurve'
+import type { DepthResponse } from 'pages/api/depth'
+import { historyCsv, plainAmount } from 'lib/csv'
+import { removeContact, rememberRecipient, saveContact, useContacts } from 'lib/contacts'
+import { disablePush, enablePush, usePush } from 'lib/push'
+import { LANGS, setLang, useLang, type Lang } from 'lib/i18n'
 import type { TradesResponse } from 'pages/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
 import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
@@ -242,6 +248,7 @@ function TokenPicker({ options, value, onPick, onClose }: {
   const [active, setActive] = useState(0)
   const [bal, setBal] = useState<Record<string, string>>({})
   const { favorites } = usePrefs()
+  const { t: tr } = useLang()
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   useEffect(() => { inputRef.current?.focus() }, [])
@@ -304,27 +311,27 @@ function TokenPicker({ options, value, onPick, onClose }: {
       <div style={{ width: 'min(460px, 100%)', maxHeight: 'min(680px, 88vh)', display: 'flex', flexDirection: 'column', background: C.surfaceElev, border: `1px solid ${C.divider}`, borderRadius: 16, boxShadow: '0 24px 60px rgba(0,0,0,0.55)', overflow: 'hidden' }}>
         <div style={{ padding: `${SPACE['3']}px ${SPACE['3']}px ${SPACE['2']}px` }}>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: SPACE['2'] }}>
-            <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>Select a token</b>
+            <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>{tr('Select a token')}</b>
             <button type='button' onClick={onClose} aria-label='Close' style={{ ...ghostBtn, marginLeft: 'auto', padding: '2px 9px' }}>esc</button>
           </div>
-          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder='Name, ticker, chain, or paste an address'
+          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder={tr('Name, ticker, chain, or paste an address')}
             style={{ ...field, width: '100%', boxSizing: 'border-box' }} spellCheck={false} autoComplete='off' />
           {!q.trim() && (
             <div style={{ marginTop: SPACE['2'], display: 'grid', gap: 6 }}>
               {(() => {
                 const favs = favorites.map(id => options.find(t => assetId(t.info) === id)).filter((t): t is TokenOption => !!t).slice(0, 8)
-                return favs.length > 0 ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>★ Starred</span>{favs.map(chip)}</div> : null
+                return favs.length > 0 ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>{tr('★ Starred')}</span>{favs.map(chip)}</div> : null
               })()}
-              {recent.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>Recent</span>{recent.map(chip)}</div>}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>Deepest</span>{popular.map(chip)}</div>
-              <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>Try &ldquo;bitcoin&rdquo;, &ldquo;gold&rdquo;, &ldquo;euro&rdquo;, &ldquo;staked luna&rdquo; or &ldquo;from noble&rdquo;.</div>
+              {recent.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>{tr('Recent')}</span>{recent.map(chip)}</div>}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}><span style={{ fontSize: TEXT.xs.size, color: C.textWhisper, minWidth: 54 }}>{tr('Deepest')}</span>{popular.map(chip)}</div>
+              <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>{tr('Try “bitcoin”, “gold”, “euro”, “staked luna” or “from noble”.')}</div>
             </div>
           )}
         </div>
         <div ref={listRef} role='listbox' style={{ overflowY: 'auto', padding: `0 ${SPACE['2']}px ${SPACE['2']}px`, borderTop: `1px solid ${C.divider}` }}>
           {list.length === 0 && (
             <div style={{ padding: SPACE['3'], fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6 }}>
-              {looksLikeAddress ? 'That address is not one of the listed tokens here. Unlisted tokens are not offered, so a look-alike cannot slip in.' : 'No listed token matches that.'}
+              {tr(looksLikeAddress ? 'That address is not one of the listed tokens here. Unlisted tokens are not offered, so a look-alike cannot slip in.' : 'No listed token matches that.')}
             </div>
           )}
           {list.map((t, i) => {
@@ -343,7 +350,7 @@ function TokenPicker({ options, value, onPick, onClose }: {
                     <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>{t.label}</b>
                     <span style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>{meta?.name ?? ''}</span>
                   </div>
-                  <div style={{ fontSize: TEXT.xs.size, color: twin ? C.goldLit : C.textWhisper }}>{meta?.origin ?? (('token' in t.info) ? 'Terra, cw20' : '')}{twin ? ` · a different token from ${others.join(' and ')}` : ''}</div>
+                  <div style={{ fontSize: TEXT.xs.size, color: twin ? C.goldLit : C.textWhisper }}>{meta?.origin ?? (('token' in t.info) ? 'Terra, cw20' : '')}{twin ? ` · ${tr('a different token from {others}', { others: others.join(' and ') })}` : ''}</div>
                 </div>
                 <button type='button' aria-label={fav ? `Unstar ${t.label}` : `Star ${t.label}`} title={fav ? 'Starred: shown first' : 'Star it to keep it at the top'}
                   onClick={e => { e.stopPropagation(); toggleFavorite(id) }}
@@ -353,7 +360,7 @@ function TokenPicker({ options, value, onPick, onClose }: {
                 <div style={{ textAlign: 'right', fontSize: TEXT.xs.size, fontVariantNumeric: 'tabular-nums' }}>
                   {h > 0
                     ? <><div style={{ color: C.textPrimary }}>{fmtAmount(h)}</div><div style={{ color: C.textMuted }}>{compactUsd(usd)}</div></>
-                    : depth > 0 ? <div style={{ color: C.textWhisper }}>{compactUsd(depth)} liquidity</div> : null}
+                    : depth > 0 ? <div style={{ color: C.textWhisper }}>{tr('{amount} liquidity', { amount: compactUsd(depth) })}</div> : null}
                 </div>
               </div>
             )
@@ -569,6 +576,7 @@ function Footer({ height, soundOn, onToggleSound, onSecret, seoul }: { height?: 
   const taps = useRef<number[]>([])
   const tap = () => { const now = Date.now(); taps.current = [...taps.current.filter(t => now - t < 3000), now]; if (taps.current.length >= 7) { taps.current = []; onSecret() } }
   const day = dayOfExperiment()
+  const { lang } = useLang()
   return (
     <div style={{
       marginTop: SPACE['5'], paddingTop: SPACE['3'], borderTop: `1px solid ${C.divider}`,
@@ -590,8 +598,14 @@ function Footer({ height, soundOn, onToggleSound, onSecret, seoul }: { height?: 
       <Link href='/stats' title='liquidity, fees, liquid staking against the hubs, routing and uptime' style={{ color: C.textSecondary, textDecoration: 'none' }}>stats</Link>
       <span>·</span>
       <Link href='/developers' title='embed a live quote on your site, or call the quote API' style={{ color: C.textSecondary, textDecoration: 'none' }}>build</Link>
+      <select aria-label='Language' value={lang} onChange={e => setLang(e.target.value as Lang)} style={{
+        marginLeft: 'auto', background: 'transparent', border: `1px solid ${C.divider}`, borderRadius: 999, padding: '2px 6px',
+        color: C.textSecondary, cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.7rem',
+      }}>
+        {LANGS.map(l => <option key={l.code} value={l.code} style={{ background: C.surfaceElev }}>{l.name}</option>)}
+      </select>
       <button type='button' onClick={onToggleSound} title={soundOn ? 'sound on · click to mute' : 'sound off · click for tiny beeps'} style={{
-        marginLeft: 'auto', background: 'transparent', border: `1px solid ${C.divider}`, borderRadius: 999, padding: '2px 8px',
+        background: 'transparent', border: `1px solid ${C.divider}`, borderRadius: 999, padding: '2px 8px',
         color: soundOn ? C.goldLit : C.textWhisper, cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.7rem',
       }}>{soundOn ? '🔊' : '🔇'}</button>
       <span style={{ color: C.textWhisper }} title='press ? for keys'>steady lads</span>
@@ -1323,10 +1337,11 @@ function poolMovePct(pair: string): Promise<number> {
  * hop names the pool, its fee and its liquidity.
  */
 function RouteMap({ parts }: { parts: TradePlan['parts'] }) {
+  const { t } = useLang()
   const first = Math.round(parts[0].share * 100)
   return (
     <div style={{ display: 'grid', gap: 6, padding: '2px 0 6px' }}>
-      <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>{parts.length > 1 ? 'Split over two paths that share no pool' : 'Route'}</div>
+      <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>{t(parts.length > 1 ? 'Split over two paths that share no pool' : 'Route')}</div>
       {parts.map((part, i) => (
         <div key={i} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4, fontSize: TEXT.xs.size }}>
           {parts.length > 1 && <span style={{ color: C.goldLit, fontWeight: 700, minWidth: 34 }}>{i === 0 ? first : 100 - first}%</span>}
@@ -1356,6 +1371,50 @@ function RouteToken({ t, micro }: { t: KnownToken; micro: string }) {
   )
 }
 
+/** How large this trade could be before its price moves (lib/depth, /api/depth), read once per pair and kept for the visit. */
+const depthCache = new Map<string, Promise<DepthResponse | null>>()
+const sizeText = (usd: number) => (usd >= 10_000 ? `$${Math.round(usd / 1000).toLocaleString('en-US')}k` : usd >= 1000 ? `$${(usd / 1000).toFixed(1)}k` : `$${Math.round(usd)}`)
+
+function SizeRow({ from, to, amount }: { from: KnownToken; to: KnownToken; amount: string }) {
+  const { t } = useLang()
+  const { px } = useTokenData()
+  const [d, setD] = useState<DepthResponse | null>(null)
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    let alive = true
+    setD(null)
+    const key = `${from.key}|${to.key}`
+    let job = depthCache.get(key)
+    if (!job) {
+      job = fetch(`/api/depth?from=${encodeURIComponent(from.key)}&to=${encodeURIComponent(to.key)}`)
+        .then(r => (r.ok ? (r.json() as Promise<DepthResponse>) : null))
+        .catch(() => null)
+        .then(j => { if (!j) depthCache.delete(key); return j })
+      depthCache.set(key, job)
+    }
+    job.then(j => { if (alive) setD(j) })
+    return () => { alive = false }
+  }, [from.key, to.key])
+  if (!d || d.kind !== 'route') return null
+  const last = d.points[d.points.length - 1]?.usd ?? 0
+  const marks = d.marks.map(m => t('{pct}% at {size}', {
+    pct: m.pct,
+    size: m.usd == null ? t('over {size}', { size: sizeText(last) }) : m.below ? t('under {size}', { size: sizeText(Math.max(m.usd, 1)) }) : t('about {size}', { size: sizeText(m.usd) }),
+  }))
+  const price = px?.[assetId(from.info)]
+  const atUsd = price && Number(amount) > 0 ? Number(amount) * price : null
+  return (
+    <div>
+      <button type='button' onClick={() => setOpen(o => !o)} aria-expanded={open}
+        style={{ ...rowStyle, width: '100%', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+        <span style={{ whiteSpace: 'nowrap' }}>{t('Size before the price moves')} {open ? '▴' : '▾'}</span>
+        <span style={{ color: C.textSecondary, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>{marks.join(' · ')}</span>
+      </button>
+      {open && <div style={{ padding: '2px 0 6px' }}><DepthCurve depth={d} atUsd={atUsd} height={80} /></div>}
+    </div>
+  )
+}
+
 // ─── Swap tab ───────────────────────────────────────────────────
 
 /** A pair and a size handed to the swap panel from somewhere else on the page. */
@@ -1381,6 +1440,14 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   const [fromId, setFromId] = useState('')
   const [toId, setToId] = useState('')
   const [amount, setAmount] = useState('')
+  /** 'in': what to pay is typed. 'out': what should arrive is typed, and what to pay is worked out for it (lib/route quoteExactOut). */
+  const [mode, setMode] = useState<'in' | 'out'>('in')
+  const [receive, setReceive] = useState('')
+  const [solving, setSolving] = useState(false)
+  const [noSolve, setNoSolve] = useState(false)
+  /** Bumped when the price moved under a "receive exactly" swap, so what to pay is worked out again. */
+  const [solveTick, setSolveTick] = useState(0)
+  const { lang, t } = useLang()
   const [slippage, setSlippage] = useState('auto')
   const [advice, setAdvice] = useState<SlipAdvice | null>(null)
   const [balance, setBalance] = useState('0')
@@ -1422,6 +1489,9 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
       setFromId(assetId(f.info))
       const amt = q.get('amount') ?? ''
       if (/^\d{1,12}(\.\d{1,8})?$/.test(amt)) setAmount(amt)
+      // ?receive=5: a link that asks for an amount to arrive, like a payment request.
+      const rcv = q.get('receive') ?? ''
+      if (t && /^\d{1,12}(\.\d{1,8})?$/.test(rcv) && Number(rcv) > 0) { setMode('out'); setReceive(rcv) }
       if (t) setWantTo(assetId(t.info))
       return
     }
@@ -1475,6 +1545,8 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
 
   const micro = from ? toMicro(amount, from.decimals) : null
   const debounced = useDebounced(micro, 350)
+  const receiveMicro = to && mode === 'out' ? toMicro(receive, to.decimals) : null
+  const receiveDebounced = useDebounced(receiveMicro, 450)
   // Auto follows the route (lib/slippage, advice below); a number picked by hand is used as it is.
   const slipPct = slippage === 'auto' ? advice?.pct ?? 1 : Number(slippage)
   const slip = Math.min(0.5, Math.max(0.001, slipPct / 100 || 0.01))
@@ -1493,6 +1565,29 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   }, [routePools, from, to, fromId, toId, debounced, slip])
   const route = quotes?.best ?? null
 
+  // Receive exactly: when what should arrive is typed, work out what to pay and put it in the pay field, where
+  // the quote above prices it as it prices any amount. Rounded up to eight decimals, so the minimum still covers it.
+  useEffect(() => {
+    if (mode !== 'out') return
+    setNoSolve(false)
+    if (!from || !to || !receiveDebounced || receiveDebounced === '0') { setSolving(false); if (!receive.trim()) setAmount(''); return }
+    let alive = true
+    setSolving(true)
+    quoteExactOut(routePools, from, to, receiveDebounced, HOME_VENUE, { slip })
+      .then(x => {
+        if (!alive) return
+        if (!x) { setNoSolve(true); setAmount(''); return }
+        const unit = BigInt(`1${'0'.repeat(Math.max(0, from.decimals - 8))}`)
+        const up = ((BigInt(x.amountMicro) + unit - BigInt(1)) / unit) * unit
+        setAmount(plainAmount(up.toString(), from.decimals))
+      })
+      .catch(() => { if (alive) setNoSolve(true) })
+      .finally(() => { if (alive) setSolving(false) })
+    return () => { alive = false }
+  // Not on every background refresh of the pools: the quote above re-prices with fresh pools anyway.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, receiveDebounced, fromId, toId, slip, solveTick])
+
   const fee = '0'
   const insufficient = !!micro && BigInt(micro) + BigInt(fee) > BigInt(balance || '0')
   // How a trade is signed decides what arrives: through Astroport's router the quote itself, as separate swaps a little less.
@@ -1504,6 +1599,8 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   // The quote must be for the amount on screen, not the one before the debounce caught up.
   const canSwap = !!me && !!route && !!trade && !!from && !!to && !!micro && micro === quotes?.amountMicro
     && trade.parts.every(p => p.plan.legs.every(l => l.offerAmount !== '0') && p.plan.minOut !== '0') && minOut !== '0' && !insufficient && !swap.isLoading && !checking
+    // Receive exactly signs only a trade whose minimum covers what was asked for.
+    && (mode !== 'out' || (!solving && !!receiveMicro && receiveMicro !== '0' && BigInt(minOut) >= BigInt(receiveMicro)))
 
   // The network fee the wallet will propose, from the chain's own simulation of these exact messages (lib/gas).
   // It needs the wallet's balances, so it is only shown with a wallet connected.
@@ -1555,14 +1652,15 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
     const u = new URL(window.location.origin)
     u.searchParams.set('from', from.key)
     u.searchParams.set('to', to.key)
-    if (/^\d{1,12}(\.\d{1,8})?$/.test(amount.trim()) && Number(amount) > 0) u.searchParams.set('amount', amount.trim())
+    if (mode === 'out' && /^\d{1,12}(\.\d{1,8})?$/.test(receive.trim()) && Number(receive) > 0) u.searchParams.set('receive', receive.trim())
+    else if (/^\d{1,12}(\.\d{1,8})?$/.test(amount.trim()) && Number(amount) > 0) u.searchParams.set('amount', amount.trim())
     navigator.clipboard?.writeText(u.toString()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800) }).catch(() => {})
   }
 
   const flip = useCallback(() => {
     if (!from || !to) return
     const nf = toId, nt = fromId
-    setFromId(nf); setToId(nt); setQuotes(null); setErr(null)
+    setFromId(nf); setToId(nt); setQuotes(null); setErr(null); setMode('in')
   }, [from, to, toId, fromId])
 
   // Keyboard: `/` jumps to the amount, `f` flips, 1/2/3 pick slippage. Only
@@ -1612,6 +1710,12 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
           setMoved({ was: trade.expectedOut, now: next.expectedOut })
           return
         }
+        // Receive exactly: if the fresh price no longer covers what was asked for, work out what to pay again first.
+        if (mode === 'out' && receiveMicro && BigInt(next.minOut) < BigInt(receiveMicro)) {
+          setMoved({ was: trade.expectedOut, now: next.expectedOut })
+          setSolveTick(n => n + 1)
+          return
+        }
         signed = next
         short = fresh.short
       }
@@ -1639,6 +1743,8 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
       sound('swap')
       kwonSay({ q: 'Steady lads, deploying more capital 🫡', when: 'reacting to you · just now', pose: 'salute' })
       setAmount('')
+      setReceive('')
+      setMode('in')
       onDone()
       setTimeout(() => setTxHash(null), 6000)
     } catch (e) { clearTimeout(p2); setPhase(0); const why = explainTx(e); setErr(why.text); setFailFix(why.fix) }
@@ -1651,7 +1757,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   return (
     <Card>
       <div className='terra-panel-head' style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACE['3'] }}>
-        <span className='terra-panel-title'><Section title='Swap' /></span>
+        <span className='terra-panel-title'><Section title={t('Swap')} /></span>
         {/* The fee line is the resting state. When a pool has drifted off the
             reference, that is the more useful thing to say in the same space. */}
         {(() => {
@@ -1662,7 +1768,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
               color: crystal ? C.success : C.textMuted,
               border: `1px solid ${crystal ? C.success : C.divider}`,
             }}>
-              {feeBps === 0 ? (LITE ? `No interface fee · pool fee ${poolFeeText(pool, poolFeeBps)}` : 'Best route on Terra · no interface fee') : crystal ? '✦ Crystal · 0 protocol fee' : `Protocol fee ${feeBps / 100}% · Crystal holders 0`}
+              {feeBps === 0 ? (LITE ? `No interface fee · pool fee ${poolFeeText(pool, poolFeeBps)}` : t('Best route on Terra · no interface fee')) : crystal ? '✦ Crystal · 0 protocol fee' : `Protocol fee ${feeBps / 100}% · Crystal holders 0`}
             </span>
           )
           const total = totalUsd(arbs!)
@@ -1704,13 +1810,14 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
         )
       })()}
 
-      <label className='terra-label' style={label}>You pay</label>
+      <label className='terra-label' style={label}>{t('You pay')}</label>
       <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['2'] }}>
-        <input ref={amountRef} style={field} type='number' min='0' step='any' placeholder='0.0' value={amount} onChange={e => setAmount(e.target.value)} />
+        <input ref={amountRef} style={field} type='number' min='0' step='any' placeholder={mode === 'out' && solving ? '…' : '0.0'} value={amount} aria-label={t('You pay')}
+          onChange={e => { setMode('in'); setAmount(e.target.value) }} />
         <TokenSelect value={fromId} onChange={setFromId} options={tokens} />
       </div>
       <div style={{ ...rowStyle, marginBottom: SPACE['3'] }}>
-        <span>Balance {from ? fromMicro(balance, from.decimals) : '—'}{from && me && (() => {
+        <span>{t('Balance')} {from ? fromMicro(balance, from.decimals) : '—'}{from && me && (() => {
           // The poor-o-meter. His words, our balances.
           if (LITE) return null
           const n = Number(balance) / 10 ** from.decimals
@@ -1719,8 +1826,8 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
         })()}</span>
         {from && Number(balance) > 0 && (
           <button type='button' style={{ ...ghostBtn, padding: '2px 8px' }}
-            onClick={() => setAmount(fromMicro((BigInt(balance) * BigInt(10_000 - feeBps - 1) / BigInt(10_000)).toString(), from.decimals, 6).replace(/,/g, ''))}>
-            max
+            onClick={() => { setMode('in'); setAmount(fromMicro((BigInt(balance) * BigInt(10_000 - feeBps - 1) / BigInt(10_000)).toString(), from.decimals, 6).replace(/,/g, '')) }}>
+            {t('max')}
           </button>
         )}
       </div>
@@ -1748,21 +1855,26 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
         >⇅</button>}
       </div>
 
-      <label className='terra-label' style={label}>You receive</label>
-      <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
-        <div style={{ ...field, color: sim ? C.textPrimary : C.textMuted }}>
-          {sim && to ? fromMicro(sim.ret, to.decimals) : '—'}
-        </div>
+      <label className='terra-label' style={label}>{t('You receive')}</label>
+      <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: mode === 'out' && (solving || noSolve) ? SPACE['1'] : SPACE['3'] }}>
+        {/* Shows what the swap delivers; typing in it asks for that amount to arrive instead. */}
+        <input style={{ ...field, color: mode === 'out' || sim ? C.textPrimary : C.textMuted, borderColor: mode === 'out' ? C.goldCore : C.divider }}
+          type='number' min='0' step='any' data-receive aria-label={t('You receive')} placeholder={t('or type what you want to receive')}
+          value={mode === 'out' ? receive : sim && to ? fromMicro(sim.ret, to.decimals, 6).replace(/,/g, '') : ''}
+          onChange={e => { setMode('out'); setReceive(e.target.value) }} />
         <TokenSelect value={toId} onChange={setToId} options={toOptions} />
       </div>
+      {mode === 'out' && solving && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginBottom: SPACE['3'] }}>{t('Finding what to pay…')}</div>}
+      {mode === 'out' && !solving && noSolve && <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['3'] }}>{t('No amount found that delivers that right now. The pools may be too thin.')}</div>}
 
       {route && trade && from && to && (
         <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: 'rgba(0,0,0,0.22)', borderRadius: 10, marginBottom: SPACE['3'] }}>
           <RouteMap parts={trade.parts} />
+          {mode === 'out' && receiveMicro && <Row k={t('You receive at least')} v={`${fromMicro(receiveMicro, to.decimals, 6)} ${to.label}`} hi />}
           {trade.parts.length > 1 && (() => {
             // What splitting is worth, against the best single path.
             const gain = (Number(trade.expectedOut) / Math.max(1, Number(planRoute(route, slip).expectedOut)) - 1) * 100
-            return gain > 0.01 ? <Row k='vs one path' v={`+${gain.toFixed(2)}% more ${to.label}`} hi /> : null
+            return gain > 0.01 ? <Row k={t('vs one path')} v={t('+{pct}% more {token}', { pct: gain.toFixed(2), token: to.label })} hi /> : null
           })()}
           {(() => {
             // What routing is worth, measured against this site's own pools alone.
@@ -1770,20 +1882,26 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
             const home = quotes?.home
             if (!home) return <Row k={`${VENUE_NAME[HOME_VENUE]} alone`} v='no path for this pair' />
             const gain = (Number(trade.expectedOut) / Math.max(1, Number(planRoute(home, slip).expectedOut)) - 1) * 100
-            return gain > 0.05 ? <Row k={`vs ${VENUE_NAME[HOME_VENUE]} alone`} v={`+${gain >= 100 ? gain.toFixed(0) : gain.toFixed(1)}% more ${to.label}`} hi /> : null
+            return gain > 0.05 ? <Row k={t('vs {venue} alone', { venue: VENUE_NAME[HOME_VENUE] })} v={t('+{pct}% more {token}', { pct: gain >= 100 ? gain.toFixed(0) : gain.toFixed(1), token: to.label })} hi /> : null
           })()}
-          <Row k='Rate' v={`1 ${from.label} ≈ ${fromMicro((Number(sim?.ret ?? route.outMicro) / Math.max(1, Number(micro))) * 10 ** from.decimals, to.decimals)} ${to.label}`} />
-          <Row k='Price impact' v={`${impact.toFixed(2)}%`} hi={impact > 3} />
+          <Row k={t('Rate')} v={`1 ${from.label} ≈ ${fromMicro((Number(sim?.ret ?? route.outMicro) / Math.max(1, Number(micro))) * 10 ** from.decimals, to.decimals)} ${to.label}`} />
+          <Row k={t('Price impact')} v={`${impact.toFixed(2)}%`} hi={impact > 3} />
+          <SizeRow from={from} to={to} amount={amount} />
           {(() => {
             const used = new Map<string, PoolView>()
             for (const p of trade.parts) for (const l of p.quote.legs) used.set(l.pool.contract_addr, l.pool)
             const list = Array.from(used.values())
             // Pools with the same fee say it once: three Astroport pools with dynamic fees are one line, not three.
-            return <Row k={list.length > 1 ? 'Pool fees' : 'Pool fee'} v={Array.from(new Set(list.map(poolFeeTextFor))).join(' · ')} />
+            return <Row k={t(list.length > 1 ? 'Pool fees' : 'Pool fee')} v={Array.from(new Set(list.map(poolFeeTextFor))).join(' · ')} />
           })()}
           {feeBps > 0 && <Row k='Protocol fee' v={crystal ? '0 · Crystal' : `${fromMicro(fee, from.decimals)} ${from.label}`} hi={crystal} />}
-          <Row k={`Min. received (${slipPct}% ${perLeg ? 'per leg' : 'slippage'}${slippage === 'auto' ? ', auto' : ''})`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
-          {netFee && <Row k='Network fee' v={`≈ ${fromMicro(netFee, 6, 4)} LUNA`} />}
+          <Row k={t(perLeg ? 'Min. received ({pct}% per leg)' : slippage === 'auto' ? 'Min. received ({pct}% slippage, auto)' : 'Min. received ({pct}% slippage)', { pct: slipPct })} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
+          {netFee && <Row k={t('Network fee')} v={`≈ ${fromMicro(netFee, 6, 4)} LUNA`} />}
+          {mode === 'out' && (
+            <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>
+              {t('What to pay is worked out from the pools right now, with {pct}% room for the price to move. If the price holds, a little more arrives.', { pct: slipPct })}
+            </div>
+          )}
           {(trade.parts.length > 1 || route.legs.length > 1) && (
             <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>
               {trade.parts.length > 1
@@ -1802,11 +1920,11 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
       {from && to && <HubAlternative from={from} to={to} micro={micro} swapOut={trade?.expectedOut ?? null} blocked={insufficient} onDone={onDone} />}
 
       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: SPACE['2'], marginBottom: SPACE['3'], fontSize: TEXT.xs.size, color: C.textMuted }}>
-        <span>Slippage</span>
+        <span>{t('Slippage')}</span>
         <button type='button' onClick={() => setSlippage('auto')}
           title={advice ? (advice.reasons.length ? `Auto: ${advice.reasons.join(' · ')}` : 'Auto: the pools on this route are deep and have been quiet') : "Auto: set from how the route's pools have been moving"}
           style={{ ...ghostBtn, padding: '2px 8px', color: slippage === 'auto' ? C.goldLit : C.textMuted, borderColor: slippage === 'auto' ? C.goldCore : C.divider }}>
-          Auto{advice ? ` ${advice.pct}%` : ''}
+          {t('Auto')}{advice ? ` ${advice.pct}%` : ''}
         </button>
         {['0.5', '1', '3'].map(s => (
           <button key={s} type='button' style={{ ...ghostBtn, padding: '2px 8px', color: slippage === s ? C.goldLit : C.textMuted, borderColor: slippage === s ? C.goldCore : C.divider }} onClick={() => setSlippage(s)}>{s}%</button>
@@ -1815,7 +1933,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
         {from && to && (
           <button type='button' onClick={share} title='A link that opens this swap, with its own preview card'
             style={{ ...ghostBtn, padding: '2px 8px', marginLeft: 'auto', color: copied ? C.success : C.textMuted }}>
-            {copied ? 'link copied ✓' : 'share link'}
+            {t(copied ? 'link copied ✓' : 'share link')}
           </button>
         )}
 </div>
@@ -1828,50 +1946,50 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
           {slippage}% is tighter than this route has been moving{advice.reasons[0] ? ` (${advice.reasons[0]})` : ''}, so the swap may fail. Auto would use {advice.pct}%.
         </div>
       )}
-      {impact > 5 && <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'] }}>High price impact: even the best path is thin for this size. Trade smaller.</div>}
-      {insufficient && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{LITE ? 'Not enough balance.' : 'Not enough minerals.'} ({from?.label})</div>}
+      {impact > 5 && <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'] }}>{t('High price impact: even the best path is thin for this size. Trade smaller.')}</div>}
+      {insufficient && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{LITE || lang !== 'en' ? t('Not enough balance.') : 'Not enough minerals.'} ({from?.label})</div>}
       {moved && to && (
         <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'], lineHeight: 1.5 }}>
-          The price moved while this was open: the swap now gives about {fromMicro(moved.now, to.decimals, 6)} {to.label} instead of {fromMicro(moved.was, to.decimals, 6)}. Press Swap again to take the new price.
+          {t('The price moved while this was open: the swap now gives about {now} {token} instead of {was}. Press Swap again to take the new price.', { now: fromMicro(moved.now, to.decimals, 6), token: to.label, was: fromMicro(moved.was, to.decimals, 6) })}
         </div>
       )}
-      {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
+      {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{t(err)}</div>}
       {err && failFix === 'slippage' && wider && (
         <button type='button' onClick={() => { retryAfterSlip.current = true; setErr(null); setFailFix(null); setSlippage(wider) }}
           style={{ ...ghostBtn, padding: '3px 10px', marginBottom: SPACE['2'], color: C.goldLit, borderColor: C.goldCore }}>
-          Try again at {wider}% slippage
+          {t('Try again at {pct}% slippage', { pct: wider })}
         </button>
       )}
       {/* Checked before anyone signs: the chain's simulation of these exact messages. Shown only for causes a person can act on. */}
       {!err && simFail && (simFail.fix === 'slippage' || simFail.fix === 'balance') && (
         <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'], lineHeight: 1.5 }}>
-          Checked against the chain before you sign: as it stands this would fail. {simFail.text}
-          {simFail.fix === 'slippage' && wider && <> <button type='button' onClick={() => setSlippage(wider)} style={{ ...ghostBtn, padding: '1px 8px', color: C.goldLit, borderColor: C.goldCore }}>Use {wider}%</button></>}
+          {t('Checked against the chain before you sign: as it stands this would fail.')} {t(simFail.text)}
+          {simFail.fix === 'slippage' && wider && <> <button type='button' onClick={() => setSlippage(wider)} style={{ ...ghostBtn, padding: '1px 8px', color: C.goldLit, borderColor: C.goldCore }}>{t('Use {pct}%', { pct: wider })}</button></>}
         </div>
       )}
       {txHash && !err && (
         <div style={{ fontSize: TEXT.xs.size, color: C.success, marginBottom: SPACE['2'], display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <span>{(!LITE && quip) || '✓ Swapped.'}</span>
-          {txHash !== 'ok' && <Link href={`/tx/${txHash}`} style={{ color: C.goldLit, fontWeight: 700 }}>Receipt →</Link>}
+          <span>{(!LITE && lang === 'en' && quip) || t('✓ Swapped.')}</span>
+          {txHash !== 'ok' && <Link href={`/tx/${txHash}`} style={{ color: C.goldLit, fontWeight: 700 }}>{t('Receipt →')}</Link>}
         </div>
       )}
       {/* What people do next with what just arrived: check it landed, or put it to work in a pool. */}
       {txHash && !err && onNext && to && (
         <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginBottom: SPACE['2'], display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span>Next:</span>
-          <button type='button' onClick={() => onNext('history')} style={{ ...ghostBtn, padding: '2px 10px' }}>See it in your history</button>
-          <button type='button' onClick={() => onNext('pools', to.key)} style={{ ...ghostBtn, padding: '2px 10px' }}>Pools with {to.label}</button>
+          <span>{t('Next:')}</span>
+          <button type='button' onClick={() => onNext('history')} style={{ ...ghostBtn, padding: '2px 10px' }}>{t('See it in your history')}</button>
+          <button type='button' onClick={() => onNext('pools', to.key)} style={{ ...ghostBtn, padding: '2px 10px' }}>{t('Pools with {token}', { token: to.label })}</button>
         </div>
       )}
       {phase > 0 && (
         <div className='terra-stepper' aria-live='polite'>
-          {(['asking your wallet', 'broadcasting · steady', 'written down'] as const).map((t, k) => {
+          {(['asking your wallet', 'broadcasting · steady', 'written down'] as const).map((step, k) => {
             const n = (k + 1) as 1 | 2 | 3
             const on = phase >= n, now = phase === n
             return (
-              <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: on ? (n === 3 ? C.success : C.goldLit) : C.textWhisper }}>
+              <span key={step} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: on ? (n === 3 ? C.success : C.goldLit) : C.textWhisper }}>
                 <span className={`terra-step-dot${now ? ' terra-step-now' : ''}`} style={{ background: on ? (n === 3 ? C.success : C.goldLit) : C.divider }} />
-                {t}{now && n < 3 ? '…' : n === 3 && on ? ' ✓' : ''}
+                {lang === 'en' ? step : t(step.replace(' · steady', ''))}{now && n < 3 ? '…' : n === 3 && on ? ' ✓' : ''}
               </span>
             )
           })}
@@ -1896,7 +2014,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
             onMouseDown={() => { holdT.current = setTimeout(() => setHolding(true), 650) }}
             onMouseUp={() => { if (holdT.current) clearTimeout(holdT.current); setHolding(false) }}
             onMouseLeave={() => { if (holdT.current) clearTimeout(holdT.current); setHolding(false) }}>
-            {checking ? 'Checking the price…' : swap.isLoading ? 'Confirm in wallet…' : holding ? (LITE ? 'Swapping…' : 'Deploying capital… 🫡') : impact > 5 ? (LITE ? 'Swap anyway' : 'Swap anyway · steady lads') : 'Swap'}
+            {checking ? t('Checking the price…') : swap.isLoading ? t('Confirm in wallet…') : holding ? (LITE || lang !== 'en' ? t('Swapping…') : 'Deploying capital… 🫡') : impact > 5 ? (LITE || lang !== 'en' ? t('Swap anyway') : 'Swap anyway · steady lads') : t('Swap')}
           </button>
         : <div className='terra-connect-cta'><WalletButton /></div>}
       {pool && from && to && (
@@ -3096,6 +3214,9 @@ function SendPanel({ pools, onDone }: { pools: PoolView[]; onDone: () => void })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [ok, setOk] = useState<{ text: string; tx: string } | null>(null)
+  // The address book and the addresses sent to lately, in this browser only (lib/contacts).
+  const { contacts, recent } = useContacts()
+  const [saveName, setSaveName] = useState('')
   const token = tokens.find(t => assetId(t.info) === tokenId) ?? LUNA
   useEffect(() => {
     if (!me) { setBal('0'); return }
@@ -3131,6 +3252,7 @@ function SendPanel({ pools, onDone }: { pools: PoolView[]; onDone: () => void })
     try {
       const r = await send.mutateAsync({ msgs: [sendMsg({ sender: me, recipient: addr, info: token.info, amount: micro })], memo: memo.trim(), raw: true }) as { transactionHash?: string }
       setOk({ text: `Sent ${fromMicro(micro, token.decimals, 6)} ${token.label} to ${addr.slice(0, 10)}…${addr.slice(-6)}.`, tx: r?.transactionHash ?? '' })
+      rememberRecipient(addr)
       setAmount('')
       onDone()
     } catch (e) { setErr(humanizeTxError(e)) } finally { setBusy(false) }
@@ -3141,7 +3263,7 @@ function SendPanel({ pools, onDone }: { pools: PoolView[]; onDone: () => void })
     <Card>
       <Section title='Send' />
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px` }}>
-        Any listed token to another Terra address. A send cannot be undone, so the address is checked before you sign.
+        Any listed token to another Terra address. A send cannot be undone, so the address is checked before you sign. Name an address to keep it, with its memo, in this browser&apos;s address book.
       </p>
       <label style={label}>Token and amount</label>
       <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['2'] }}>
@@ -3160,6 +3282,22 @@ function SendPanel({ pools, onDone }: { pools: PoolView[]; onDone: () => void })
         )}
       </div>
       <label style={label}>To this Terra address</label>
+      {(contacts.length > 0 || recent.some(a => a !== me)) && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+          {contacts.map(c => (
+            <button key={c.address} type='button' title={c.address} onClick={() => { setTo(c.address); setMemo(c.memo ?? '') }}
+              style={{ ...ghostBtn, padding: '3px 10px', borderRadius: 999, color: addr === c.address ? C.goldLit : C.textPrimary, borderColor: addr === c.address ? C.goldCore : C.divider }}>
+              {c.name}
+            </button>
+          ))}
+          {recent.filter(a => a !== me && !contacts.some(c => c.address === a)).slice(0, 4).map(a => (
+            <button key={a} type='button' title={`Sent to lately: ${a}`} onClick={() => setTo(a)}
+              style={{ ...ghostBtn, padding: '3px 10px', borderRadius: 999, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: addr === a ? C.goldLit : C.textMuted }}>
+              {a.slice(0, 9)}…{a.slice(-4)}
+            </button>
+          ))}
+        </div>
+      )}
       <input style={{ ...field, width: '100%', boxSizing: 'border-box' }} placeholder='terra1…' value={to} onChange={e => setTo(e.target.value)} spellCheck={false} autoComplete='off' />
       <div style={{ fontSize: TEXT.xs.size, lineHeight: 1.5, margin: `4px 0 ${SPACE['2']}px`, minHeight: 18 }}>
         {addr && !kind && <span style={{ color: C.alert }}>That is not a Terra address.</span>}
@@ -3168,6 +3306,22 @@ function SendPanel({ pools, onDone }: { pools: PoolView[]; onDone: () => void })
         {kind === 'contract' && !self && <span style={{ color: C.emberLit, display: 'block' }}>This is a contract address. Send only if it accepts {token.label}; tokens sent to a contract that does not handle them can be lost.</span>}
         {kind === 'wallet' && !self && seen === 'used' && <span style={{ color: C.textWhisper }}>An address that has been used on Terra before.</span>}
       </div>
+      {kind && !self && (() => {
+        const saved = contacts.find(c => c.address === addr)
+        return saved ? (
+          <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, margin: `-4px 0 ${SPACE['2']}px`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span>In your address book as <b style={{ color: C.textSecondary }}>{saved.name}</b>{saved.memo ? ', with its memo' : ''}.</span>
+            <button type='button' onClick={() => removeContact(addr)} style={{ ...ghostBtn, padding: '1px 8px' }}>remove</button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: `-4px 0 ${SPACE['2']}px`, flexWrap: 'wrap' }}>
+            <input value={saveName} onChange={e => setSaveName(e.target.value.slice(0, 32))} placeholder='Name it to save it, for example My exchange' aria-label='Name for this address'
+              style={{ ...field, flex: '1 1 180px', width: 'auto', padding: '0.35rem 0.6rem', fontSize: TEXT.xs.size }} />
+            <button type='button' disabled={!saveName.trim()} onClick={() => { saveContact({ address: addr, name: saveName, memo }); setSaveName('') }}
+              style={{ ...ghostBtn, padding: '3px 10px', opacity: saveName.trim() ? 1 : 0.5 }}>{memo.trim() ? 'Save with memo' : 'Save'}</button>
+          </div>
+        )
+      })()}
       <label style={label}>Memo, only if the receiver asks for one</label>
       <input style={{ ...field, width: '100%', boxSizing: 'border-box', marginBottom: SPACE['3'] }} placeholder='for example an exchange deposit memo' value={memo} onChange={e => setMemo(e.target.value.slice(0, 256))} spellCheck={false} autoComplete='off' />
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}
@@ -3182,6 +3336,14 @@ function SendPanel({ pools, onDone }: { pools: PoolView[]; onDone: () => void })
 /** Price alerts and starred tokens, both kept in this browser only (lib/alerts). */
 function AlertsPanel() {
   const { alerts, favorites } = usePrefs()
+  const push = usePush(alerts)
+  const [pushNote, setPushNote] = useState<string | null>(null)
+  const togglePush = async (on: boolean) => {
+    setPushNote(null)
+    if (!on) { await disablePush(); return }
+    const r = await enablePush()
+    if (!r.ok) setPushNote(r.why)
+  }
   const [allowed, setAllowed] = useState(false)
   useEffect(() => { setAllowed(notificationsAllowed()) }, [alerts])
   const waiting = alerts.filter(a => !a.firedAt)
@@ -3190,10 +3352,22 @@ function AlertsPanel() {
     <Card>
       <Section title='Price alerts and starred tokens' />
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['2']}px` }}>
-        Kept in this browser only. An alert goes off once, when an open Terra Swap page sees the market reference cross its level. Set one on any token&apos;s page, for example <Link href='/token/LUNA' style={{ color: C.goldLit }}>LUNA</Link>; star tokens in the token picker to keep them at the top.
+        Kept in this browser. An alert goes off once, when the market reference crosses its level: on an open Terra Swap page, and with the option below, as a notification with the page closed. Set one on any token&apos;s page, for example <Link href='/token/LUNA' style={{ color: C.goldLit }}>LUNA</Link>; star tokens in the token picker to keep them at the top.
       </p>
       {waiting.length > 0 && !allowed && typeof Notification !== 'undefined' && (
         <button type='button' onClick={async () => setAllowed(await askNotifications())} style={{ ...ghostBtn, padding: '3px 10px', marginBottom: SPACE['2'] }}>Allow browser notifications</button>
+      )}
+      {push.supported && (
+        <div style={{ margin: `0 0 ${SPACE['2']}px` }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: TEXT.sm.size, color: C.textPrimary, cursor: 'pointer' }}>
+            <input type='checkbox' checked={push.on} onChange={e => void togglePush(e.target.checked)} />
+            Also when no Terra Swap page is open
+          </label>
+          <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.6, marginTop: 2 }}>
+            This keeps this browser&apos;s notification address and its alert levels on Terra Swap&apos;s server, and nothing else: no wallet, no name. Checked every ten minutes. Turn it off to delete them.
+          </div>
+          {pushNote && <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginTop: 2 }}>{pushNote}</div>}
+        </div>
       )}
       {alerts.length === 0 && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>No alerts set.</div>}
       {alerts.map(a => (
@@ -3241,6 +3415,8 @@ function HistoryPanel({ pools }: { pools: PoolView[] }) {
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState(false)
   const [reload, setReload] = useState(0)
+  const [year, setYear] = useState(() => new Date().getUTCFullYear())
+  const [exporting, setExporting] = useState<{ busy: boolean; text: string } | null>(null)
   useEffect(() => {
     if (!me) { setData(null); return }
     let alive = true
@@ -3260,6 +3436,37 @@ function HistoryPanel({ pools }: { pools: PoolView[] }) {
     return { label: t.label, decimals: t.decimals }
   }, [lpNames])
   const show = (m: Moved) => { const t = tokenOf(m.id); return `${fromMicro(m.amount, t.decimals, 6)} ${t.label}` }
+
+  /** Every transaction of a calendar year as a CSV file (lib/csv), with each token's real decimals read from the chain. */
+  const exportCsv = async () => {
+    if (!me) return
+    setExporting({ busy: true, text: `Reading every transaction of ${year}…` })
+    try {
+      const r = await fetch(`/api/history?address=${me}&year=${year}`, { cache: 'no-store' })
+      const j = r.ok ? ((await r.json()) as HistoryResponse) : null
+      if (!j) { setExporting({ busy: false, text: 'The chain did not answer. Try again in a moment.' }); return }
+      const ids = Array.from(new Set(j.rows.flatMap(row => [...row.in, ...row.out].map(m => m.id))))
+      const named = new Map<string, { symbol: string; decimals: number }>()
+      await Promise.all(ids.map(async id => {
+        const lp = lpNames.get(id)
+        if (lp) { named.set(id, { symbol: lp, decimals: 6 }); return }
+        const tk = await resolveToken(id.startsWith('terra1') ? { token: { contract_addr: id } } : { native_token: { denom: id } }).catch(() => null)
+        const listed = !!tk && KNOWN_TOKENS.some(k => k.key === tk.key)
+        named.set(id, { symbol: listed ? tk!.label : tk && tk.label !== tk.key ? `${tk.label} (${id})` : id, decimals: tk?.decimals ?? 6 })
+      }))
+      const csv = historyCsv(j.rows, id => named.get(id) ?? { symbol: id, decimals: 6 })
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `terra-${me.slice(-6)}-${year}.csv`
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      const n = j.rows.length
+      setExporting({ busy: false, text: `${n} transaction${n === 1 ? '' : 's'} in ${year}, saved as ${a.download}.${j.complete ? '' : ' The chain stopped answering before the start of the year, so the oldest may be missing. Try again later for the whole year.'}` })
+    } catch {
+      setExporting({ busy: false, text: 'The chain did not answer. Try again in a moment.' })
+    }
+  }
 
   if (!me) {
     return (
@@ -3283,6 +3490,22 @@ function HistoryPanel({ pools }: { pools: PoolView[] }) {
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px` }}>
         This wallet&apos;s recent transactions on Terra, read back from the chain: what left, what arrived, and the network fee. A swap signed here carries its quote in the memo, so what it was quoted sits beside what actually arrived.
       </p>
+      <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: C.surface, border: `1px solid ${C.divider}`, borderRadius: 10, marginBottom: SPACE['3'], display: 'grid', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: TEXT.xs.size, color: C.textSecondary }}>Every transaction of</span>
+          <select value={year} onChange={e => setYear(Number(e.target.value))} aria-label='Year' style={{ ...select, minWidth: 0, padding: '2px 8px', fontSize: TEXT.xs.size }}>
+            {Array.from({ length: new Date().getUTCFullYear() - 2021 }, (_, i) => new Date().getUTCFullYear() - i).map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <button type='button' onClick={exportCsv} disabled={exporting?.busy} style={{ ...ghostBtn, padding: '3px 10px', color: C.goldLit, borderColor: C.goldCore, marginLeft: 'auto', opacity: exporting?.busy ? 0.6 : 1 }}>
+            {exporting?.busy ? 'Reading…' : 'Download CSV'}
+          </button>
+        </div>
+        <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5 }}>
+          For tax software, in the columns Koinly imports. A dollar value is filled in only where one side of a swap is USDC from Noble; the rest is left for the software to price.
+        </div>
+        {exporting && !exporting.busy && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.5 }}>{exporting.text}</div>}
+        {exporting?.busy && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>{exporting.text}</div>}
+      </div>
       {loading && !data && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Reading the chain…</div>}
       {failed && !data && <div style={{ fontSize: TEXT.xs.size, color: C.textSecondary }}>The chain&apos;s history endpoint did not answer. Try refresh in a moment.</div>}
       {data && rows.length === 0 && <div style={{ fontSize: TEXT.sm.size, color: C.textMuted }}>No transactions found for this wallet.</div>}
@@ -4789,6 +5012,7 @@ function StatBand({ data, board }: { data: DexResponse; board: BoardResponse | n
 
 function Hero({ poolFeeBps, onReplay, onHome, onToast, me, right }: { poolFeeBps: number; onReplay: () => void; onHome: () => void; onToast: (m: string) => void; me?: string; right?: React.ReactNode }) {
   const clicks = useRef(0)
+  const { t } = useLang()
   // The wordmark is the way home. A modified click opens the home page in a new tab like any link; three clicks still replay the intro.
   const wordmarkClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
@@ -4808,7 +5032,7 @@ function Hero({ poolFeeBps, onReplay, onHome, onToast, me, right }: { poolFeeBps
           const who = me ? `${me.slice(0, 9)}…${me.slice(-4)}` : ''
           void who
           const greet = gm ? `${gm} · ` : ''
-          return LITE ? 'Unofficial · Astroport pools' : `${greet}Experimental`
+          return LITE ? 'Unofficial · Astroport pools' : `${greet}${t('Experimental')}`
         })()}
       </div>
       <h1 style={{
@@ -4874,6 +5098,7 @@ function IntroSplash({ onDone }: { onDone: () => void }) {
 
 function SwapPageInner() {
   const me = useMyAddress()
+  const { lang, t } = useLang()
   const [data, setData] = useState<DexResponse | null>(null)
   const [board, setBoard] = useState<BoardResponse | null>(null)
   const [tab, setTab] = useState<Tab>('swap')
@@ -5246,6 +5471,14 @@ function SwapPageInner() {
         keywords: 'install app pwa home screen phone mobile desktop', icon: icon('📲'),
         run: () => { if (installPrompt) installPrompt.prompt().catch(() => {}); else setToast({ msg: 'On a phone: open the browser menu or Share, then Add to Home Screen.' }) },
       },
+      { id: 'do-receive', group: 'Do', label: 'Receive an exact amount', hint: 'type what should arrive, and the swap works out what to pay', keywords: 'exact output receive exactly pay request invoice amount out', icon: icon('🎯'), run: () => { openTab('swap'); setTimeout(() => document.querySelector<HTMLInputElement>('input[data-receive]')?.focus(), 200) } },
+      { id: 'do-export', group: 'Do', label: 'Export your history as CSV', hint: 'every transaction of a year, in the columns tax software imports', keywords: 'csv export download tax koinly report history transactions year', icon: icon('🧮'), run: () => openTab('history') },
+      { id: 'do-contacts', group: 'Do', label: 'Send to a saved address', hint: 'an address book with memos, kept in this browser', keywords: 'send transfer address book contacts saved recipient memo exchange', icon: icon('📇'), run: () => openTab('wallet') },
+      { id: 'do-push', group: 'Do', label: 'Price alerts with the page closed', hint: 'a notification on this device when a token crosses your level', keywords: 'push notification alert closed background phone', icon: icon('📣'), run: () => openTab('wallet') },
+      ...LANGS.map(l => ({
+        id: `lang-${l.code}`, group: 'Do', label: `Language: ${l.name}`, hint: l.code === lang ? 'in use' : 'the swap, the token picker and the wallet',
+        keywords: `language lang translate ${l.code} ${l.name} english korean spanish vietnamese 한국어 español tiếng việt`, icon: icon('🌐'), run: () => setLang(l.code),
+      })),
       { id: 'page-source', group: 'Pages', label: 'Source code', hint: 'MIT licensed; anyone can run their own copy', keywords: 'github open source code repository', icon: icon('⌥'), run: () => { window.open('https://github.com/solid-online/terra-swap', '_blank', 'noopener') } },
     ]
     const tokens = new Map<string, KnownToken>()
@@ -5258,7 +5491,7 @@ function SwapPageInner() {
       items.push({ id: `buy-${id}`, group: 'Tokens', label: `Buy ${t.label}`, hint: meta?.name ?? t.label, keywords: `${words} get swap into`, icon: <TokenIcon label={t.label} size={20} />, run: () => openSwap(id === lunaId ? NOBLE_USDC : lunaId, id) })
       items.push({ id: `sell-${id}`, group: 'Tokens', label: `Sell ${t.label}`, hint: meta?.name ?? t.label, keywords: `${words} swap out of`, icon: <TokenIcon label={t.label} size={20} />, run: () => openSwap(id, id === NOBLE_USDC || id === USDC_INJ_DENOM ? lunaId : NOBLE_USDC) })
       if (KNOWN_TOKENS.some(k => k.key === t.key)) {
-        items.push({ id: `page-${id}`, group: 'Tokens', label: `${t.label}: price and pools`, hint: `${meta?.name ?? t.label}, its own page`, keywords: `${words} page price info about chart pools`, icon: <TokenIcon label={t.label} size={20} />, run: () => { window.location.href = `/token/${encodeURIComponent(t.key)}` } })
+        items.push({ id: `page-${id}`, group: 'Tokens', label: `${t.label}: price and pools`, hint: `${meta?.name ?? t.label}: price over time, who controls it, its pools`, keywords: `${words} page price info about chart history pools who controls mint admin backing holders safety size depth`, icon: <TokenIcon label={t.label} size={20} />, run: () => { window.location.href = `/token/${encodeURIComponent(t.key)}` } })
       }
     }
     // Deepest first, so a tie on the name goes to the pool worth trading in.
@@ -5273,7 +5506,7 @@ function SwapPageInner() {
     }
     return items
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allPools, routePoolsAll, arbs, openBridge, openInPools, openSwap, openTab, takeArb, installPrompt])
+  }, [allPools, routePoolsAll, arbs, openBridge, openInPools, openSwap, openTab, takeArb, installPrompt, lang])
   const load = useCallback(async () => {
     setSyncing(true)
     try {
@@ -5424,17 +5657,17 @@ function SwapPageInner() {
               {/* Five places, named for what people come to do. Opening a pool lives in Pools, History in Portfolio,
                   and everything else, tokens and pools included, is one search away. */}
               <div className='terra-tabs' style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'], alignItems: 'center' }}>
-                {tabBtn('swap', 'Swap')}
-                {tabBtn('pools', <>Pools<span className='terra-tab-count'> · {allPools.length}</span></>, tab === 'pools' || tab === 'create')}
-                {tabBtn('transfer', 'Bridge')}
-                {tabBtn('positions', 'Portfolio', tab === 'positions' || tab === 'wallet' || tab === 'history')}
-                {!LITE && tabBtn('board', <>Board{board?.rows.length ? <span className='terra-tab-count'> · {board.rows.length}</span> : null}</>)}
+                {tabBtn('swap', t('Swap'))}
+                {tabBtn('pools', <>{t('Pools')}<span className='terra-tab-count'> · {allPools.length}</span></>, tab === 'pools' || tab === 'create')}
+                {tabBtn('transfer', t('Bridge'))}
+                {tabBtn('positions', t('Portfolio'), tab === 'positions' || tab === 'wallet' || tab === 'history')}
+                {!LITE && tabBtn('board', <>{t('Board')}{board?.rows.length ? <span className='terra-tab-count'> · {board.rows.length}</span> : null}</>)}
                 {/* Terra Predict lives next door, once it is live. A link to "not live yet" is a dead end. */}
                 {!LITE && isPredictLive() && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, whiteSpace: 'nowrap' }}>Predict ↗</Link>}
                 <button type='button' onClick={() => setPalette(true)} title='Search tokens, pools and everything this site does (⌘K)' aria-label='Search everything'
                   className='terra-search-btn' style={{ ...ghostBtn, padding: '0.45rem 0.8rem', marginLeft: 'auto', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                   <span aria-hidden style={{ color: C.goldLit }}>⌕</span>
-                  <span className='terra-search-label'>Search</span>
+                  <span className='terra-search-label'>{t('Search')}</span>
                   <kbd className='terra-kbd-hint' style={{ fontFamily: 'inherit', fontSize: '0.62rem', color: C.textWhisper, border: `1px solid ${C.divider}`, borderRadius: 5, padding: '0 5px' }}>⌘K</kbd>
                 </button>
               </div>

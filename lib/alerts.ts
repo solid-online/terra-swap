@@ -56,6 +56,20 @@ export function removeAlert(id: string) {
   write(ALERT_KEY, readAlerts().filter(a => a.id !== id))
 }
 
+/** Marks alerts the server sent while no page was open (lib/push), so they read as gone off here too. */
+export function markFired(fired: { id: string; firedAt: number; firedUsd: number }[]) {
+  if (fired.length === 0) return
+  const byId = new Map(fired.map(f => [f.id, f]))
+  let changed = false
+  const next = readAlerts().map(a => {
+    const f = byId.get(a.id)
+    if (!f || a.firedAt) return a
+    changed = true
+    return { ...a, firedAt: f.firedAt, firedUsd: f.firedUsd }
+  })
+  if (changed) write(ALERT_KEY, next)
+}
+
 /** Favourites and alerts, re-read when they change in this tab or another. Empty until mounted, so server and browser render the same. */
 export function usePrefs(): { favorites: string[]; alerts: PriceAlert[] } {
   const [n, bump] = useState(0)
