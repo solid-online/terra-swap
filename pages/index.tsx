@@ -17,6 +17,7 @@ import { WalletName } from 'components/WalletName'
 import ElectricPulse from 'components/ElectricPulse'
 import LstBoard from 'components/LstBoard'
 import CommandPalette, { type PaletteItem } from 'components/CommandPalette'
+import AppSwitcher, { HOME_URL, NFT_URL } from 'components/AppSwitcher'
 import { PairIcons, TokenIcon } from 'components/TokenIcon'
 import { isPredictLive } from 'lib/predict'
 import { SPACE, RADIUS, TEXT } from 'components/tokens'
@@ -5025,15 +5026,17 @@ function Hero({ poolFeeBps, onReplay, onHome, onToast, me, right }: { poolFeeBps
   return (
     <div className='terra-hero' style={{ marginTop: SPACE['3'], display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SPACE['3'], flexWrap: 'wrap' }}>
      <div style={{ minWidth: 0 }}>
-      <div style={{ fontSize: '0.62rem', letterSpacing: '0.34em', color: C.korea, fontWeight: 800, textTransform: 'uppercase', marginBottom: SPACE['2'] }}>
-        {(() => {
+      <div style={{ fontSize: '0.62rem', letterSpacing: '0.34em', color: C.korea, fontWeight: 800, textTransform: 'uppercase', marginBottom: SPACE['2'], display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        {/* The other TerraLuna apps, and terraluna.app with all of them. Not on the Astroport-only pools site. */}
+        {!LITE && <><AppSwitcher /><span aria-hidden>·</span></>}
+        <span>{(() => {
           const h = new Date().getHours()
           const gm = isChuseok() ? '추석 · happy harvest moon' : moonPhase().full ? '🌕 full moon' : h >= 5 && h < 11 ? 'gm' : h >= 22 || h < 5 ? 'gn' : ''
           const who = me ? `${me.slice(0, 9)}…${me.slice(-4)}` : ''
           void who
           const greet = gm ? `${gm} · ` : ''
           return LITE ? 'Unofficial · Astroport pools' : `${greet}${t('Experimental')}`
-        })()}
+        })()}</span>
       </div>
       <h1 style={{
         fontFamily: TERRA_FONT, fontSize: 'clamp(2rem, 6.5vw, 3rem)', lineHeight: 1.02,
@@ -5480,6 +5483,10 @@ function SwapPageInner() {
         keywords: `language lang translate ${l.code} ${l.name} english korean spanish vietnamese 한국어 español tiếng việt`, icon: icon('🌐'), run: () => setLang(l.code),
       })),
       { id: 'page-source', group: 'Pages', label: 'Source code', hint: 'MIT licensed; anyone can run their own copy', keywords: 'github open source code repository', icon: icon('⌥'), run: () => { window.open('https://github.com/solid-online/terra-swap', '_blank', 'noopener') } },
+      ...(!LITE ? [
+        { id: 'app-nft', group: 'Pages', label: 'Terra NFT', hint: 'collections, listings and offers on Terra NFT, Necropolis and Boost', keywords: 'nft collectibles marketplace necropolis boost listings offers buy sell terraluna apps', icon: icon('◆'), run: () => { window.location.href = NFT_URL } },
+        { id: 'app-home', group: 'Pages', label: 'All TerraLuna apps', hint: 'terraluna.app', keywords: 'terraluna apps home other products nft switcher', icon: icon('🌍'), run: () => { window.location.href = HOME_URL } },
+      ] : []),
     ]
     const tokens = new Map<string, KnownToken>()
     for (const p of routePoolsAll) for (const t of p.tokens) tokens.set(assetId(t.info), t)
