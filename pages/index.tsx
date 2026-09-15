@@ -17,7 +17,7 @@ import { WalletName } from 'components/WalletName'
 import ElectricPulse from 'components/ElectricPulse'
 import LstBoard from 'components/LstBoard'
 import CommandPalette, { type PaletteItem } from 'components/CommandPalette'
-import AppSwitcher, { HOME_URL, NFT_URL } from 'components/AppSwitcher'
+import AppSwitcher, { GOV_URL, HOME_URL, NFT_URL } from 'components/AppSwitcher'
 import { PairIcons, TokenIcon } from 'components/TokenIcon'
 import { isPredictLive } from 'lib/predict'
 import { SPACE, RADIUS, TEXT } from 'components/tokens'
@@ -5524,7 +5524,8 @@ function SwapPageInner() {
       { id: 'page-source', group: 'Pages', label: 'Source code', hint: 'MIT licensed; anyone can run their own copy', keywords: 'github open source code repository', icon: icon('⌥'), run: () => { window.open('https://github.com/solid-online/terra-swap', '_blank', 'noopener') } },
       ...(!LITE ? [
         { id: 'app-nft', group: 'Pages', label: 'Terra NFT', hint: 'collections, listings and offers on Terra NFT, Necropolis and Boost', keywords: 'nft collectibles marketplace necropolis boost listings offers buy sell terraluna apps', icon: icon('◆'), run: () => { window.location.href = NFT_URL } },
-        { id: 'app-home', group: 'Pages', label: 'All TerraLuna apps', hint: 'terraluna.app', keywords: 'terraluna apps home other products nft switcher', icon: icon('🌍'), run: () => { window.location.href = HOME_URL } },
+        { id: 'app-gov', group: 'Pages', label: 'Terra Gov', hint: 'proposals, votes, validators and where the community pool’s money went', keywords: 'governance proposals vote validators community pool phoenix directive treasury terraluna apps', icon: icon('§'), run: () => { window.location.href = GOV_URL } },
+        { id: 'app-home', group: 'Pages', label: 'All TerraLuna apps', hint: 'terraluna.app', keywords: 'terraluna apps home other products nft gov switcher', icon: icon('🌍'), run: () => { window.location.href = HOME_URL } },
       ] : []),
     ]
     const tokens = new Map<string, KnownToken>()

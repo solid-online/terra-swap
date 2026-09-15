@@ -9,6 +9,7 @@ import { useLang } from 'lib/i18n'
 
 const trim = (u: string) => u.replace(/\/+$/, '')
 export const NFT_URL = trim(process.env.NEXT_PUBLIC_NFT_URL || 'https://nft.terraluna.app')
+export const GOV_URL = trim(process.env.NEXT_PUBLIC_GOV_URL || 'https://gov.terraluna.app')
 export const HOME_URL = trim(process.env.NEXT_PUBLIC_HOME_URL || 'https://terraluna.app')
 
 const FONT = "'Montserrat', 'Space Grotesk', 'Inter', system-ui, sans-serif"
@@ -60,6 +61,7 @@ export default function AppSwitcher() {
   const apps = [
     { key: 'swap', word: 'Swap', glyph: '⇅', description: t('Swap tokens, pools, liquidity, transfers'), url: '/', here: true },
     { key: 'nft', word: 'NFT', glyph: '◆', description: t('Collections, items, listings and offers'), url: NFT_URL, here: false },
+    { key: 'gov', word: 'Gov', glyph: '§', description: t('Proposals, votes and the community pool'), url: GOV_URL, here: false },
   ]
 
   return (
