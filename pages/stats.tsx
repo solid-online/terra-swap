@@ -135,7 +135,7 @@ export default function StatsPage() {
                 <tbody>
                   {deep.map(p => (
                     <tr key={p.contract_addr}>
-                      <td style={{ ...cell, color: C.textPrimary }}>{p.label}</td>
+                      <td style={cell}><Link href={`/pool/${p.contract_addr}`} style={{ color: C.textPrimary, textDecoration: 'none' }}>{p.label}</Link></td>
                       <td style={{ ...cell, color: C.textMuted }}>{VENUE_NAME[p.venue]}{p.pairType !== 'xyk' ? ` · ${p.pairType}` : ''}</td>
                       <td style={{ ...cell, color: C.textSecondary, fontVariantNumeric: 'tabular-nums' }}>{p.tvlUsd != null ? fmtUsd(p.tvlUsd) : '—'}</td>
                       <FeesCell pair={p.contract_addr} />

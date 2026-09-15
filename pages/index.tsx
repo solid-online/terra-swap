@@ -10,13 +10,14 @@
 import Head from 'next/head'
 import Link from 'next/link'
 import type { GetServerSideProps } from 'next'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import useMyAddress from 'components/hooks/useMyAddress'
 import WalletButton from 'components/WalletButton'
 import { WalletName } from 'components/WalletName'
 import ElectricPulse from 'components/ElectricPulse'
 import LstBoard from 'components/LstBoard'
 import CommandPalette, { type PaletteItem } from 'components/CommandPalette'
+import { PairIcons, TokenIcon } from 'components/TokenIcon'
 import { isPredictLive } from 'lib/predict'
 import { SPACE, RADIUS, TEXT } from 'components/tokens'
 import { isCrystalHolder } from 'lib/holders'
@@ -45,7 +46,7 @@ import { useRouteSwap, useTradeSwap, useProvideLiquidity, useExitPosition, useUn
 import { useChain } from '@cosmos-kit/react'
 import { fromBech32 } from '@cosmjs/encoding'
 import type { EncodeObject } from '@cosmjs/proto-signing'
-import { arrivalSwapMsg, ibcTransferMsg, tradeMsgs } from 'lib/msgs'
+import { arrivalSwapMsg, ibcTransferMsg, routeMsgs, tradeMsgs } from 'lib/msgs'
 import { NOBLE_CHAIN_ID, NOBLE_TO_TERRA_CHANNEL, NOBLE_USDC_DENOM, TERRA_CHAIN_ID, TERRA_TO_NOBLE_CHANNEL, nobleUsdcBalance } from 'lib/noble'
 import { HUB_ATOM_DENOM, HUB_CHAIN_ID, HUB_TO_TERRA_CHANNEL, TERRA_TO_HUB_CHANNEL, hubAtomBalance } from 'lib/cosmoshub'
 import { estimateFee } from 'lib/gas'
@@ -54,15 +55,18 @@ import { hubForToken, hubInfo, type HubInfo } from 'lib/lst'
 import { lcdFetch } from 'lib/lcd'
 import { TOKEN_META, tokenScore } from 'lib/tokenMeta'
 import { humanizeTxError } from 'lib/errors'
+import { recentMovePct, suggestSlippage, type SlipAdvice } from 'lib/slippage'
+import { SWEEP_KEEP_LUNA_MICRO, SWEEP_MAX, planSweep, poolsFor, type SweepLine, type SweepPick } from 'lib/sweep'
+import { GAS_DROP_BELOW_MICRO, LUNA, gasDropMicro, planGasDrop } from 'lib/gasDrop'
 
-type Tab = 'swap' | 'pools' | 'positions' | 'history' | 'transfer' | 'create' | 'board'
+type Tab = 'swap' | 'pools' | 'positions' | 'wallet' | 'history' | 'transfer' | 'create' | 'board'
 
 /**
  * Each section has an address (?tab=bridge, ?tab=portfolio…), so any of them can be linked to and survives
  * a reload. Named for what people call them; the keys inside stay as they were. Swap is the page itself.
  */
-const TAB_PARAM: Record<Tab, string> = { swap: '', pools: 'pools', positions: 'portfolio', history: 'history', transfer: 'bridge', create: 'open-pool', board: 'board' }
-const PARAM_TAB: Record<string, Tab> = { pools: 'pools', portfolio: 'positions', positions: 'positions', history: 'history', bridge: 'transfer', transfer: 'transfer', 'open-pool': 'create', create: 'create', board: 'board' }
+const TAB_PARAM: Record<Tab, string> = { swap: '', pools: 'pools', positions: 'portfolio', wallet: 'wallet', history: 'history', transfer: 'bridge', create: 'open-pool', board: 'board' }
+const PARAM_TAB: Record<string, Tab> = { pools: 'pools', portfolio: 'positions', positions: 'positions', wallet: 'wallet', history: 'history', bridge: 'transfer', transfer: 'transfer', 'open-pool': 'create', create: 'create', board: 'board' }
 
 // The classic Terra brand face is Gotham (terra.money served "Gotham A/B"
 // from Hoefler & Co's cloud.typography in 2020–21; the wordmark is Gotham
@@ -154,49 +158,8 @@ const field: React.CSSProperties = {
 }
 const select: React.CSSProperties = { ...field, cursor: 'pointer', fontSize: TEXT.sm.size, width: 'auto', minWidth: 120 }
 
-// ─── Token symbols ──────────────────────────────────────────────
-// Self-hosted so the CSP never has to trust a third-party image host, and so a
-// visitor's browser never asks one. LUNA is terra-money/assets; USDC, wBTC,
-// PAXG, ROAR, ampLUNA, arbLUNA, EURe, USDT, ATOM and both ASTROs come from the
-// Cosmos chain registry; SOLID and CAPA are our own marks, cropped square.
-const TOKEN_ICONS: Record<string, string> = {
-  LUNA: '/img/tokens/luna.svg', USDC: '/img/tokens/usdc.svg', SOLID: '/img/tokens/solid.svg', CAPA: '/img/tokens/capa.svg',
-  ROAR: '/img/tokens/roar.png', 'wBTC.atom': '/img/tokens/wbtc.svg', PAXG: '/img/tokens/paxg.svg',
-  // Same issuer, same mark. The label is what tells it apart from Noble USDC.
-  'USDC.inj': '/img/tokens/usdc.svg',
-  ampLUNA: '/img/tokens/ampluna.svg', arbLUNA: '/img/tokens/arbluna.svg', EURe: '/img/tokens/eure.svg',
-  USDT: '/img/tokens/usdt.svg', ATOM: '/img/tokens/atom.svg',
-  // Two ASTROs on Terra: the original cw20 and the IBC one from Neutron that Astroport pays in now.
-  'ASTRO.cw20': '/img/tokens/astro-cw20.svg', ASTRO: '/img/tokens/astro.png',
-  bLUNA: '/img/tokens/bluna.png', ampROAR: '/img/tokens/amproar.png', stLUNA: '/img/tokens/stluna.svg',
-  stATOM: '/img/tokens/statom.svg', dATOM: '/img/tokens/datom.svg', INJ: '/img/tokens/inj.svg', FUEL: '/img/tokens/fuel.png',
-  'USDT.axl': '/img/tokens/usdt.svg',
-  // LunaX and VKR have no mark in the chain registry; they get the lettered coin.
-}
+// Token marks live in components/TokenIcon, shared with the token and pool pages.
 
-function TokenIcon({ label, size = 20, style }: { label: string; size?: number; style?: React.CSSProperties }) {
-  const src = TOKEN_ICONS[label]
-  const base: React.CSSProperties = { width: size, height: size, borderRadius: '50%', flex: 'none', ...style }
-  if (!src) {
-    // A token we have no mark for (someone's own pool): a lettered coin, never a broken image.
-    return (
-      <span aria-hidden style={{ ...base, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: C.surfaceElev, border: `1px solid ${C.divider}`, color: C.textMuted, fontSize: size * 0.5, fontWeight: 700, lineHeight: 1 }}>
-        {label.slice(0, 1).toUpperCase()}
-      </span>
-    )
-  }
-  return <img src={src} alt='' aria-hidden width={size} height={size} draggable={false} style={base} />
-}
-
-/** Two coins, the second tucked behind the first — the pair at a glance. */
-function PairIcons({ a, b, size = 22 }: { a: string; b: string; size?: number }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', flex: 'none', marginRight: 9 }}>
-      <TokenIcon label={a} size={size} style={{ position: 'relative', zIndex: 1, boxShadow: `0 0 0 2px ${C.surface}` }} />
-      <TokenIcon label={b} size={size} style={{ marginLeft: -size * 0.32 }} />
-    </span>
-  )
-}
 
 /** A native <select> (works everywhere, including iOS) with the chosen token's mark laid over its left edge. */
 type TokenOption = { key: string; label: string; info: Parameters<typeof assetId>[0]; decimals?: number; cw20?: boolean }
@@ -1324,6 +1287,59 @@ function PriceChart({ pool, from, to, compact }: { pool: PoolView; from: KnownTo
   )
 }
 
+/** How much a pool has moved over its last trades (lib/slippage recentMovePct), read at most once a minute per pool. */
+const moveCache = new Map<string, { at: number; pct: Promise<number> }>()
+function poolMovePct(pair: string): Promise<number> {
+  const hit = moveCache.get(pair)
+  if (hit && Date.now() - hit.at < 60_000) return hit.pct
+  const pct = fetch(`/api/dex-prices?pair=${pair}`)
+    .then(r => (r.ok ? r.json() : null))
+    .then((j: PricesResponse | null) => recentMovePct(j?.points ?? []))
+    .catch(() => 0)
+  moveCache.set(pair, { at: Date.now(), pct })
+  return pct
+}
+
+/**
+ * The route drawn: for each part of the trade, the tokens it passes through
+ * and the site whose pool each hop uses, with what that hop returns at the
+ * quote. A split shows both paths with their share of the amount. Hovering a
+ * hop names the pool, its fee and its liquidity.
+ */
+function RouteMap({ parts }: { parts: TradePlan['parts'] }) {
+  const first = Math.round(parts[0].share * 100)
+  return (
+    <div style={{ display: 'grid', gap: 6, padding: '2px 0 6px' }}>
+      <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>{parts.length > 1 ? 'Split over two paths that share no pool' : 'Route'}</div>
+      {parts.map((part, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4, fontSize: TEXT.xs.size }}>
+          {parts.length > 1 && <span style={{ color: C.goldLit, fontWeight: 700, minWidth: 34 }}>{i === 0 ? first : 100 - first}%</span>}
+          <RouteToken t={part.quote.legs[0].offer} micro={part.quote.legs[0].offerMicro} />
+          {part.quote.legs.map((l, k) => (
+            <Fragment key={k}>
+              <span title={`${l.pool.label} · ${poolFeeTextFor(l.pool)}${l.pool.tvlUsd != null ? ` · $${Math.round(l.pool.tvlUsd).toLocaleString('en-US')} liquidity` : ''}`}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: C.textWhisper, cursor: 'help' }}>
+                <span aria-hidden>→</span>
+                <span style={{ fontSize: '0.56rem', letterSpacing: '0.08em', textTransform: 'uppercase', border: `1px solid ${C.divider}`, borderRadius: 6, padding: '1px 5px', color: C.textMuted, whiteSpace: 'nowrap' }}>{VENUE_NAME[l.pool.venue]}</span>
+                <span aria-hidden>→</span>
+              </span>
+              <RouteToken t={l.ask} micro={l.returnMicro} />
+            </Fragment>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function RouteToken({ t, micro }: { t: KnownToken; micro: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(255,255,255,0.03)', border: `1px solid ${C.divider}`, borderRadius: 999, padding: '2px 8px 2px 3px', color: C.textSecondary, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+      <TokenIcon label={t.label} size={16} />{fmtAmount(Number(micro) / 10 ** t.decimals)} {t.label}
+    </span>
+  )
+}
+
 // ─── Swap tab ───────────────────────────────────────────────────
 
 /** A pair and a size handed to the swap panel from somewhere else on the page. */
@@ -1349,7 +1365,8 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
   const [fromId, setFromId] = useState('')
   const [toId, setToId] = useState('')
   const [amount, setAmount] = useState('')
-  const [slippage, setSlippage] = useState('1')
+  const [slippage, setSlippage] = useState('auto')
+  const [advice, setAdvice] = useState<SlipAdvice | null>(null)
   const [balance, setBalance] = useState('0')
   const [err, setErr] = useState<string | null>(null)
   const [txHash, setTxHash] = useState<string | null>(null)
@@ -1437,7 +1454,9 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
 
   const micro = from ? toMicro(amount, from.decimals) : null
   const debounced = useDebounced(micro, 350)
-  const slip = Math.min(0.5, Math.max(0.001, Number(slippage) / 100 || 0.01))
+  // Auto follows the route (lib/slippage, advice below); a number picked by hand is used as it is.
+  const slipPct = slippage === 'auto' ? advice?.pct ?? 1 : Number(slippage)
+  const slip = Math.min(0.5, Math.max(0.001, slipPct / 100 || 0.01))
   // Quote every path on both sites, and a split over two paths when that pays.
   // A background refresh of the pools re-quotes quietly; only a new pair or
   // amount clears the number shown.
@@ -1481,6 +1500,24 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
     return () => { alive = false; clearTimeout(timer) }
   }, [feeKey, me, slip])
 
+  // Auto slippage reads how the route's pools have been moving and how deep they are. The last advice stays until a new route is priced.
+  const routeKey = trade ? Array.from(new Set(trade.parts.flatMap(p => p.quote.legs.map(l => l.pool.contract_addr)))).join(',') : ''
+  useEffect(() => {
+    const t = tradeRef.current
+    if (!routeKey || !t) return
+    let alive = true
+    const used = new Map<string, PoolView>()
+    for (const p of t.parts) for (const l of p.quote.legs) used.set(l.pool.contract_addr, l.pool)
+    const route = Array.from(used.values())
+    const advise = (moves: number[]) => { if (alive) setAdvice(suggestSlippage({ pools: route.map((p, i) => ({ label: p.label, tvlUsd: p.tvlUsd, movePct: moves[i] })), separateLegs: perLeg })) }
+    // A busy pool's trade history can take several seconds to read. Advise from depth and route length first, then again once the moves are in.
+    const soon = (p: Promise<number>) => Promise.race([p, new Promise<number>(r => setTimeout(() => r(0), 1500))])
+    const moves = route.map(p => poolMovePct(p.contract_addr))
+    Promise.all(moves.map(soon)).then(advise).catch(() => {})
+    Promise.all(moves).then(advise).catch(() => {})
+    return () => { alive = false }
+  }, [routeKey, perLeg])
+
   /** A link that opens this swap filled in, and unfurls as it in chats (getServerSideProps, /api/og/swap). */
   const share = () => {
     if (!from || !to) return
@@ -1506,6 +1543,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
       if (e.key === '/' && !typing) { e.preventDefault(); amountRef.current?.focus() }
       if (typing) return
       if (e.key === 'f' || e.key === 'F') deferKey(flip)
+      if (e.key === '0') setSlippage('auto')
       if (e.key === '1') setSlippage('0.5')
       if (e.key === '2') setSlippage('1')
       if (e.key === '3') setSlippage('3')
@@ -1689,7 +1727,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
 
       {route && trade && from && to && (
         <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: 'rgba(0,0,0,0.22)', borderRadius: 10, marginBottom: SPACE['3'] }}>
-          <Row k={trade.parts.length > 1 ? 'Split' : 'Route'} v={tradeText(trade.parts)} />
+          <RouteMap parts={trade.parts} />
           {trade.parts.length > 1 && (() => {
             // What splitting is worth, against the best single path.
             const gain = (Number(trade.expectedOut) / Math.max(1, Number(planRoute(route, slip).expectedOut)) - 1) * 100
@@ -1713,7 +1751,7 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
             return <Row k={list.length > 1 ? 'Pool fees' : 'Pool fee'} v={Array.from(new Set(list.map(poolFeeTextFor))).join(' · ')} />
           })()}
           {feeBps > 0 && <Row k='Protocol fee' v={crystal ? '0 · Crystal' : `${fromMicro(fee, from.decimals)} ${from.label}`} hi={crystal} />}
-          <Row k={`Min. received (${slippage}% ${perLeg ? 'per leg' : 'slippage'})`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
+          <Row k={`Min. received (${slipPct}% ${perLeg ? 'per leg' : 'slippage'}${slippage === 'auto' ? ', auto' : ''})`} v={`${fromMicro(minOut, to.decimals)} ${to.label}`} />
           {netFee && <Row k='Network fee' v={`≈ ${fromMicro(netFee, 6, 4)} LUNA`} />}
           {(trade.parts.length > 1 || route.legs.length > 1) && (
             <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>
@@ -1732,8 +1770,13 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
 
       {from && to && <HubAlternative from={from} to={to} micro={micro} swapOut={trade?.expectedOut ?? null} blocked={insufficient} onDone={onDone} />}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], marginBottom: SPACE['3'], fontSize: TEXT.xs.size, color: C.textMuted }}>
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: SPACE['2'], marginBottom: SPACE['3'], fontSize: TEXT.xs.size, color: C.textMuted }}>
         <span>Slippage</span>
+        <button type='button' onClick={() => setSlippage('auto')}
+          title={advice ? (advice.reasons.length ? `Auto: ${advice.reasons.join(' · ')}` : 'Auto: the pools on this route are deep and have been quiet') : "Auto: set from how the route's pools have been moving"}
+          style={{ ...ghostBtn, padding: '2px 8px', color: slippage === 'auto' ? C.goldLit : C.textMuted, borderColor: slippage === 'auto' ? C.goldCore : C.divider }}>
+          Auto{advice ? ` ${advice.pct}%` : ''}
+        </button>
         {['0.5', '1', '3'].map(s => (
           <button key={s} type='button' style={{ ...ghostBtn, padding: '2px 8px', color: slippage === s ? C.goldLit : C.textMuted, borderColor: slippage === s ? C.goldCore : C.divider }} onClick={() => setSlippage(s)}>{s}%</button>
         ))}
@@ -1746,9 +1789,14 @@ function SwapPanel({ pools, venuePools, crystal, feeBps, poolFeeBps, onDone, arb
         )}
 </div>
       <div className='terra-kbd' style={{ fontSize: '0.6rem', letterSpacing: '0.06em', color: C.textWhisper, margin: `-2px 0 ${SPACE['2']}px`, fontFamily: TERRA_FONT }}>
-        ⌨ <b style={{ color: C.textMuted }}>/</b> amount · <b style={{ color: C.textMuted }}>f</b> flip · <b style={{ color: C.textMuted }}>1 2 3</b> slippage
+        ⌨ <b style={{ color: C.textMuted }}>/</b> amount · <b style={{ color: C.textMuted }}>f</b> flip · <b style={{ color: C.textMuted }}>0</b> auto · <b style={{ color: C.textMuted }}>1 2 3</b> slippage
       </div>
 
+      {slippage !== 'auto' && advice && trade && Number(slippage) < advice.pct && (
+        <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'], lineHeight: 1.5 }}>
+          {slippage}% is tighter than this route has been moving{advice.reasons[0] ? ` (${advice.reasons[0]})` : ''}, so the swap may fail. Auto would use {advice.pct}%.
+        </div>
+      )}
       {impact > 5 && <div style={{ fontSize: TEXT.xs.size, color: C.emberLit, marginBottom: SPACE['2'] }}>High price impact: even the best path is thin for this size. Trade smaller.</div>}
       {insufficient && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{LITE ? 'Not enough balance.' : 'Not enough minerals.'} ({from?.label})</div>}
       {moved && to && (
@@ -1979,6 +2027,9 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
   const plain = tokenId === net.terraDenom
   const micro = toMicro(amount, dir === 'in' ? base.decimals : token.decimals)
   const debounced = useDebounced(micro, 400)
+  const gas = useGasDrop({ me, incoming: dir === 'in', from: base, target: token, amountMicro: debounced, pools, refresh: status?.done })
+  /** What the main transfer carries once about one LUNA's worth is set aside for fees. */
+  const mainDebounced = gas.main(debounced)
   const srcAddr = source.address ?? ''
   const isSourceAddress = (a: string) => { try { const { prefix, data } = fromBech32(a); return prefix === net.prefix && data.length === 20 } catch { return false } }
   const destination = dir === 'out' ? (sendTo.trim() || srcAddr) : ''
@@ -1995,16 +2046,16 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
   useEffect(() => {
     let alive = true
     setQuote(null); setQuoteErr(null)
-    if (!debounced || debounced === '0') return
+    if (!mainDebounced || mainDebounced === '0') return
     if (plain) {
-      setQuote({ out: debounced, secs: 30, path: dir === 'in' ? `IBC transfer from ${net.name} to Terra` : `IBC transfer from Terra to ${net.name}` })
+      setQuote({ out: mainDebounced, secs: 30, path: dir === 'in' ? `IBC transfer from ${net.name} to Terra` : `IBC transfer from Terra to ${net.name}` })
       return
     }
     if (dir === 'in') {
       // One path and no split: the swap on arrival is a single call to the router, run inside the relayer's
       // transaction. Kept to two pools: on 2026-09-14 a two-pool call simulated at 1.02 to 1.10M gas, and the
       // relayer delivering Skip's hooked packets from Noble spent 1.09M of 2.18M the same day.
-      quoteBest(pools, base, token, debounced, HOME_VENUE, { slip: SLIP, threeHop: false }).then(q => {
+      quoteBest(pools, base, token, mainDebounced, HOME_VENUE, { slip: SLIP, threeHop: false }).then(q => {
         if (!alive) return
         const plan = q.best ? routerPlan(q.best, SLIP) : null
         if (!q.best || !plan) { setQuoteErr(`No route from ${net.label} to ${token.label} through up to two pools right now. Bring ${net.label} to Terra and swap it here.`); return }
@@ -2015,7 +2066,7 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
         })
       }).catch(() => { if (alive) setQuoteErr('Could not price that right now.') })
     } else {
-      quoteBest(pools, token, base, debounced, HOME_VENUE, { slip: SLIP, split: true }).then(q => {
+      quoteBest(pools, token, base, mainDebounced, HOME_VENUE, { slip: SLIP, split: true }).then(q => {
         if (!alive) return
         if (!q.best) { setQuoteErr(`No route from ${token.label} to ${net.label} right now.`); return }
         const trade = planTrade(q.split ?? [{ quote: q.best, share: 1 }], SLIP)
@@ -2026,7 +2077,7 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
       }).catch(() => { if (alive) setQuoteErr('Could not price that right now.') })
     }
     return () => { alive = false }
-  }, [dir, tokenId, token, plain, debounced, pools, base, net])
+  }, [dir, tokenId, token, plain, mainDebounced, pools, base, net])
 
   const go = async () => {
     setErr(null); setStatus(null)
@@ -2036,15 +2087,23 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
       if (dir === 'in') {
         if (!me) throw new Error('Connect your wallet first')
         if (!srcAddr) throw new Error(`Connect your wallet on ${net.name} first`)
-        const msgs: EncodeObject[] = plain
-          ? [ibcTransferMsg({ sender: srcAddr, receiver: me, channel: net.toTerra, denom: net.sourceDenom, amount: micro })]
-          : [arrivalSwapMsg({ sender: srcAddr, terraAddress: me, channel: net.toTerra, sourceDenom: net.sourceDenom, terraDenom: net.terraDenom, amount: micro, plan: quote.plan! })]
+        // With the fee drop, the main transfer carries the rest and the drop goes as its own transfer, swapped into LUNA on arrival.
+        const send = gas.ready ? gas.main(micro) ?? micro : micro
+        const drop = gas.ready && gas.plan && gas.micro
+          ? [arrivalSwapMsg({ sender: srcAddr, terraAddress: me, channel: net.toTerra, sourceDenom: net.sourceDenom, terraDenom: net.terraDenom, amount: gas.micro, plan: gas.plan })]
+          : []
+        const msgs: EncodeObject[] = [
+          plain
+            ? ibcTransferMsg({ sender: srcAddr, receiver: me, channel: net.toTerra, denom: net.sourceDenom, amount: send })
+            : arrivalSwapMsg({ sender: srcAddr, terraAddress: me, channel: net.toTerra, sourceDenom: net.sourceDenom, terraDenom: net.terraDenom, amount: send, plan: quote.plan! }),
+          ...drop,
+        ]
         const [before, srcBefore] = await Promise.all([queryBalance(me, token.info), net.balance(srcAddr)])
-        const res = await sourceMsgs.mutateAsync({ msgs, memo: plain ? `${net.label} to Terra` : `${net.label} to Terra as ${token.label}` }) as { transactionHash?: string }
+        const res = await sourceMsgs.mutateAsync({ msgs, memo: `${plain ? `${net.label} to Terra` : `${net.label} to Terra as ${token.label}`}${drop.length ? ', and LUNA for fees' : ''}` }) as { transactionHash?: string }
         const hash = res?.transactionHash ?? ''
         setStatus({ tx: hash, chain: net.chainId, text: `Sent on ${net.name}. Arriving on Terra as ${token.label}…` })
         if (hash) followIbc(before, () => queryBalance(me, token.info), setStatus, {
-          check: cameBack(() => net.balance(srcAddr), srcBefore, micro),
+          check: cameBack(() => net.balance(srcAddr), srcBefore, send),
           text: plain
             ? `It was not delivered, and the ${net.label} is back on ${net.name}.`
             : `The swap into ${token.label} could not deliver its minimum, so the transfer failed and the ${net.label} is back on ${net.name}. Nothing was swapped.`,
@@ -2078,7 +2137,7 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
   const fromBal = dir === 'in' ? srcBal : terraBal
   const fromDecimals = dir === 'in' ? base.decimals : token.decimals
   const insufficient = !!micro && BigInt(micro) > BigInt(fromBal || '0')
-  const canGo = !!me && !!quote && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!srcAddr : !!destination && isSourceAddress(destination))
+  const canGo = !!me && !!quote && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!srcAddr && (!gas.active || gas.ready) : !!destination && isSourceAddress(destination))
   const turn = (d: 'in' | 'out') => { setDir(d); setAmount(''); setStatus(null); setErr(null) }
   const terraIcon = <img src='/img/terra-globe.svg' alt='' width={46} height={46} />
 
@@ -2150,6 +2209,7 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
                 <Row k='How' v={quote.path} />
                 <Row k='Time' v={`about ${quote.secs < 90 ? `${quote.secs} seconds` : `${Math.round(quote.secs / 60)} minutes`}`} />
                 {quote.note && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>{quote.note}</div>}
+                {dir === 'in' && <GasDropRow gas={gas} from={base} sourceName={net.name} />}
               </>
             )}
         </div>
@@ -2179,6 +2239,65 @@ function CosmosTransfer({ net, routePools, onDone, switcher }: { net: SourceChai
 }
 
 type TransferStatus = { tx: string; chain: string; text: string; done?: boolean; failed?: boolean }
+
+/**
+ * About one LUNA for network fees, set aside from a transfer in while the
+ * Terra wallet holds almost none (lib/gasDrop). Gives the part to set aside,
+ * its router plan once priced, and what the main transfer carries.
+ */
+function useGasDrop(a: { me: string; incoming: boolean; from: KnownToken; target: KnownToken; amountMicro: string | null; pools: PoolView[]; refresh?: unknown }) {
+  const { px } = useTokenData()
+  const [terraLuna, setTerraLuna] = useState<string | null>(null)
+  const [on, setOn] = useState(true)
+  const [priced, setPriced] = useState<{ micro: string; plan: RoutePlan } | null>(null)
+  const [failed, setFailed] = useState<string | null>(null)
+  useEffect(() => {
+    if (!a.me) { setTerraLuna(null); return }
+    queryBalance(a.me, LUNA.info).then(setTerraLuna).catch(() => {})
+  }, [a.me, a.refresh])
+  const wanted = a.incoming && terraLuna != null && BigInt(terraLuna || '0') < GAS_DROP_BELOW_MICRO && !sameAsset(a.target.info, LUNA.info)
+  const micro = wanted ? gasDropMicro({ from: a.from, amountMicro: a.amountMicro, fromUsd: px?.[assetId(a.from.info)], lunaUsd: px?.uluna }) : null
+  const { pools, from } = a
+  useEffect(() => {
+    if (!micro) return
+    let alive = true
+    planGasDrop(pools, from, micro, 0.03)
+      .then(plan => { if (!alive) return; if (plan) setPriced({ micro, plan }); else setFailed(micro) })
+      .catch(() => { if (alive) setFailed(micro) })
+    return () => { alive = false }
+  }, [micro, pools, from])
+  const active = on && !!micro && failed !== micro
+  const ready = active && priced?.micro === micro
+  return {
+    micro, on, setOn, active, ready,
+    failed: !!micro && failed === micro,
+    plan: ready && priced ? priced.plan : null,
+    /** what the main transfer carries out of `amount` */
+    main: (amount: string | null) => (active && micro && amount && BigInt(amount) > BigInt(micro) ? (BigInt(amount) - BigInt(micro)).toString() : amount),
+  }
+}
+
+function GasDropRow({ gas, from, sourceName }: { gas: ReturnType<typeof useGasDrop>; from: KnownToken; sourceName: string }) {
+  if (!gas.micro) return null
+  return (
+    <>
+      <div style={{ ...rowStyle, alignItems: 'center', paddingTop: 4 }}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+          <input type='checkbox' checked={gas.on} onChange={e => gas.setOn(e.target.checked)} style={{ accentColor: C.goldLit }} />
+          <span>Also about 1 LUNA for network fees</span>
+        </label>
+        <span style={{ color: C.textSecondary, fontVariantNumeric: 'tabular-nums' }}>
+          {!gas.on ? 'off' : gas.failed ? 'no route right now' : gas.plan ? `≈ ${fromMicro(gas.plan.expectedOut, 6, 2)} LUNA for ${fromMicro(gas.micro, from.decimals, 4)} ${from.label}` : 'pricing…'}
+        </span>
+      </div>
+      {gas.on && !gas.failed && (
+        <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>
+          Your Terra wallet has almost no LUNA, and every transaction on Terra pays its fee in LUNA. This part travels as its own transfer in the same signature and is swapped into LUNA on arrival; if that swap cannot deliver its minimum, {sourceName} returns this part and the rest still arrives.
+        </div>
+      )}
+    </>
+  )
+}
 
 /**
  * Whether an IBC transfer came back, read from the balance it left: once the
@@ -2273,19 +2392,21 @@ function InjectiveTransfer({ routePools, onDone, switcher }: { routePools: PoolV
   const target = arriveOptions.find(t => assetId(t.info) === targetId) ?? token
   const plain = dir === 'out' || targetId === USDC_INJ_DENOM
   const debounced = useDebounced(micro, 400)
+  const gas = useGasDrop({ me, incoming: dir === 'in', from: token, target, amountMicro: debounced, pools, refresh: status?.done })
+  const mainDebounced = gas.main(debounced)
   useEffect(() => {
     let alive = true
     setQuote(null); setQuoteErr(null)
-    if (plain || !debounced || debounced === '0') return
+    if (plain || !mainDebounced || mainDebounced === '0') return
     // One path through up to two pools, for the same reason as from Noble: it runs inside the relayer's transaction.
-    quoteBest(pools, token, target, debounced, HOME_VENUE, { slip: SLIP, threeHop: false }).then(q => {
+    quoteBest(pools, token, target, mainDebounced, HOME_VENUE, { slip: SLIP, threeHop: false }).then(q => {
       if (!alive) return
       const plan = q.best ? routerPlan(q.best, SLIP) : null
       if (!q.best || !plan) { setQuoteErr(`No route from USDC.inj to ${target.label} through up to two pools right now. Bring USDC.inj to Terra and swap it here.`); return }
       setQuote({ plan, path: `IBC transfer to Terra, swapped on arrival by Terra Swap's router: ${routeText(q.best)}` })
     }).catch(() => { if (alive) setQuoteErr('Could not price that right now.') })
     return () => { alive = false }
-  }, [plain, debounced, pools, token, target])
+  }, [plain, mainDebounced, pools, token, target])
 
   useEffect(() => {
     if (!injAddr) { setInjBal('0'); setInjGas(null); return }
@@ -2310,15 +2431,22 @@ function InjectiveTransfer({ routePools, onDone, switcher }: { routePools: PoolV
         if (!injAddr) throw new Error('Connect your wallet on Injective first')
         if (!plain && !quote) throw new Error('Wait for the price, then try again')
         const [before, injBefore] = await Promise.all([queryBalance(me, target.info), injectiveBalance(injAddr, USDC_INJ_ON_INJECTIVE)])
+        const send = gas.ready ? gas.main(micro) ?? micro : micro
+        const drop = gas.ready && gas.plan && gas.micro
+          ? [arrivalSwapMsg({ sender: injAddr, terraAddress: me, channel: INJECTIVE_TO_TERRA_CHANNEL, sourceDenom: USDC_INJ_ON_INJECTIVE, terraDenom: USDC_INJ_DENOM, amount: gas.micro, plan: gas.plan })]
+          : []
         const hash = await injectiveMsgs.mutateAsync({
-          msgs: [plain
-            ? ibcTransferMsg({ sender: injAddr, receiver: me, channel: INJECTIVE_TO_TERRA_CHANNEL, denom: USDC_INJ_ON_INJECTIVE, amount: micro })
-            : arrivalSwapMsg({ sender: injAddr, terraAddress: me, channel: INJECTIVE_TO_TERRA_CHANNEL, sourceDenom: USDC_INJ_ON_INJECTIVE, terraDenom: USDC_INJ_DENOM, amount: micro, plan: quote!.plan })],
-          memo: plain ? 'USDC.inj to Terra' : `USDC.inj to Terra as ${target.label}`,
+          msgs: [
+            plain
+              ? ibcTransferMsg({ sender: injAddr, receiver: me, channel: INJECTIVE_TO_TERRA_CHANNEL, denom: USDC_INJ_ON_INJECTIVE, amount: send })
+              : arrivalSwapMsg({ sender: injAddr, terraAddress: me, channel: INJECTIVE_TO_TERRA_CHANNEL, sourceDenom: USDC_INJ_ON_INJECTIVE, terraDenom: USDC_INJ_DENOM, amount: send, plan: quote!.plan }),
+            ...drop,
+          ],
+          memo: `${plain ? 'USDC.inj to Terra' : `USDC.inj to Terra as ${target.label}`}${drop.length ? ', and LUNA for fees' : ''}`,
         })
         setStatus({ tx: hash, chain: INJECTIVE_CHAIN_ID, text: `Sent on Injective. Arriving on Terra as ${target.label}…` })
         if (hash) followIbc(before, () => queryBalance(me, target.info), setStatus, plain ? undefined : {
-          check: cameBack(() => injectiveBalance(injAddr, USDC_INJ_ON_INJECTIVE), injBefore, micro),
+          check: cameBack(() => injectiveBalance(injAddr, USDC_INJ_ON_INJECTIVE), injBefore, send),
           text: `The swap into ${target.label} could not deliver its minimum, so the transfer failed and the USDC.inj is back on Injective. Nothing was swapped.`,
         })
       } else {
@@ -2343,7 +2471,7 @@ function InjectiveTransfer({ routePools, onDone, switcher }: { routePools: PoolV
   const insufficient = !!micro && BigInt(micro) > BigInt(fromBal || '0')
   const noGas = dir === 'in' && !!injAddr && injGas === '0'
   const needInjective = dir === 'in' || !typed
-  const canGo = !!me && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!injAddr && !noGas && (plain || (!!quote && quote.plan.legs[0]?.offerAmount === micro)) : !!destination)
+  const canGo = !!me && !!micro && micro !== '0' && !insufficient && !busy && (dir === 'in' ? !!injAddr && !noGas && (!gas.active || gas.ready) && (plain || (!!quote && quote.plan.legs[0]?.offerAmount === (gas.ready ? gas.main(micro) : micro))) : !!destination)
   const injIcon = <TokenIcon label='INJ' size={40} />
   const terraIcon = <img src='/img/terra-globe.svg' alt='' width={46} height={46} />
 
@@ -2410,7 +2538,7 @@ function InjectiveTransfer({ routePools, onDone, switcher }: { routePools: PoolV
         <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: 'rgba(0,0,0,0.22)', borderRadius: 10, marginBottom: SPACE['3'] }}>
           {plain
             ? <>
-                <Row k={dir === 'in' ? 'You receive on Terra' : 'You receive on Injective'} v={`${fromMicro(micro, 6, 6)} USDC.inj`} hi />
+                <Row k={dir === 'in' ? 'You receive on Terra' : 'You receive on Injective'} v={`${fromMicro(dir === 'in' && gas.ready ? gas.main(micro) ?? micro : micro, 6, 6)} USDC.inj`} hi />
                 <Row k='How' v={dir === 'in' ? 'IBC transfer from Injective to Terra' : 'IBC transfer from Terra to Injective'} />
               </>
             : quoteErr
@@ -2422,6 +2550,7 @@ function InjectiveTransfer({ routePools, onDone, switcher }: { routePools: PoolV
                     <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>At least {fromMicro(quote.plan.minOut, target.decimals, 6)} {target.label} arrives, or the swap does not happen and Injective returns the USDC.inj to you.</div>
                   </>
                 : <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Pricing the swap on arrival…</div>}
+          {dir === 'in' && <GasDropRow gas={gas} from={token} sourceName='Injective' />}
           <Row k='Time' v={plain ? 'about 30 seconds' : 'about 45 seconds'} />
           <Row k='Network fee' v={dir === 'in' ? 'a little INJ, on Injective' : 'a little LUNA, on Terra'} />
         </div>
@@ -2459,6 +2588,7 @@ function PositionsPanel({ onDone, flows }: { onDone: () => void; flows?: Record<
   const stake = useStakeLp()
   const astroExit = useAstroLegacyExit()
   const withdrawLst = useLstWithdraw()
+  const { px: tokenPx } = useTokenData()
   const day = (s: number | null) => (s ? new Date(s * 1000).toISOString().slice(0, 10) : 'soon')
   const [data, setData] = useState<PositionsResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -2594,7 +2724,7 @@ function PositionsPanel({ onDone, flows }: { onDone: () => void; flows?: Record<
                 {pos.usd != null && <span style={{ marginLeft: 'auto', color: C.goldLit, fontWeight: 700, fontSize: TEXT.sm.size }}>{fmtUsd(pos.usd)}</span>}
               </div>
               <div style={rowStyle}><span>Claim on</span><span style={{ color: C.textSecondary }}>{fmtAmount(pos.amounts[0])} {t0.label} + {fmtAmount(pos.amounts[1])} {t1.label}</span></div>
-              <PutInRow flow={data?.flows?.[`${me}|${key}`] ?? flows?.[`${me}|${key}`]} tokens={pool.tokens} amounts={pos.amounts} />
+              <PutInRow flow={data?.flows?.[`${me}|${key}`] ?? flows?.[`${me}|${key}`]} tokens={pool.tokens} amounts={pos.amounts} usd={pos.usd} px={tokenPx} />
               <div style={rowStyle}>
                 <span>LP</span>
                 <span style={{ color: C.textSecondary }}>{fromMicro(pos.walletLp, 6)} in wallet{staked ? ` · ${fromMicro(pos.stakedLp, 6)} staked in Astroport Incentives` : ''}</span>
@@ -2632,6 +2762,201 @@ function PositionsPanel({ onDone, flows }: { onDone: () => void; flows?: Record<
       </div>
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginTop: SPACE['2'] }}>{err}</div>}
       {ok && <div style={{ fontSize: TEXT.xs.size, color: C.success, marginTop: SPACE['2'] }}>✓ {ok}</div>}
+    </Card>
+  )
+}
+
+// ─── Wallet: what it holds, and the leftovers sold in one go ────
+
+/**
+ * Every listed token in the connected wallet with its value, and a way to
+ * sell the small leftover balances in one signature (lib/sweep): tick them,
+ * pick USDC or LUNA, sign once. Balances under $10 start ticked. LUNA never
+ * does, and sweeping it always leaves one LUNA behind for fees.
+ */
+function WalletPanel({ pools, onDone }: { pools: PoolView[]; onDone: () => void }) {
+  const me = useMyAddress()
+  const { px } = useTokenData()
+  const send = useTerraMsgs()
+  const [bal, setBal] = useState<Record<string, string> | null>(null)
+  const [reload, setReload] = useState(0)
+  const [targetKey, setTargetKey] = useState<'USDC' | 'LUNA'>('USDC')
+  const [picked, setPicked] = useState<Set<string>>(() => new Set())
+  const [touched, setTouched] = useState(false)
+  const [lines, setLines] = useState<SweepLine[] | null>(null)
+  const [pricing, setPricing] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [ok, setOk] = useState<{ text: string; tx: string } | null>(null)
+  const SLIP = 0.02
+  const tokens = useMemo(() => {
+    const m = new Map<string, KnownToken>()
+    for (const p of pools) for (const t of p.tokens) m.set(assetId(t.info), t)
+    return Array.from(m.values())
+  }, [pools])
+  const target = useMemo(() => KNOWN_TOKENS.find(t => t.key === targetKey) ?? LUNA, [targetKey])
+
+  useEffect(() => {
+    if (!me || tokens.length === 0) { setBal(null); return }
+    let alive = true
+    if (reload) balanceCache.delete(me)
+    walletBalances(me, tokens).then(b => { if (alive) setBal(b) }).catch(() => {})
+    return () => { alive = false }
+  }, [me, tokens, reload])
+
+  const holdings = useMemo(() => {
+    if (!bal) return []
+    return tokens
+      .map(t => {
+        const micro = bal[assetId(t.info)] ?? '0'
+        const p = px?.[assetId(t.info)]
+        return { token: t, micro, usd: p ? (Number(micro) / 10 ** t.decimals) * p : null }
+      })
+      .filter(h => h.micro !== '0')
+      .sort((a, b) => (b.usd ?? -1) - (a.usd ?? -1))
+  }, [bal, tokens, px])
+
+  /** What of a holding a sweep into the target can sell, smallest units, or null. */
+  const sellable = useCallback((h: { token: KnownToken; micro: string }) => {
+    if (sameAsset(h.token.info, target.info) || poolsFor(pools, h.token, target).length === 0) return null
+    const keep = assetId(h.token.info) === 'uluna' ? SWEEP_KEEP_LUNA_MICRO : BigInt(0)
+    const can = BigInt(h.micro) - keep
+    return can > BigInt(0) ? can.toString() : null
+  }, [pools, target])
+
+  // Small balances start ticked, until the person ticks something themselves.
+  useEffect(() => {
+    if (touched) return
+    const next = new Set<string>()
+    for (const h of holdings) {
+      if (next.size >= SWEEP_MAX) break
+      if (h.usd != null && h.usd < 10 && assetId(h.token.info) !== 'uluna' && sellable(h)) next.add(assetId(h.token.info))
+    }
+    setPicked(next)
+  }, [holdings, sellable, touched])
+
+  const picks: SweepPick[] = holdings
+    .filter(h => picked.has(assetId(h.token.info)))
+    .map(h => ({ token: h.token, micro: sellable(h) ?? '0' }))
+    .filter(p => p.micro !== '0')
+  const pickKey = `${targetKey}|${picks.map(p => `${assetId(p.token.info)}:${p.micro}`).join(',')}`
+  const picksRef = useRef(picks)
+  picksRef.current = picks
+  useEffect(() => {
+    setLines(null)
+    const now = picksRef.current
+    if (now.length === 0) { setPricing(false); return }
+    let alive = true
+    setPricing(true)
+    const t = setTimeout(() => {
+      planSweep(pools, now, target, SLIP)
+        .then(l => { if (alive) setLines(l) })
+        .catch(() => {})
+        .finally(() => { if (alive) setPricing(false) })
+    }, 400)
+    return () => { alive = false; clearTimeout(t) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickKey])
+
+  const ready = (lines ?? []).filter((l): l is SweepLine & { plan: RoutePlan } => !!l.plan)
+  const totalOut = ready.reduce((s, l) => s + BigInt(l.plan.expectedOut), BigInt(0))
+  const totalMin = ready.reduce((s, l) => s + BigInt(l.plan.minOut), BigInt(0))
+  const canGo = !!me && ready.length > 0 && !busy && !pricing
+
+  const toggle = (id: string, on: boolean) => {
+    setTouched(true)
+    setPicked(s => { const n = new Set(s); if (on) n.add(id); else n.delete(id); return n })
+  }
+
+  const go = async () => {
+    if (!canGo) return
+    setErr(null); setOk(null); setBusy(true)
+    try {
+      const msgs = ready.flatMap(l => routeMsgs(me, l.plan, SLIP))
+      const r = await send.mutateAsync({ msgs, memo: `sweep ${ready.length} token${ready.length === 1 ? '' : 's'} into ${target.label}` }) as { transactionHash?: string }
+      setOk({ text: `Sold ${ready.map(l => l.token.label).join(', ')} into ${target.label}.`, tx: r?.transactionHash ?? '' })
+      setTouched(true); setPicked(new Set()); setLines(null)
+      onDone()
+      ;[5000, 11000].forEach(ms => setTimeout(() => setReload(Date.now()), ms))
+    } catch (e) { setErr(humanizeTxError(e)) } finally { setBusy(false) }
+  }
+
+  if (!me) {
+    return (
+      <Card>
+        <Section title='Your wallet' />
+        <p style={{ fontSize: TEXT.sm.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px` }}>
+          Connect a wallet to see every listed token it holds with its value, and to sell small leftover balances into USDC or LUNA in one signature.
+        </p>
+        <div className='terra-connect-cta'><WalletButton /></div>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: SPACE['2'] }}>
+        <Section title='Your wallet' />
+        <button type='button' onClick={() => setReload(Date.now())} style={{ ...ghostBtn, marginLeft: 'auto', padding: '2px 8px' }}>refresh</button>
+      </div>
+      <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `0 0 ${SPACE['3']}px` }}>
+        Every listed token in this wallet, with its value at market prices. Tick the small balances you would rather not keep, pick what they become, and sell them all in one signature, up to {SWEEP_MAX} at a time.
+      </p>
+      {!bal && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>Reading the wallet…</div>}
+      {bal && holdings.length === 0 && <div style={{ fontSize: TEXT.sm.size, color: C.textMuted }}>This wallet holds none of the tokens listed here.</div>}
+      {holdings.length > 0 && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], flexWrap: 'wrap', marginBottom: SPACE['2'], fontSize: TEXT.xs.size, color: C.textMuted }}>
+            <span>Sell the ticked ones into</span>
+            {(['USDC', 'LUNA'] as const).map(k => (
+              <button key={k} type='button' onClick={() => { setTargetKey(k); setTouched(false) }}
+                style={{ ...ghostBtn, padding: '2px 10px', display: 'inline-flex', alignItems: 'center', gap: 6, color: targetKey === k ? C.goldLit : C.textMuted, borderColor: targetKey === k ? C.goldCore : C.divider }}>
+                <TokenIcon label={k} size={14} />{k}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'grid', gap: 4 }}>
+            {holdings.map(h => {
+              const id = assetId(h.token.info)
+              const can = sellable(h)
+              const on = picked.has(id)
+              const line = lines?.find(l => assetId(l.token.info) === id)
+              const why = sameAsset(h.token.info, target.info) ? 'what they become' : id === 'uluna' ? 'one LUNA stays for fees' : `never swapped for ${target.label} here`
+              return (
+                <label key={id} style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], padding: '6px 10px', background: C.surface, borderRadius: 10, border: `1px solid ${on ? C.goldCore : C.divider}`, cursor: can ? 'pointer' : 'default', opacity: can ? 1 : 0.65 }}>
+                  <input type='checkbox' checked={on} disabled={!can || busy || (!on && picked.size >= SWEEP_MAX)} onChange={e => toggle(id, e.target.checked)} style={{ accentColor: C.goldLit }} />
+                  <TokenIcon label={h.token.label} size={20} />
+                  <span style={{ display: 'grid', minWidth: 0 }}>
+                    <b style={{ color: C.textPrimary, fontSize: TEXT.sm.size }}>{h.token.label}</b>
+                    <span style={{ color: C.textMuted, fontSize: TEXT.xs.size, fontVariantNumeric: 'tabular-nums' }}>{fromMicro(h.micro, h.token.decimals, 6)}</span>
+                  </span>
+                  <span style={{ marginLeft: 'auto', textAlign: 'right', fontSize: TEXT.xs.size, color: C.textSecondary, fontVariantNumeric: 'tabular-nums' }}>
+                    {h.usd != null ? fmtUsd(h.usd) : '—'}
+                    {!can && <span style={{ display: 'block', color: C.textWhisper }}>{why}</span>}
+                    {can && on && (line
+                      ? <span style={{ display: 'block', color: line.plan ? C.success : C.emberLit }}>{line.plan ? `→ ${fromMicro(line.plan.expectedOut, target.decimals, 4)} ${target.label}` : line.why}</span>
+                      : pricing ? <span style={{ display: 'block', color: C.textWhisper }}>pricing…</span> : null)}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+          {picks.length > 0 && (
+            <div style={{ padding: `${SPACE['2']}px ${SPACE['3']}px`, background: 'rgba(0,0,0,0.22)', borderRadius: 10, marginTop: SPACE['3'] }}>
+              <Row k='You receive' v={lines ? `${fromMicro(totalOut.toString(), target.decimals, 4)} ${target.label}` : 'pricing…'} hi />
+              {lines && ready.length > 0 && <Row k={`At least (${SLIP * 100}% slippage on each)`} v={`${fromMicro(totalMin.toString(), target.decimals, 4)} ${target.label}`} />}
+              <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5, paddingTop: 2 }}>
+                One transaction, one swap per token, each through its best path on either site with its own minimum. If any of them would arrive short, nothing is sold.
+              </div>
+            </div>
+          )}
+          {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginTop: SPACE['2'] }}>{err}</div>}
+          {ok && <div style={{ fontSize: TEXT.xs.size, color: C.success, marginTop: SPACE['2'] }}>✓ {ok.text}{ok.tx && <> <a href={finderTx(ok.tx)} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>View tx →</a></>}</div>}
+          <button type='button' style={{ ...primaryBtn, marginTop: SPACE['3'], opacity: canGo ? 1 : 0.5 }} disabled={!canGo} onClick={go}>
+            {busy ? 'Confirm in wallet…' : pricing ? 'Pricing…' : ready.length > 0 ? `Sell ${ready.length} into ${target.label}` : picks.length > 0 ? 'Nothing ticked can be sold right now' : 'Tick what to sell'}
+          </button>
+        </>
+      )}
     </Card>
   )
 }
@@ -2898,7 +3223,7 @@ function Spark({ pair }: { pair: string }) {
  * plainly. On the pool cards, and in Positions since the community chat asked
  * for it there too (2026-09-14).
  */
-function PutInRow({ flow, tokens, amounts }: { flow?: LpFlow; tokens: [KnownToken, KnownToken]; amounts: [number, number] }) {
+function PutInRow({ flow, tokens, amounts, usd, px }: { flow?: LpFlow; tokens: [KnownToken, KnownToken]; amounts: [number, number]; usd?: number | null; px?: Record<string, number> | null }) {
   if (!flow) return null
   const [t0, t1] = tokens
   const put = [Number(flow.net[assetId(t0.info)] ?? '0') / 10 ** t0.decimals, Number(flow.net[assetId(t1.info)] ?? '0') / 10 ** t1.decimals]
@@ -2908,14 +3233,30 @@ function PutInRow({ flow, tokens, amounts }: { flow?: LpFlow; tokens: [KnownToke
     <span style={{ color: v >= 0 ? C.success : C.korea }}>{v >= 0 ? '+' : ''}{v.toFixed(1)}%</span>
   )
   const [d0, d1] = [delta(0), delta(1)]
+  // Against holding: the position now beside what the tokens put in would be worth had they stayed in the wallet,
+  // both at today's prices. The difference is the pool's fees and the effect of the two prices moving apart, together.
+  // Only while nothing has been taken out, so "what was put in" means one thing.
+  const p0 = px?.[assetId(t0.info)], p1 = px?.[assetId(t1.info)]
+  const held = flow.withdraws === 0 && p0 && p1 ? Math.max(0, put[0]) * p0 + Math.max(0, put[1]) * p1 : null
+  const vs = held && held > 0 && usd != null ? (usd / held - 1) * 100 : null
   return (
-    <div style={{ ...rowStyle, marginTop: 2 }}>
-      <span>Put in{flow.provides > 1 ? ` · ${flow.provides} deposits` : ''}{flow.withdraws > 0 ? `, ${flow.withdraws} out` : ''}</span>
-      <span style={{ color: C.textSecondary }}>
-        {fmtAmount(put[0])} {t0.label} + {fmtAmount(put[1])} {t1.label}
-        {(d0 != null || d1 != null) && <> · {tag(d0)} / {tag(d1)}</>}
-      </span>
-    </div>
+    <>
+      <div style={{ ...rowStyle, marginTop: 2 }}>
+        <span>Put in{flow.provides > 1 ? ` · ${flow.provides} deposits` : ''}{flow.withdraws > 0 ? `, ${flow.withdraws} out` : ''}</span>
+        <span style={{ color: C.textSecondary }}>
+          {fmtAmount(put[0])} {t0.label} + {fmtAmount(put[1])} {t1.label}
+          {(d0 != null || d1 != null) && <> · {tag(d0)} / {tag(d1)}</>}
+        </span>
+      </div>
+      {vs != null && held != null && usd != null && (
+        <div style={rowStyle} title="Both at today's prices. The difference is what the pool's fees added and what the two prices moving apart took, together. It says what happened, not what will.">
+          <span>Against holding it</span>
+          <span style={{ color: C.textSecondary }}>
+            {fmtUsd(usd)} in the pool · {fmtUsd(held)} if kept in the wallet · {tag(vs)}
+          </span>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -3080,6 +3421,7 @@ function PoolRow({ p, routePools, onDone, onParty, act, height, firstHand, cryst
         <div style={{ fontSize: TEXT.md.size, fontWeight: 700, color: C.textPrimary, display: 'flex', alignItems: 'center' }}>
           <PairIcons a={p.tokens[0].label} b={p.tokens[1].label} />{p.label}
           {p.venue !== HOME_VENUE && <span style={{ marginLeft: 8, fontSize: TEXT.caption.size, letterSpacing: '0.1em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600 }}>{VENUE_NAME[p.venue]}</span>}
+          <Link href={`/pool/${p.contract_addr}`} title='Its own page: liquidity, price impact, fees paid and recent trades' style={{ marginLeft: 8, fontSize: TEXT.xs.size, color: C.textMuted, fontWeight: 500, textDecoration: 'none' }}>details ↗</Link>
         </div>
         {badge && <span style={{ fontSize: '0.6rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: badge === 'deepest' ? C.goldLit : C.korea, fontWeight: 800 }}>{badge === 'deepest' ? '🏆 deepest' : '🔥 most traded'}</span>}
         {(() => {
@@ -4096,7 +4438,7 @@ function Explore({ pools, gaps, onGo }: { pools: number; gaps: number; onGo: (k:
   const cards: { k: ExploreKey | 'verify' | 'stats'; icon: string; title: string; body: string; cta: string; muted?: boolean }[] = [
     { k: 'bridge', icon: '🌉', title: 'Bring money in', body: 'USDC from Noble, ATOM from the Cosmos Hub or USDC.inj from Injective, already swapped into another token when it lands.', cta: 'Bridge' },
     { k: 'pools', icon: '💧', title: 'Provide liquidity', body: `${pools} pools with liquidity on Terra Swap and Astroport. Add both sides or zap in with one token, and see what each pool paid its providers.`, cta: 'Pools' },
-    { k: 'portfolio', icon: '🧾', title: 'Everything you hold', body: 'Every position on both sites, staked LP included, closed in one signature. Your history shows each quote beside what arrived.', cta: 'Portfolio' },
+    { k: 'portfolio', icon: '🧾', title: 'Everything you hold', body: 'Every position on both sites, closed in one signature, and against simply holding. Sell leftover balances in one go; your history shows each quote beside what arrived.', cta: 'Portfolio' },
     { k: 'lst', icon: '🥩', title: 'Liquid staking against the hubs', body: 'When redeeming ampLUNA or bLUNA at its hub pays more than selling in a pool, and by how much.', cta: 'See the rates' },
     { k: 'gap', icon: '⚡', title: gaps ? `${gaps} pool${gaps === 1 ? '' : 's'} off the market` : 'Pools off the market', body: 'A pool that drifted from the market, with the round trip that closes the gap in one transaction.', cta: gaps ? 'Close one' : 'None right now', muted: !gaps },
     { k: 'verify', icon: '✓', title: 'No owner, no admin, no cut', body: "Nobody can change Terra Swap's pools or take a cut. Check every contract from your own browser.", cta: 'Verify' },
@@ -4132,11 +4474,11 @@ function Explore({ pools, gaps, onGo }: { pools: number; gaps: number; onGo: (k:
   )
 }
 
-/** Positions and History are one place, Portfolio: what you hold now, and what you did. */
-function PortfolioSwitch({ view, onView }: { view: 'positions' | 'history'; onView: (v: 'positions' | 'history') => void }) {
+/** Positions, Wallet and History are one place, Portfolio: what you hold in pools and in the wallet, and what you did. */
+function PortfolioSwitch({ view, onView }: { view: 'positions' | 'wallet' | 'history'; onView: (v: 'positions' | 'wallet' | 'history') => void }) {
   return (
     <div role='tablist' aria-label='Portfolio' style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['2'] }}>
-      {([['positions', 'Positions'], ['history', 'History']] as const).map(([k, text]) => (
+      {([['positions', 'Positions'], ['wallet', 'Wallet'], ['history', 'History']] as const).map(([k, text]) => (
         <button key={k} type='button' role='tab' aria-selected={view === k} onClick={() => onView(k)}
           style={{ ...ghostBtn, padding: '3px 12px', borderRadius: 999, color: view === k ? C.goldLit : C.textMuted, borderColor: view === k ? C.goldCore : C.divider }}>
           {text}
@@ -4344,11 +4686,17 @@ function SwapPageInner() {
 
   // A shared link lands where it points: ?tab=bridge opens that section, ?who=terra1… opens the board on their row.
   const tabFromUrl = useRef(false)
+  /** A pool a link asked for (?pool=terra1…, from a pool's own page), opened once the pools are in. */
+  const wantPool = useRef('')
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search)
       const linked = PARAM_TAB[params.get('tab') ?? '']
       if (linked && !(LITE && linked === 'board')) setTab(linked)
+      const net = params.get('net')
+      if (net === 'noble' || net === 'cosmoshub' || net === 'injective') setBridgeNet(net)
+      const pool = params.get('pool') || ''
+      if (/^terra1[0-9a-z]{38,}$/.test(pool)) wantPool.current = pool
       const who = params.get('who') || ''
       if (!LITE && /^terra1[0-9a-z]{38,}$/.test(who)) { setSpotlight(who); setTab('board') }
     } catch { /* ssr */ }
@@ -4573,6 +4921,14 @@ function SwapPageInner() {
     setTab('pools')
     setTimeout(() => document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: elementId === 'lst' ? 'start' : 'center' }), 150)
   }, [])
+  useEffect(() => {
+    const addr = wantPool.current
+    const p = addr ? allPools.find(x => x.contract_addr === addr) : undefined
+    if (!p) return
+    wantPool.current = ''
+    openInPools(`pool-${addr}`, (p.tvlUsd ?? 0) < DUST_USD)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allPools, openInPools])
   /** A swap with the pair filled in and the amount left to the person. */
   const openSwap = useCallback((fromId: string, toId: string) => {
     setLoopFor(null)
@@ -4588,6 +4944,7 @@ function SwapPageInner() {
       { id: 'do-lst', group: 'Do', label: 'Liquid staking against the hubs', hint: 'when redeeming ampLUNA or bLUNA at its hub beats selling in the pool', keywords: 'lst stake unstake redeem mint ampluna bluna eris backbone hub', icon: icon('🥩'), run: () => openInPools('lst') },
       ...(arbs[0] ? [{ id: 'do-gap', group: 'Do', label: 'Close the biggest gap', hint: `${arbs[0].pool.label} is ${arbs[0].off.toFixed(1)}× off the market`, keywords: 'arbitrage arb drift gap off market', icon: icon('⚡'), run: () => takeArb(arbs[0]) }] : []),
       { id: 'do-open-pool', group: 'Do', label: 'Open a pool', hint: "on Terra Swap's or Astroport's factory, one signature", keywords: 'create new pair pool list token factory', icon: icon('🏗️'), run: () => openTab('create') },
+      { id: 'do-sweep', group: 'Do', label: 'Sell small balances in one go', hint: 'leftover tokens into USDC or LUNA, one signature', keywords: 'sweep dust leftovers clean wallet balances sell all convert', icon: icon('🧹'), run: () => openTab('wallet') },
       { id: 'do-keys', group: 'Do', label: 'Keyboard shortcuts', hint: '⌘K search · / amount · f flip the pair', keywords: 'keys hotkeys keyboard', icon: icon('⌨️'), run: () => setShortcuts(true) },
       { id: 'go-swap', group: 'Go to', label: 'Swap', hint: "the best route through Terra Swap's and Astroport's pools", keywords: 'trade exchange buy sell convert', icon: icon('🔀'), run: () => openTab('swap') },
       { id: 'go-pools', group: 'Go to', label: 'Pools', hint: `${allPools.length} pools on both sites: add, zap in, remove`, keywords: 'liquidity lp provide add remove zap fees', icon: icon('💧'), run: () => openTab('pools') },
@@ -4607,7 +4964,10 @@ function SwapPageInner() {
       const meta = TOKEN_META[t.key]
       const words = `${t.key} ${meta?.name ?? ''} ${meta?.origin ?? ''} ${(meta?.tags ?? []).join(' ')}`
       items.push({ id: `buy-${id}`, group: 'Tokens', label: `Buy ${t.label}`, hint: meta?.name ?? t.label, keywords: `${words} get swap into`, icon: <TokenIcon label={t.label} size={20} />, run: () => openSwap(id === lunaId ? NOBLE_USDC : lunaId, id) })
-      items.push({ id: `sell-${id}`, group: 'Tokens', label: `Sell ${t.label}`, hint: meta?.name ?? t.label, keywords: `${words} swap out of`, icon: <TokenIcon label={t.label} size={20} />, run: () => openSwap(id, id === NOBLE_USDC ? lunaId : NOBLE_USDC) })
+      items.push({ id: `sell-${id}`, group: 'Tokens', label: `Sell ${t.label}`, hint: meta?.name ?? t.label, keywords: `${words} swap out of`, icon: <TokenIcon label={t.label} size={20} />, run: () => openSwap(id, id === NOBLE_USDC || id === USDC_INJ_DENOM ? lunaId : NOBLE_USDC) })
+      if (KNOWN_TOKENS.some(k => k.key === t.key)) {
+        items.push({ id: `page-${id}`, group: 'Tokens', label: `${t.label}: price and pools`, hint: `${meta?.name ?? t.label}, its own page`, keywords: `${words} page price info about chart pools`, icon: <TokenIcon label={t.label} size={20} />, run: () => { window.location.href = `/token/${encodeURIComponent(t.key)}` } })
+      }
     }
     // Deepest first, so a tie on the name goes to the pool worth trading in.
     for (const p of allPools.filter(p => !p.empty && (p.tvlUsd ?? 0) >= 1).sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))) {
@@ -4775,7 +5135,7 @@ function SwapPageInner() {
                 {tabBtn('swap', 'Swap')}
                 {tabBtn('pools', <>Pools<span className='terra-tab-count'> · {allPools.length}</span></>, tab === 'pools' || tab === 'create')}
                 {tabBtn('transfer', 'Bridge')}
-                {tabBtn('positions', 'Portfolio', tab === 'positions' || tab === 'history')}
+                {tabBtn('positions', 'Portfolio', tab === 'positions' || tab === 'wallet' || tab === 'history')}
                 {!LITE && tabBtn('board', <>Board{board?.rows.length ? <span className='terra-tab-count'> · {board.rows.length}</span> : null}</>)}
                 {/* Terra Predict lives next door, once it is live. A link to "not live yet" is a dead end. */}
                 {!LITE && isPredictLive() && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, whiteSpace: 'nowrap' }}>Predict ↗</Link>}
@@ -4841,8 +5201,9 @@ function SwapPageInner() {
                     )}
                     </div>
               )}
-              {(tab === 'positions' || tab === 'history') && <PortfolioSwitch view={tab} onView={setTab} />}
+              {(tab === 'positions' || tab === 'wallet' || tab === 'history') && <PortfolioSwitch view={tab} onView={setTab} />}
               {tab === 'positions' && <PositionsPanel onDone={refresh} flows={me ? board?.flows : undefined} />}
+              {tab === 'wallet' && <WalletPanel pools={routePoolsAll} onDone={refresh} />}
               {tab === 'history' && <HistoryPanel pools={allPools} />}
               {tab === 'transfer' && <TransferPanel key={bridgeNet} initialNet={bridgeNet} routePools={routePoolsAll} onDone={refresh} />}
               {tab === 'create' && <CreatePanel pools={allPools} marketPx={marketPx} onDone={refresh} onCreated={() => setTab('pools')} onBack={() => setTab('pools')} onParty={setParty} />}

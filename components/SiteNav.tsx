@@ -18,7 +18,7 @@ const LINKS = [
   { key: 'verify', href: '/verify', label: 'Verify' },
 ] as const
 
-export default function SiteNav({ here }: { here: 'stats' | 'verify' }) {
+export default function SiteNav({ here }: { here?: 'stats' | 'verify' }) {
   return (
     <nav aria-label='Terra Swap' style={{ display: 'flex', alignItems: 'center', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
       <Link href='/' style={{ color: C.textSecondary, fontSize: TEXT.xs.size, fontWeight: 700, textDecoration: 'none', marginRight: 6, whiteSpace: 'nowrap' }}>Terra Swap</Link>
