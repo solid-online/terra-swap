@@ -99,7 +99,7 @@ export function routerMsg(sender: string, hops: { offer: AssetInfo; ask: AssetIn
 }
 
 /** Legs as operations for Terra Swap's router, each naming the factory that owns its pair. */
-const routerOperations = (legs: ExecLeg[]) => legs.map(l => ({ factory: VENUE_FACTORY[l.venue], offer_asset_info: l.offerInfo, ask_asset_info: l.askInfo }))
+const routerOperations = (legs: ExecLeg[]) => legs.map(l => ({ factory: l.factory ?? VENUE_FACTORY[l.venue], offer_asset_info: l.offerInfo, ask_asset_info: l.askInfo }))
 
 /**
  * A route through Terra Swap's router (contracts/router), which reaches pairs
@@ -255,17 +255,17 @@ export const stakeMsg = (a: { incentives: string; lpToken: string; amount: strin
 export interface CreatePairArgs {
   assetInfos: [AssetInfo, AssetInfo]
   sender: string
-  /** Terra Swap's factory only has xyk; Astroport's also opens concentrated pools. */
-  pairType?: 'xyk' | 'concentrated'
-  /** Concentrated pools need their curve settings and a starting price. */
+  /** Terra Swap's first factory has xyk; its factory v2 concentrated and stable; Astroport's opens all three. */
+  pairType?: 'xyk' | 'concentrated' | 'stable'
+  /** Concentrated pools need their curve settings and a starting price; stable pools their amp. */
   initParams?: object
 }
 
-/** Permissionless on both factories: anyone can open a pool. */
+/** Permissionless on every factory: anyone can open a pool. */
 export function createPairMsg(factory: string, a: CreatePairArgs): EncodeObject {
   return exec(a.sender, factory, {
     create_pair: {
-      pair_type: a.pairType === 'concentrated' ? { custom: 'concentrated' } : { xyk: {} },
+      pair_type: a.pairType === 'concentrated' ? { custom: 'concentrated' } : a.pairType === 'stable' ? { stable: {} } : { xyk: {} },
       asset_infos: a.assetInfos,
       ...(a.initParams ? { init_params: b64(a.initParams) } : {}),
     },

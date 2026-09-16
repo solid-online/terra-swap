@@ -25,7 +25,7 @@ import { isCrystalHolder } from 'lib/holders'
 import {
   KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, ATOM_DENOM, TERRA_SWAP_ROUTER, assetId, sameAsset, tokenFor, toMicro, fromMicro,
   simulateSwap, queryBalance, queryCw20Balance, planZap, annotateMarket, annotateValues, resolveToken,
-  lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_FACTORY, VENUE_NAME, VENUE_INCENTIVES, smart, type Venue,
+  lpPosition, lpConcentration, IS_ASTRO, HOME_VENUE, VENUE_FACTORY, VENUE_NAME, VENUE_INCENTIVES, TERRA_SWAP_FACTORY_V2, factoryOf, smart, type Venue,
   COIN_REGISTRY, ASTRO_STAKING, XASTRO_CW20, ASTRO_CONVERTER, ASTRO_CW20, ASTRO_IBC_DENOM, DATOM_DENOM, FUEL_DENOM, STLUNA_DENOM, STATOM_DENOM,
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
 } from 'lib/dex'
@@ -4349,6 +4349,20 @@ const PCL_DEFAULTS = {
   amp: '10', gamma: '0.000145', mid_fee: '0.0026', out_fee: '0.0045', fee_gamma: '0.00023',
   repeg_profit_threshold: '0.000002', min_price_scale_delta: '0.000146', ma_half_time: 600,
 }
+/**
+ * LUNA against a liquid staking token, whose price creeps up as staking
+ * rewards accrue: the settings of Astroport's own LUNA/ampLUNA pool, read
+ * 2026-09-16. A high amp keeps liquidity tight around the price, and the pool
+ * re-pegs on small profits so it follows the token's rising rate.
+ */
+const PCL_LST = {
+  amp: '500', gamma: '0.01', mid_fee: '0.0003', out_fee: '0.0045', fee_gamma: '0.3',
+  repeg_profit_threshold: '0.00000001', min_price_scale_delta: '0.0000055', ma_half_time: 600, track_asset_balances: false,
+}
+/** Astroport's stable pools on Terra use amp 10 (its LUNA/bLUNA pool, read 2026-09-16). */
+const STABLE_DEFAULTS = { amp: 10 }
+const LST_KEYS = new Set(['ampLUNA', 'bLUNA', 'arbLUNA', 'stLUNA', 'LunaX'])
+type PoolKind = 'xyk' | 'concentrated' | 'stable'
 
 function CreatePanel({ pools, marketPx, onDone, onCreated, onBack, onParty }: { pools: PoolView[]; marketPx?: Record<string, number> | null; onDone: () => void; onCreated: () => void; onBack?: () => void; onParty: (x: Party) => void }) {
   const me = useMyAddress()
@@ -4357,7 +4371,7 @@ function CreatePanel({ pools, marketPx, onDone, onCreated, onBack, onParty }: { 
   const [venue, setVenue] = useState<Venue>(HOME_VENUE)
   const [a, setA] = useState(assetId(KNOWN_TOKENS[0].info))
   const [b, setB] = useState(assetId(KNOWN_TOKENS[1].info))
-  const [kind, setKind] = useState<'xyk' | 'concentrated'>('xyk')
+  const [kind, setKind] = useState<PoolKind>('xyk')
   const [startPrice, setStartPrice] = useState('')
   const [registered, setRegistered] = useState<boolean | null>(true)
   const [err, setErr] = useState<string | null>(null)
@@ -4365,18 +4379,26 @@ function CreatePanel({ pools, marketPx, onDone, onCreated, onBack, onParty }: { 
   const ta = KNOWN_TOKENS.find(t => assetId(t.info) === a)!
   const tb = KNOWN_TOKENS.find(t => assetId(t.info) === b)!
   const ia = ta.info, ib = tb.info
-  const exists = pools.some(p => p.venue === venue && p.tokens.some(t => sameAsset(t.info, ia)) && p.tokens.some(t => sameAsset(t.info, ib)))
+  // Terra Swap has two factories: standard pools on the first, concentrated and stable pools on factory v2 (contracts/factory-v2).
+  const v2 = venue === 'terraswap' && !!TERRA_SWAP_FACTORY_V2
+  const kinds: PoolKind[] = v2 ? ['xyk', 'concentrated', 'stable'] : ['xyk', 'concentrated']
+  const factory = venue === 'terraswap' && kind !== 'xyk' ? TERRA_SWAP_FACTORY_V2 : VENUE_FACTORY[venue]
+  const exists = pools.some(p => factoryOf(p) === factory && p.tokens.some(t => sameAsset(t.info, ia)) && p.tokens.some(t => sameAsset(t.info, ib)))
+  // A pool type the chosen factory does not open falls back to standard.
+  useEffect(() => {
+    if ((venue === 'astroport' && kind === 'stable') || (venue === 'terraswap' && !TERRA_SWAP_FACTORY_V2 && kind !== 'xyk')) setKind('xyk')
+  }, [venue, kind])
 
   // Astroport's factory refuses a native token its coin registry does not know. Say so before asking for a signature.
   useEffect(() => {
     let alive = true
     const natives = [ia, ib].filter(i => 'native_token' in i).map(i => assetId(i))
-    if (venue !== 'astroport' || natives.length === 0) { setRegistered(true); return }
+    if ((venue !== 'astroport' && kind === 'xyk') || natives.length === 0) { setRegistered(true); return }
     setRegistered(null)
     Promise.all(natives.map(d => smart<number>(COIN_REGISTRY, { native_token: { denom: d } })))
       .then(r => { if (alive) setRegistered(r.every(x => typeof x === 'number')) })
     return () => { alive = false }
-  }, [ia, ib, venue])
+  }, [ia, ib, venue, kind])
 
   // A concentrated pool starts at a price: how much of the first token one of the second is worth.
   useEffect(() => {
@@ -4389,17 +4411,19 @@ function CreatePanel({ pools, marketPx, onDone, onCreated, onBack, onParty }: { 
     const s = n.toFixed(18).replace(/\.?0+$/, '')
     return Number(s) > 0 ? s : null
   })()
-  const pcl = venue === 'astroport' && kind === 'concentrated'
-  const can = !!me && a !== b && !exists && registered === true && (!pcl || !!priceScale) && !create.isLoading
+  const pcl = kind === 'concentrated' && (venue === 'astroport' || v2)
+  const stable = kind === 'stable' && v2
+  const lstPair = [ta, tb].some(t => LST_KEYS.has(t.key)) && [ta, tb].some(t => 'native_token' in t.info && t.info.native_token.denom === 'uluna')
+  const can = !!me && !!factory && a !== b && !exists && registered === true && (!pcl || !!priceScale) && !create.isLoading
   const go = async () => {
     if (!can) return
     setErr(null); setOk(false)
     try {
       await create.mutateAsync({
         assetInfos: [ia, ib] as [AssetInfo, AssetInfo], sender: me,
-        pairType: pcl ? 'concentrated' : 'xyk',
-        initParams: pcl && priceScale ? { ...PCL_DEFAULTS, price_scale: priceScale } : undefined,
-        factory: VENUE_FACTORY[venue],
+        pairType: pcl ? 'concentrated' : stable ? 'stable' : 'xyk',
+        initParams: pcl && priceScale ? { ...(lstPair ? PCL_LST : PCL_DEFAULTS), price_scale: priceScale } : stable ? STABLE_DEFAULTS : undefined,
+        factory,
       })
       setOk(true); onDone()
       // The board scores Terra Swap's pools; an Astroport pool earns no stamp.
@@ -4426,13 +4450,15 @@ function CreatePanel({ pools, marketPx, onDone, onCreated, onBack, onParty }: { 
       <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: `${SPACE['2']}px 0 ${SPACE['3']}px` }}>
         {venue === 'astroport'
           ? <>Astroport&apos;s factory lets anyone open a pool. It costs gas; the pool opens empty and the first deposit fills it. A standard pool spreads liquidity over every price. A concentrated pool uses Astroport&apos;s own settings and starts at the price you give it. Not affiliated with Astroport.</>
-          : <>Terra Swap&apos;s factory has no owner and takes no fee. Creating the pool costs gas and nothing else; it opens empty, and whoever adds liquidity first sets the price.</>}
+          : v2
+            ? <>Terra Swap&apos;s factories have no owner and take no fee: a pool&apos;s fee goes to its liquidity providers. A standard pool spreads liquidity over every price. A concentrated pool keeps it near the price, which suits LUNA against ampLUNA or bLUNA. A stable pool is for two tokens that should trade 1:1. Creating a pool costs gas and nothing else, and it opens empty.</>
+            : <>Terra Swap&apos;s factory has no owner and takes no fee. Creating the pool costs gas and nothing else; it opens empty, and whoever adds liquidity first sets the price.</>}
       </p>
-      {venue === 'astroport' && (
+      {(venue === 'astroport' || v2) && (
         <div style={{ display: 'flex', gap: SPACE['2'], marginBottom: SPACE['3'] }}>
-          {(['xyk', 'concentrated'] as const).map(k => (
+          {kinds.map(k => (
             <button key={k} type='button' onClick={() => setKind(k)} style={{ ...ghostBtn, padding: '3px 10px', color: kind === k ? C.goldLit : C.textMuted, borderColor: kind === k ? C.goldCore : C.divider }}>
-              {k === 'xyk' ? 'Standard' : 'Concentrated'}
+              {k === 'xyk' ? 'Standard' : k === 'concentrated' ? 'Concentrated' : 'Stable'}
             </button>
           ))}
         </div>
@@ -4447,9 +4473,10 @@ function CreatePanel({ pools, marketPx, onDone, onCreated, onBack, onParty }: { 
           <label style={label}>Starting price · 1 {tb.label} = ? {ta.label}</label>
           <input style={field} type='number' min='0' step='any' placeholder='0.0' value={startPrice} onChange={e => setStartPrice(e.target.value)} />
           <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Filled from the market where both tokens have a price. Check it: the pool trades around it until liquidity moves it.</div>
+          {lstPair && <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, marginTop: 4 }}>Uses the settings of Astroport&apos;s LUNA/ampLUNA pool, made for a token whose price rises slowly against LUNA.</div>}
         </div>
       )}
-      {registered === false && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>Astroport&apos;s coin registry does not know one of these tokens, so its factory would refuse the pool.</div>}
+      {registered === false && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>Astroport&apos;s coin registry does not know one of these tokens, so the factory would refuse the pool.</div>}
       {exists && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, marginBottom: SPACE['2'] }}>That pool already exists. Add liquidity to it instead.{!LITE && <> <span style={{ color: C.goldLit }}>You must construct additional pylons.</span></>}</div>}
       {a === b && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>Pick two different tokens.</div>}
       {err && <div style={{ fontSize: TEXT.xs.size, color: C.alert, marginBottom: SPACE['2'] }}>{err}</div>}

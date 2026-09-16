@@ -12,7 +12,7 @@
  */
 
 import {
-  ASTRO_CONVERTER, ASTRO_CW20, ASTRO_FACTORY, ASTRO_IBC_DENOM, ASTRO_STAKING, SKELETON_FACTORY, TERRA_SWAP_FACTORY, VENUE_INCENTIVES, XASTRO_CW20,
+  ASTRO_CONVERTER, ASTRO_CW20, ASTRO_FACTORY, ASTRO_IBC_DENOM, ASTRO_STAKING, SKELETON_FACTORY, TERRA_SWAP_FACTORY, TERRA_SWAP_FACTORY_V2, VENUE_INCENTIVES, XASTRO_CW20,
   assetId, knownPairs, marketPrices, queryCw20Balance, queryNativeBalance, queryPairsOf, queryPool,
   resolveToken, smart, toPoolView,
   type Asset, type KnownToken, type PairInfo, type PoolView, type Venue,
@@ -202,11 +202,13 @@ export async function readAstroLegacy(address: string): Promise<AstroLegacy> {
 }
 
 export async function readPositions(address: string): Promise<Position[]> {
-  const [tsPairs, astroPairs, skeletonPairs, touched, px] = await Promise.all([
-    queryPairsOf(TERRA_SWAP_FACTORY), queryPairsOf(ASTRO_FACTORY),
+  const [tsPairs1, tsPairs2, astroPairs, skeletonPairs, touched, px] = await Promise.all([
+    queryPairsOf(TERRA_SWAP_FACTORY), queryPairsOf(TERRA_SWAP_FACTORY_V2).catch(() => [] as PairInfo[]), queryPairsOf(ASTRO_FACTORY),
     queryPairsOf(SKELETON_FACTORY).then(ps => ps.map(withPlainLp)).catch(() => [] as PairInfo[]),
     historyTouches(address), marketPrices(),
   ])
+  // Both of Terra Swap's factories: standard pools on the first, concentrated and stable pools on factory v2.
+  const tsPairs = [...tsPairs1, ...tsPairs2]
   const byAddr = new Map<string, { pair: PairInfo; venue: Venue }>()
   const byLp = new Map<string, string>()
   for (const p of tsPairs) { byAddr.set(p.contract_addr, { pair: p, venue: 'terraswap' }); byLp.set(p.liquidity_token, p.contract_addr) }

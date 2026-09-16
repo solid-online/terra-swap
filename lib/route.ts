@@ -34,7 +34,7 @@
  */
 
 import {
-  NOBLE_USDC, ROUTER_VENUES, USDC_INJ_DENOM, assetId, priceLimit, sameAsset, simulateSwap, toMicro, TERRA_SWAP_ROUTER, VENUE_NAME,
+  NOBLE_USDC, ROUTER_FACTORIES, USDC_INJ_DENOM, factoryOf, assetId, priceLimit, sameAsset, simulateSwap, toMicro, TERRA_SWAP_ROUTER, VENUE_NAME,
   type KnownToken, type PoolView, type Venue,
 } from 'lib/dex'
 
@@ -86,6 +86,8 @@ export interface ExecLeg {
   pair: string
   /** which site's factory owns the pair; Terra Swap's router looks the pair up there */
   venue: Venue
+  /** the factory that made the pair: Terra Swap has two, and its router is told which (lib/msgs) */
+  factory?: string
   offerInfo: KnownToken['info']
   askInfo: KnownToken['info']
   offerAmount: string
@@ -299,7 +301,7 @@ async function bestSplit(quotes: Quote[], amountMicro: string, slip: number): Pr
 const shave = (x: bigint, slip: number) => (x * BigInt(Math.round((1 - slip) * 10_000))) / BigInt(10_000)
 
 /** Every pool on the route sits on a factory Terra Swap's router trusts. */
-const routerReaches = (q: Quote) => q.legs.every(l => ROUTER_VENUES.includes(l.pool.venue))
+const routerReaches = (q: Quote) => q.legs.every(l => ROUTER_FACTORIES.includes(factoryOf(l.pool)))
 
 /**
  * A route as separate swap messages. The first leg offers the full amount;
@@ -319,7 +321,7 @@ export function executionLegs(q: Quote, slip: number): ExecLeg[] {
     const commission: bigint = (BigInt(l.commissionMicro) * offer) / BigInt(l.offerMicro)
     const { limitReturn, floor } = priceLimit(l.pool.pairType, expected, commission, slip, l.pool.venue)
     out.push({
-      pair: l.pool.contract_addr, venue: l.pool.venue, offerInfo: l.offer.info, askInfo: l.ask.info, offerAmount: offer.toString(),
+      pair: l.pool.contract_addr, venue: l.pool.venue, factory: factoryOf(l.pool), offerInfo: l.offer.info, askInfo: l.ask.info, offerAmount: offer.toString(),
       expectedReturn: expected.toString(), limitReturn: limitReturn.toString(), minReturn: floor.toString(),
     })
     prev = floor

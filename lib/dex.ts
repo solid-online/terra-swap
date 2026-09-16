@@ -29,6 +29,14 @@ export const IS_ASTRO = DEX_MODE === 'astroport'
 export const TERRA_SWAP_FACTORY = 'terra1gx7n4yrfc2req7tdt9vpj66kr0cssnqkjsr80xmfacjpdlw6mzlqvlp3xd'
 export const ASTRO_FACTORY = 'terra14x9fr055x5hvr48hzy2t4q7kvjvfttsvxusa4xsdcy702mnzsvuqprer8r'
 /**
+ * Terra Swap's second factory (contracts/factory-v2): concentrated and stable
+ * pools on Astroport's code, no fee address, its ownership in its own owner
+ * sink, no admin. The first factory's ownership is already renounced, so no
+ * pool type could be added there. Empty until it is on chain, and nothing of
+ * it shows until then.
+ */
+export const TERRA_SWAP_FACTORY_V2 = IS_ASTRO ? '' : (process.env.NEXT_PUBLIC_DEX_FACTORY_V2 || '')
+/**
  * The pool factory behind Skeleton Swap on Terra (Backbone Labs' interface):
  * White Whale's pool-network contracts, labelled "White Whale Pool Factory" on
  * chain. Its pairs are routed through for swaps only (lib/skeleton). They answer
@@ -80,6 +88,19 @@ export const ASTRO_ROUTER = 'terra1j8hayvehh3yy02c2vtw5fdhz9f4drhtee8p5n5rguvg3n
  * an empty string to sign such routes as separate swaps instead.
  */
 export const TERRA_SWAP_ROUTER = process.env.NEXT_PUBLIC_TERRA_SWAP_ROUTER ?? 'terra1u2uh0jsl2u76j52e6egf09zslsns27qsmzxxzcsxdxymeax8883s9prc4l'
+/** Router v1 trusts the first factory and Astroport's. Router v2 (contracts/factory-v2) is the same code trusting factory v2 as well. */
+export const TERRA_SWAP_ROUTER_V1 = 'terra1u2uh0jsl2u76j52e6egf09zslsns27qsmzxxzcsxdxymeax8883s9prc4l'
+/**
+ * The factories the configured router trusts, in its own order. A router
+ * other than v1 is only taken to know factory v2 when factory v2 is set too,
+ * so a half-done configuration signs v2 routes as separate swaps instead of
+ * sending the router a pool it would refuse.
+ */
+export const ROUTER_FACTORIES: readonly string[] = TERRA_SWAP_FACTORY_V2 && TERRA_SWAP_ROUTER && TERRA_SWAP_ROUTER !== TERRA_SWAP_ROUTER_V1
+  ? [TERRA_SWAP_FACTORY, TERRA_SWAP_FACTORY_V2, ASTRO_FACTORY]
+  : [TERRA_SWAP_FACTORY, ASTRO_FACTORY]
+/** The factory that made a pool: its own when it carries one (factory v2), otherwise its venue's. */
+export const factoryOf = (p: { venue: Venue; factory?: string }): string => p.factory ?? VENUE_FACTORY[p.venue]
 
 
 /** Pool commission, set on the factory. Shown to users; not enforced here. */
@@ -356,7 +377,7 @@ interface PartsSimulation {
 const pairsCache = new Map<string, { at: number; pairs: PairInfo[] }>()
 export async function queryPairsOf(factory: string): Promise<PairInfo[]> {
   if (!factory) return []
-  const ttl = factory === ASTRO_FACTORY ? 600_000 : factory === DEX_FACTORY ? 0 : 60_000
+  const ttl = factory === ASTRO_FACTORY ? 600_000 : factory === DEX_FACTORY || factory === TERRA_SWAP_FACTORY_V2 ? 0 : 60_000
   const hit = pairsCache.get(factory)
   if (ttl > 0 && hit && Date.now() - hit.at < ttl) return hit.pairs
   const out: PairInfo[] = []
@@ -482,6 +503,8 @@ export interface PoolView extends PairInfo {
   pairType: string
   /** which site's factory the pool belongs to */
   venue: Venue
+  /** the factory that made it, when that is not its venue's main one: Terra Swap's factory v2 */
+  factory?: string
   /**
    * token1 per token0 by reserves: the ratio a balanced deposit follows. On
    * xyk this is also the price; on concentrated and stable pools it is not.
@@ -570,7 +593,7 @@ export function annotateMarket(pools: PoolView[], px: Record<string, number>): P
   return pools
 }
 
-export function toPoolView(pair: PairInfo, pool: PoolState | null, venue: Venue = HOME_VENUE, tokens?: [KnownToken, KnownToken]): PoolView {
+export function toPoolView(pair: PairInfo, pool: PoolState | null, venue: Venue = HOME_VENUE, tokens?: [KnownToken, KnownToken], factory?: string): PoolView {
   // Tokens resolved from the chain win over the static list, so an unlisted
   // token with 18 decimals is not priced as if it had 6.
   const t0 = tokens?.[0] ?? tokenFor(pair.asset_infos[0])
@@ -592,6 +615,7 @@ export function toPoolView(pair: PairInfo, pool: PoolState | null, venue: Venue 
     label: `${t0.label} / ${t1.label}`,
     pairType: pairTypeOf(pair),
     venue,
+    ...(factory ? { factory } : {}),
     reserveRatio: d0 > 0 ? d1 / d0 : 0,
   }
 }

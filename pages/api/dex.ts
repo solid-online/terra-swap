@@ -10,7 +10,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createHash } from 'crypto'
 import {
-  isDexLive, queryPairs, listedPairs, queryPool, toPoolView, refineSpot, annotateTvl,
+  isDexLive, queryPairs, queryPairsOf, listedPairs, queryPool, toPoolView, refineSpot, annotateTvl, HOME_VENUE, TERRA_SWAP_FACTORY_V2,
   POOL_FEE_BPS, DEX_MODE, type PoolView,
 } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
@@ -92,11 +92,13 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
     return res.status(200).json({ live: false, mode: DEX_MODE, pools: [], feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd: 0, height: 0, chainId: '', proposer: '', seoul: null })
   }
   // No market scan here: it lives in /api/dex-market so a cold start never blocks the page.
-  const [allPairs, head, seoul] = await Promise.all([queryPairs(), latestBlock(), seoulWeather()])
+  const [allPairs, v2Pairs, head, seoul] = await Promise.all([queryPairs(), queryPairsOf(TERRA_SWAP_FACTORY_V2).catch(() => []), latestBlock(), seoulWeather()])
   const pairs = listedPairs(allPairs)
-  const pools = await Promise.all(
-    pairs.map(async (p) => toPoolView(p, await queryPool(p.contract_addr))),
-  )
+  // Factory v2's concentrated and stable pools are Terra Swap's too; each carries its factory for the router.
+  const pools = await Promise.all([
+    ...pairs.map(async (p) => toPoolView(p, await queryPool(p.contract_addr))),
+    ...v2Pairs.map(async (p) => toPoolView(p, await queryPool(p.contract_addr), HOME_VENUE, undefined, TERRA_SWAP_FACTORY_V2)),
+  ])
   // Order: pools with liquidity before empty ones, then pools made of tokens
   // we can name before unknown ones, then by the named side's reserve. Raw
   // reserve maths across unrelated tokens says nothing, so it is only used

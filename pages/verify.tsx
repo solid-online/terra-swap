@@ -19,7 +19,7 @@ import Link from 'next/link'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SPACE, TEXT } from 'components/tokens'
 import SiteNav from 'components/SiteNav'
-import { ASTRO_FACTORY, ASTRO_ROUTER, SKELETON_FACTORY, TERRA_SWAP_FACTORY, TERRA_SWAP_ROUTER, VENUE_INCENTIVES, smart } from 'lib/dex'
+import { ASTRO_FACTORY, ASTRO_ROUTER, ROUTER_FACTORIES, SKELETON_FACTORY, TERRA_SWAP_FACTORY, TERRA_SWAP_FACTORY_V2, TERRA_SWAP_ROUTER, VENUE_INCENTIVES, smart } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
 
 const TERRA_FONT = "'Montserrat', 'Space Grotesk', 'Inter', system-ui, sans-serif"
@@ -37,6 +37,8 @@ const EXPECT = {
   pair: { code: '392', checksum: 'a5155c856cebff4519a63a3acb4985971f3ed98289519cf588a92425464476e1' },
   sink: { code: '4025', checksum: 'b62e749bd03846cf6abf48ebc7bd33413a0647e5ee557a65de9abef2661a6ab1' },
   router: { code: '4028', checksum: 'd4f36193c98a92dd455fda0e3b2a899071edda1c638d3dbc8149e0e9caf31ff3' },
+  pcl: { code: '2569', checksum: '998aa47044ac5b7279bdbf5d1ab68876b7cf5cc7022a6f4844812dc3cafc1e6d' },
+  stable: { code: '428', checksum: 'f6acaf41d2730d709d1c57562b754553a67a632f13d94875b71d5633de038a13' },
 }
 
 type State = 'checking' | 'ok' | 'bad' | 'note'
@@ -58,6 +60,7 @@ const codeChecksum = (id: string) => readJson<{ checksum?: string }>(`/cosmwasm/
 const GROUPS: { key: string; title: string; address?: string; blurb: string }[] = [
   { key: 'factory', title: "Terra Swap's factory", address: TERRA_SWAP_FACTORY, blurb: "Creates the pools. It runs Astroport's factory code, its ownership was handed to a contract that can never use it, and nobody can migrate it." },
   { key: 'sink', title: 'The owner sink', address: OWNER_SINK, blurb: "The 60-line contract that holds the factory's ownership (contracts/owner-sink). All it can do is accept it." },
+  ...(TERRA_SWAP_FACTORY_V2 ? [{ key: 'factory2', title: "Terra Swap's factory v2", address: TERRA_SWAP_FACTORY_V2, blurb: 'Opens concentrated and stable pools (contracts/factory-v2). The same factory code with no fee address, its ownership in its own owner sink, and nobody can migrate it.' }] : []),
   { key: 'pools', title: 'Every pool', blurb: "Astroport's xyk pair code. 0.3% per swap, all of it to liquidity providers. No pool can be migrated: the pools that existed at the renounce had their admin cleared, and pools opened since carry the owner sink as admin, which has no way to migrate anything." },
   { key: 'router', title: "Terra Swap's router", address: TERRA_SWAP_ROUTER, blurb: 'One transaction through pools on both factories, and the swap on arrival over IBC (contracts/router). No owner, no admin, no fee.' },
   { key: 'astroport', title: "Astroport's contracts this page also uses", blurb: "Not Terra Swap's. Swaps and positions can go through them, and Astroport can upgrade them; shown so that is plain." },
@@ -86,6 +89,34 @@ async function run(push: (c: Check) => void): Promise<void> {
   push({ group: 'sink', what: 'Migrate admin', expected: 'none', found: sInfo ? sInfo.admin || 'none' : 'no answer', state: sInfo && !sInfo.admin ? 'ok' : 'bad' })
   push({ group: 'sink', what: 'Holds ownership of', expected: "Terra Swap's factory", found: target ?? 'no answer', state: target === TERRA_SWAP_FACTORY ? 'ok' : 'bad' })
 
+  if (TERRA_SWAP_FACTORY_V2) {
+    const [f2Info, f2Config] = await Promise.all([
+      contractInfo(TERRA_SWAP_FACTORY_V2),
+      smart<{ owner: string; fee_address: string | null; pair_configs: PairConfig[] }>(TERRA_SWAP_FACTORY_V2, { config: {} }),
+    ])
+    push({ group: 'factory2', what: 'Code', expected: `${EXPECT.factory.code} · ${shortHash(EXPECT.factory.checksum)}`, found: `${f2Info?.code_id ?? 'no answer'} · ${shortHash(fSum)}`, state: f2Info?.code_id === EXPECT.factory.code && fSum === EXPECT.factory.checksum ? 'ok' : 'bad', href: addressUrl(TERRA_SWAP_FACTORY_V2) })
+    push({ group: 'factory2', what: 'Migrate admin', expected: 'none', found: f2Info ? f2Info.admin || 'none' : 'no answer', state: f2Info && !f2Info.admin ? 'ok' : 'bad' })
+    push({ group: 'factory2', what: 'Fee address', expected: 'none, so no maker fee is taken', found: f2Config ? f2Config.fee_address ?? 'none' : 'no answer', state: f2Config && !f2Config.fee_address ? 'ok' : 'bad' })
+    const typeName = (c: PairConfig) => { const [k, v] = Object.entries(c.pair_type ?? {})[0] ?? ['?', null]; return k === 'custom' && typeof v === 'string' ? v : k }
+    const [pclSum, stableSum] = await Promise.all([codeChecksum(EXPECT.pcl.code), codeChecksum(EXPECT.stable.code)])
+    const types = (f2Config?.pair_configs ?? []).filter(c => !c.is_disabled)
+    const has = (name: string, code: string) => types.some(c => typeName(c) === name && String(c.code_id) === code && c.maker_fee_bps === 0)
+    push({
+      group: 'factory2', what: 'Pools it can create', expected: 'concentrated · code 2569 and stable · code 428, maker fee 0, nothing else',
+      found: types.length ? types.map(c => `${typeName(c)} · code ${c.code_id} · maker fee ${c.maker_fee_bps}`).join(' + ') : 'no answer',
+      state: types.length === 2 && has('concentrated', EXPECT.pcl.code) && has('stable', EXPECT.stable.code) && pclSum === EXPECT.pcl.checksum && stableSum === EXPECT.stable.checksum ? 'ok' : 'bad',
+    })
+    const sink2 = f2Config?.owner ?? ''
+    const s2Info = sink2 ? await contractInfo(sink2) : null
+    const s2Target = sink2 ? await smart<string>(sink2, { target: {} }) : null
+    push({
+      group: 'factory2', what: 'Owner', expected: 'an owner sink holding this factory, with no admin',
+      found: sink2 ? `${sink2.slice(0, 14)}… · code ${s2Info?.code_id ?? '?'} · ${s2Info?.admin ? 'has an admin' : 'no admin'} · holds ${s2Target === TERRA_SWAP_FACTORY_V2 ? 'this factory' : s2Target ?? '?'}` : 'no answer',
+      state: !!s2Info && s2Info.code_id === EXPECT.sink.code && sSum === EXPECT.sink.checksum && !s2Info.admin && s2Target === TERRA_SWAP_FACTORY_V2 ? 'ok' : 'bad',
+      href: sink2 ? addressUrl(sink2) : undefined,
+    })
+  }
+
   const pairs: string[] = []
   let startAfter: unknown
   for (let i = 0; i < 20; i++) {
@@ -112,7 +143,8 @@ async function run(push: (c: Check) => void): Promise<void> {
     push({ group: 'router', what: 'Code', expected: `${EXPECT.router.code} · ${shortHash(EXPECT.router.checksum)} (this repository's build)`, found: `${rInfo?.code_id ?? 'no answer'} · ${shortHash(rSum)}`, state: rInfo?.code_id === EXPECT.router.code && rSum === EXPECT.router.checksum ? 'ok' : 'bad', href: `${REPO}/tree/main/contracts/router` })
     push({ group: 'router', what: 'Migrate admin', expected: 'none', found: rInfo ? rInfo.admin || 'none' : 'no answer', state: rInfo && !rInfo.admin ? 'ok' : 'bad' })
     const f = rConfig?.factories ?? []
-    push({ group: 'router', what: 'Factories it trusts', expected: "Terra Swap's and Astroport's, nothing else", found: f.length ? f.map(x => (x === TERRA_SWAP_FACTORY ? 'Terra Swap' : x === ASTRO_FACTORY ? 'Astroport' : x)).join(' + ') : 'no answer', state: f.length === 2 && f[0] === TERRA_SWAP_FACTORY && f[1] === ASTRO_FACTORY ? 'ok' : 'bad' })
+    const nameOf = (x: string) => (x === TERRA_SWAP_FACTORY ? 'Terra Swap' : x === TERRA_SWAP_FACTORY_V2 ? 'Terra Swap v2' : x === ASTRO_FACTORY ? 'Astroport' : x)
+    push({ group: 'router', what: 'Factories it trusts', expected: `${ROUTER_FACTORIES.map(nameOf).join(' + ')}, nothing else`, found: f.length ? f.map(nameOf).join(' + ') : 'no answer', state: f.length === ROUTER_FACTORIES.length && f.every((x, i) => x === ROUTER_FACTORIES[i]) ? 'ok' : 'bad' })
   }
 
   const external: [string, string][] = [["Astroport's factory", ASTRO_FACTORY], ["Astroport's router", ASTRO_ROUTER], ["Astroport's incentives", VENUE_INCENTIVES.astroport ?? '']]
