@@ -79,9 +79,47 @@ const round = (n, d = 2) => (Number.isFinite(n) ? Math.round(n * 10 ** d) / 10 *
  * the activity in that interval, so the daily figure grows out of the log
  * instead of being recomputed on every page view.
  */
-async function txCount() {
-  const query = encodeURIComponent(`wasm._contract_address='${PORTFOLIO}'`)
-  for (const lcd of ['https://terra-lcd.publicnode.com', 'https://terra-api.polkachu.com']) {
+/**
+ * Terra 2 blocks measured at 5.77 seconds over ten thousand of them, rather
+ * than assumed. The first guess here was 4.3 seconds, which made this window
+ * 32 hours while the page called it a day.
+ */
+const BLOCKS_PER_DAY = 15_000
+
+async function height() {
+  for (const lcd of LCDS) {
+    try {
+      const r = await fetch(`${lcd}/cosmos/base/tendermint/v1beta1/blocks/latest`, {
+        headers: { 'user-agent': UA, accept: 'application/json' },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      })
+      const j = await r.json()
+      const h = Number(j?.block?.header?.height)
+      if (Number.isFinite(h) && h > 0) return h
+    } catch { /* try the next one */ }
+  }
+  return null
+}
+
+/**
+ * Transactions against the contract in the last day.
+ *
+ * The obvious version of this asks how many there have ever been and subtracts
+ * yesterday's answer. That does not work here: public nodes prune at different
+ * depths and count only what they still hold, so the same question returned
+ * 631, 3795 and 11621 within a minute depending on which node answered. A
+ * running total built from that jumps by thousands and then flatlines, and none
+ * of it is activity.
+ *
+ * Bounded by height, the nodes agree exactly — 93 and 93, repeatedly — because
+ * every one of them still holds the last day. So each reading measures its own
+ * window and stands alone, and a missed run leaves a gap rather than a spike.
+ */
+async function txsLastDay(h) {
+  if (h === null) return null
+  const from = h - BLOCKS_PER_DAY
+  const query = encodeURIComponent(`wasm._contract_address='${PORTFOLIO}' AND tx.height>=${from}`)
+  const counts = await Promise.all(LCDS.map(async lcd => {
     try {
       const r = await fetch(`${lcd}/cosmos/tx/v1beta1/txs?query=${query}&pagination.limit=1&pagination.count_total=true`, {
         headers: { 'user-agent': UA, accept: 'application/json' },
@@ -89,19 +127,29 @@ async function txCount() {
       })
       const j = await r.json()
       const total = Number(j?.total ?? j?.pagination?.total)
-      // Nodes prune at different depths, so the deepest answer is the real one.
-      if (Number.isFinite(total) && total > 0) return total
-    } catch { /* try the next one */ }
-  }
-  return null
+      return Number.isFinite(total) ? total : null
+    } catch {
+      return null
+    }
+  }))
+
+  // Nodes that answer this agree; one that cannot is simply absent rather than
+  // dragging the figure down.
+  const found = counts.filter(n => n !== null)
+  if (found.length === 0) return null
+  return Math.max(...found)
 }
 
-const [metrics, states, prices, portfolios, txs] = await Promise.all([
+// The window has to be pinned to a block before it can be counted, so this one
+// query cannot join the batch below.
+const blockHeight = await height()
+
+const [metrics, states, prices, portfolios, txs24h] = await Promise.all([
   smart(PORTFOLIO, { metrics: {} }),
   smart(PORTFOLIO, { asset_states: {} }),
   smart(ORACLE, { prices: {} }),
   smart(PORTFOLIO, { portfolios: { limit: 500 } }),
-  txCount(),
+  txsLastDay(blockHeight),
 ])
 
 // Price and decimals per asset, from the oracle the protocol itself prices with.
@@ -170,10 +218,11 @@ const line = JSON.stringify({
   utilization: supplied > 0 ? round(borrowed / supplied, 4) : null,
   accounts: (portfolios ?? []).length,
   borrowers: withDebt.length,
-  // Every transaction that has ever touched the contract. The daily figure is
-  // the difference between two of these, which is why it is recorded rather
-  // than counted again on every visit.
-  txs,
+  height: blockHeight,
+  // Transactions against the contract over the day before this reading, counted
+  // within a fixed range of blocks. Each reading stands on its own, so a missed
+  // run leaves a gap in the line rather than a spike in the next one.
+  txs24h,
   atRisk: {
     below2: below(2).length,
     below1_2: below(1.2).length,
