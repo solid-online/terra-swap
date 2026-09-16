@@ -25,7 +25,6 @@ input[type='number']::-webkit-inner-spin-button { -webkit-appearance: none; marg
 /* The address under the wordmark. Small on purpose: it names the place, it is not the brand. */
 .tl-domain { margin: 2px 0 0; font-size: 0.72rem; letter-spacing: 0.12em; color: var(--tl-muted, #9a927f); }
 
-/* ── The family, shown rather than hidden ──────────────────────────── */
 /* One line above the wordmark. Lighter than the page's own tabs on purpose:
    two navigations that shout equally loudly are two navigations nobody reads. */
 .tl-eco { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; }
@@ -41,7 +40,21 @@ input[type='number']::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .tl-eco-home:hover { color: var(--tl-gold, #ffd83d); }
 @media (max-width: 560px) { .tl-eco-item { padding: 0.16rem 0.42rem; font-size: 0.66rem; } }
 
-/* Air above the wordmark: the family row, the tagline and the wordmark are three
-   separate things and should not read as one block stuck to the top edge. */
-.tl-eco { margin-bottom: 0.45rem; }
+/* ── The family, shown rather than hidden ──────────────────────────── */
+/* One row, identical on every surface: the hub and the five apps share these
+   exact rules. Heavy enough to read at a glance, lighter than the page's own
+   tabs, because two navigations shouting equally loudly are two nobody reads. */
+.tl-eco { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-bottom: 0.5rem; }
+.tl-eco-item { display: inline-flex; align-items: center; gap: 0.36rem; padding: 0.26rem 0.62rem; border-radius: 999px;
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; text-transform: none; text-decoration: none;
+  white-space: nowrap; color: var(--tl-muted, #9a927f);
+  border: 1px solid var(--tl-divider, rgba(255, 216, 61, 0.13)); background: rgba(11, 15, 28, 0.6); }
+.tl-eco-item:hover { color: var(--tl-gold, #ffd83d); border-color: var(--tl-gold, #ffd83d); }
+.tl-eco-item.is-here { color: var(--tl-text, #f4f1e8); background: rgba(255, 216, 61, 0.08);
+  border-color: var(--tl-gold, #ffd83d); }
+.tl-eco-glyph { font-size: 0.9em; opacity: 0.9; }
+.tl-eco-home { margin-left: 0.2rem; font-size: 0.66rem; letter-spacing: 0.08em; text-transform: none;
+  color: var(--tl-whisper, #6b6555); text-decoration: none; white-space: nowrap; }
+.tl-eco-home:hover { color: var(--tl-gold, #ffd83d); }
 .tl-kicker { margin-bottom: 0.15rem; }
+@media (max-width: 560px) { .tl-eco-item { padding: 0.22rem 0.52rem; font-size: 0.68rem; } }
