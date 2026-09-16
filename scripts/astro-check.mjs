@@ -312,8 +312,8 @@ denoms.forEach((d, i) => { if (decList[i] != null) dec[d] = decList[i] })
 
 // Two different reasons a pool has no value here, and they must not be reported
 // as one: an asset whose decimals the chain does not publish, and an asset with
-// no route to the dollar. The first is a gap in what can be read, the second is
-// a statement about the asset — nothing that could be traded to USDC through
+// no route to the dollar. The first is a gap in what can be read. The second is
+// a statement about the asset itself, which nothing could trade to USDC through
 // pools with real depth behind them.
 const priceable = held.filter(p => p.assets.every(a => dec[a.denom] != null))
 const noDecimals = held.length - priceable.length
