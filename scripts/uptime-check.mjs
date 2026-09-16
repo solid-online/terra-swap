@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * One uptime check of the maintained sites, appended as JSON lines to
- * <dir>/uptime/YYYY-MM.jsonl.
+ * <dir>/uptime/YYYY-MM.jsonl. Terra Status shows them (status.terraluna.app),
+ * and so does the swap's own /stats.
  *
  * .github/workflows/uptime.yml runs it every 10 minutes on GitHub's machines,
  * so the sites are measured from outside the host that serves them, and the
@@ -27,6 +28,34 @@ const TARGETS = [
       { url: 'https://swap.terraluna.app/api/dex', json: true, expect: (r, j) => r.status === 200 && j?.live === true && j?.pools?.length > 0 },
       // Astroport's pools, listed on the same site since pools.terraluna.app was folded into it (2026-09-14).
       { url: 'https://swap.terraluna.app/api/dex-venue', json: true, expect: (r, j) => r.status === 200 && j?.pools?.length > 0 },
+    ],
+  },
+  {
+    site: 'nft.terraluna.app',
+    checks: [
+      { url: 'https://nft.terraluna.app/', expect: (r) => r.status === 200 },
+      { url: 'https://nft.terraluna.app/api/for-sale?limit=1', json: true, expect: (r, j) => r.status === 200 && typeof j?.total === 'number' },
+    ],
+  },
+  {
+    // Terra Gov's own reads are heavy enough that asking for one every ten minutes would be rude to the chain; the page is the check.
+    site: 'gov.terraluna.app',
+    checks: [
+      { url: 'https://gov.terraluna.app/', expect: (r) => r.status === 200 },
+    ],
+  },
+  {
+    site: 'terraluna.app',
+    checks: [
+      { url: 'https://terraluna.app/', expect: (r) => r.status === 200 },
+      { url: 'https://terraluna.app/api/pulse', json: true, expect: (r, j) => r.status === 200 && !!j },
+    ],
+  },
+  {
+    site: 'status.terraluna.app',
+    checks: [
+      { url: 'https://status.terraluna.app/', expect: (r) => r.status === 200 },
+      { url: 'https://status.terraluna.app/api/chain', json: true, expect: (r, j) => r.status === 200 && j?.height > 0 },
     ],
   },
   {

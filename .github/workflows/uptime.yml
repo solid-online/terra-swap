@@ -1,6 +1,8 @@
-# Checks swap.terraluna.app (Terra Swap's and Astroport's pools) and atrium.markets every
-# 10 minutes from GitHub's machines and appends each result to uptime/YYYY-MM.jsonl on
-# the `status` branch. See scripts/uptime-check.mjs.
+# Checks the TerraLuna sites and atrium.markets every 10 minutes from GitHub's machines
+# and appends each result to uptime/YYYY-MM.jsonl on the `status` branch, and reads Terra
+# itself and every public endpoint into chain/YYYY-MM-DD.jsonl beside it. Both logs are
+# public, and status.terraluna.app reads them back. See scripts/uptime-check.mjs and
+# scripts/chain-check.mjs.
 #
 # GitHub starts scheduled workflows when it has capacity, not on the minute: the
 # `*/10` schedule this workflow began with ran three times on its first day
@@ -54,9 +56,10 @@ jobs:
           end=$(( $(date +%s) + WATCH_MINUTES * 60 ))
           while :; do
             node scripts/uptime-check.mjs status-data || echo "check did not complete"
+            node scripts/chain-check.mjs status-data || echo "chain check did not complete"
             (
               cd status-data
-              git add uptime
+              git add uptime chain
               git commit -q -m "uptime $(date -u +%Y-%m-%dT%H:%MZ)" || exit 0
               for i in 1 2 3; do
                 git pull -q --rebase origin status && git push -q origin HEAD:status && exit 0
