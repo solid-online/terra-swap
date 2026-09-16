@@ -5073,6 +5073,11 @@ function Hero({ poolFeeBps, onReplay, onHome, onToast, me, right }: { poolFeeBps
           <span><span style={{ fontWeight: 700 }}>Terra</span> <span style={{ fontWeight: 300, letterSpacing: '0' }}>{LITE ? 'Pools' : 'Swap'}</span></span>
         </Link>
       </h1>
+      {/* Above the fold on purpose: nobody should have to reach the footer to learn who does not stand behind this. */}
+      <p className='tl-independent' style={{ margin: '0 0 0.6rem', maxWidth: '46rem', fontSize: '0.72rem', lineHeight: 1.55, color: '#9a927f' }}>
+        An independent project, not an official Terra product. Not affiliated with, endorsed by or connected to
+        Terraform Labs, Phoenix Foundation or the Phoenix Directive.
+      </p>
      </div>
       {right && (
         <div className='terra-hero-right' style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], flex: 'none', marginBottom: '0.6rem' }}>
