@@ -33,7 +33,7 @@ const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace'
 export const getServerSideProps: GetServerSideProps = async ctx => {
   const addr = String(ctx.params?.addr ?? '')
   if (!ADDR.test(addr)) return { notFound: true }
-  const base = `https://${ctx.req.headers.host ?? 'swap.terraluna.app'}`
+  const base = `https://${ctx.req.headers.host ?? 'swap.openfields.app'}`
   let label = ''
   let share = ''
   try {

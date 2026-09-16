@@ -11,7 +11,7 @@
  * was. ep: every public endpoint (the Cosmos chain registry's list for terra2,
  * plus a few apps use that it does not list), 1 when it answered within 20
  * blocks of the best, with its response time from here. ibc: whether each of
- * Terra's main bridges was fine, from status.terraluna.app's own reading,
+ * Terra's main bridges was fine, from status.openfields.app's own reading,
  * which costs a few dozen transaction searches and is not repeated here.
  *
  * .github/workflows/uptime.yml runs it every ten minutes on GitHub's machines,
@@ -25,9 +25,9 @@ import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 const dir = process.argv[2] || 'status-data'
-const UA = 'terraluna-status-check (+https://status.terraluna.app)'
+const UA = 'terraluna-status-check (+https://status.openfields.app)'
 const REGISTRY = 'https://raw.githubusercontent.com/cosmos/chain-registry/master/terra2/chain.json'
-const IBC = 'https://status.terraluna.app/api/ibc?compact=1'
+const IBC = 'https://status.openfields.app/api/ibc?compact=1'
 const TIMEOUT_MS = 10_000
 const LAG_BLOCKS = 20
 

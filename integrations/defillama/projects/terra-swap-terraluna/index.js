@@ -1,6 +1,6 @@
 const { getFactoryTvl } = require('../terraswap/factoryTvl')
 
-// Terra Swap's own factory on Terra (swap.terraluna.app). No owner, no admin, no protocol fee.
+// Terra Swap's own factory on Terra (swap.openfields.app). No owner, no admin, no protocol fee.
 const factory = 'terra1gx7n4yrfc2req7tdt9vpj66kr0cssnqkjsr80xmfacjpdlw6mzlqvlp3xd'
 
 module.exports = {

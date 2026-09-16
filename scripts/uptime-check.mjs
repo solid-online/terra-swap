@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * One uptime check of the maintained sites, appended as JSON lines to
- * <dir>/uptime/YYYY-MM.jsonl. Terra Status shows them (status.terraluna.app),
+ * <dir>/uptime/YYYY-MM.jsonl. Terra Status shows them (status.openfields.app),
  * and so does the swap's own /stats.
  *
  * .github/workflows/uptime.yml runs it every 10 minutes on GitHub's machines,
@@ -22,47 +22,47 @@ const UA = 'terra-swap-uptime (+https://github.com/solid-online/terra-swap)'
 
 const TARGETS = [
   {
-    site: 'swap.terraluna.app',
+    site: 'swap.openfields.app',
     checks: [
-      { url: 'https://swap.terraluna.app/', expect: (r) => r.status === 200 },
-      { url: 'https://swap.terraluna.app/api/dex', json: true, expect: (r, j) => r.status === 200 && j?.live === true && j?.pools?.length > 0 },
-      // Astroport's pools, listed on the same site since pools.terraluna.app was folded into it (2026-09-14).
-      { url: 'https://swap.terraluna.app/api/dex-venue', json: true, expect: (r, j) => r.status === 200 && j?.pools?.length > 0 },
+      { url: 'https://swap.openfields.app/', expect: (r) => r.status === 200 },
+      { url: 'https://swap.openfields.app/api/dex', json: true, expect: (r, j) => r.status === 200 && j?.live === true && j?.pools?.length > 0 },
+      // Astroport's pools, listed on the same site since pools.openfields.app was folded into it (2026-09-14).
+      { url: 'https://swap.openfields.app/api/dex-venue', json: true, expect: (r, j) => r.status === 200 && j?.pools?.length > 0 },
     ],
   },
   {
-    site: 'nft.terraluna.app',
+    site: 'nft.openfields.app',
     checks: [
-      { url: 'https://nft.terraluna.app/', expect: (r) => r.status === 200 },
-      { url: 'https://nft.terraluna.app/api/for-sale?limit=1', json: true, expect: (r, j) => r.status === 200 && typeof j?.total === 'number' },
+      { url: 'https://nft.openfields.app/', expect: (r) => r.status === 200 },
+      { url: 'https://nft.openfields.app/api/for-sale?limit=1', json: true, expect: (r, j) => r.status === 200 && typeof j?.total === 'number' },
     ],
   },
   {
     // Terra Gov's own reads are heavy enough that asking for one every ten minutes would be rude to the chain; the page is the check.
-    site: 'gov.terraluna.app',
+    site: 'gov.openfields.app',
     checks: [
-      { url: 'https://gov.terraluna.app/', expect: (r) => r.status === 200 },
+      { url: 'https://gov.openfields.app/', expect: (r) => r.status === 200 },
     ],
   },
   {
-    site: 'terraluna.app',
+    site: 'openfields.app',
     checks: [
-      { url: 'https://terraluna.app/', expect: (r) => r.status === 200 },
-      { url: 'https://terraluna.app/api/pulse', json: true, expect: (r, j) => r.status === 200 && !!j },
+      { url: 'https://openfields.app/', expect: (r) => r.status === 200 },
+      { url: 'https://openfields.app/api/pulse', json: true, expect: (r, j) => r.status === 200 && !!j },
     ],
   },
   {
-    site: 'status.terraluna.app',
+    site: 'status.openfields.app',
     checks: [
-      { url: 'https://status.terraluna.app/', expect: (r) => r.status === 200 },
-      { url: 'https://status.terraluna.app/api/chain', json: true, expect: (r, j) => r.status === 200 && j?.height > 0 },
+      { url: 'https://status.openfields.app/', expect: (r) => r.status === 200 },
+      { url: 'https://status.openfields.app/api/chain', json: true, expect: (r, j) => r.status === 200 && j?.height > 0 },
     ],
   },
   {
-    site: 'stake.terraluna.app',
+    site: 'stake.openfields.app',
     checks: [
-      { url: 'https://stake.terraluna.app/', expect: (r) => r.status === 200 },
-      { url: 'https://stake.terraluna.app/api/validators', json: true, expect: (r, j) => r.status === 200 && j?.rows?.length > 0 },
+      { url: 'https://stake.openfields.app/', expect: (r) => r.status === 200 },
+      { url: 'https://stake.openfields.app/api/validators', json: true, expect: (r, j) => r.status === 200 && j?.rows?.length > 0 },
     ],
   },
   {

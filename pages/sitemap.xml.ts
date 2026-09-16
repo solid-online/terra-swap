@@ -14,7 +14,7 @@ export const config = { maxDuration: 60 }
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 export const getServerSideProps: GetServerSideProps = async ({ req, res }) => {
-  const base = `https://${req.headers.host ?? 'swap.terraluna.app'}`
+  const base = `https://${req.headers.host ?? 'swap.openfields.app'}`
   const urls = ['/', '/?tab=pools', '/?tab=bridge', '/stats', '/verify']
   let tokens = KNOWN_TOKENS.map(t => t.key)
   const pools: string[] = []

@@ -131,8 +131,8 @@ async function terraSwapSection() {
     if (got.length < 30) break
     startAfter = got[got.length - 1].asset_infos
   }
-  const dex = await getJson('https://swap.terraluna.app/api/dex')
-  const market = await getJson('https://swap.terraluna.app/api/dex-market')
+  const dex = await getJson('https://swap.openfields.app/api/dex')
+  const market = await getJson('https://swap.openfields.app/api/dex-market')
   const px = market?.px ?? {}
   const decimals = {}
   for (const p of dex?.pools ?? []) for (const t of p.tokens) decimals['native_token' in t.info ? t.info.native_token.denom : t.info.token.contract_addr] = t.decimals
@@ -321,7 +321,7 @@ async function routeBenchmark(pools, px) {
 }
 
 async function routingSection() {
-  const [{ dex, venue }, market] = await Promise.all([sitePools(), getJson('https://swap.terraluna.app/api/dex-market')])
+  const [{ dex, venue }, market] = await Promise.all([sitePools(), getJson('https://swap.openfields.app/api/dex-market')])
   const px = market?.px ?? {}
   const pools = [...(dex?.pools ?? []), ...(venue?.pools ?? [])].filter((p) => !p.empty)
   const decimals = {}
@@ -342,18 +342,18 @@ async function routingSection() {
 
 // ─── The pools interface and Atrium ─────────────────────────────
 
-/** Both sites' pools as swap.terraluna.app serves them, fetched once for the sections that need them. */
+/** Both sites' pools as swap.openfields.app serves them, fetched once for the sections that need them. */
 let poolsOnce = null
 function sitePools() {
   poolsOnce ??= Promise.all([
-    getJson('https://swap.terraluna.app/api/dex'),
-    getJson('https://swap.terraluna.app/api/dex-venue', 120_000),
+    getJson('https://swap.openfields.app/api/dex'),
+    getJson('https://swap.openfields.app/api/dex-venue', 120_000),
   ]).then(([dex, venue]) => ({ dex, venue }))
   return poolsOnce
 }
 
 async function poolsSection() {
-  // Astroport's pools are listed on swap.terraluna.app since pools.terraluna.app was folded into it (2026-09-14).
+  // Astroport's pools are listed on swap.openfields.app since pools.openfields.app was folded into it (2026-09-14).
   const { venue } = await sitePools()
   if (!venue) return ['- The Astroport pool list did not answer when this report was generated.']
   const tvl = (venue.pools ?? []).reduce((s, p) => s + (p.tvlUsd ?? 0), 0)

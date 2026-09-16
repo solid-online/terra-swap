@@ -20,7 +20,7 @@ const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 const PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || ''
 const PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || ''
 /** Who push services should contact about these messages: the site itself. */
-const SUBJECT = process.env.VAPID_SUBJECT || 'https://swap.terraluna.app'
+const SUBJECT = process.env.VAPID_SUBJECT || 'https://swap.openfields.app'
 const LOCK = 'atrium:push:v1:lock'
 /** The market reference /api/dex-market keeps; read from there when it is fresh, so a check does not scan Astroport again. */
 const MARKET_KEY = `atrium:dex:market:v2:${DEX_FACTORY}`

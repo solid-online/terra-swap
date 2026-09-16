@@ -1,6 +1,6 @@
 /**
- * "TerraLuna ▾" in the kicker line: the other TerraLuna apps one click away,
- * and terraluna.app with all of them. The same menu Terra NFT shows, so the
+ * "Openfields ▾" in the kicker line: the other Openfields apps one click away,
+ * and openfields.app with all of them. The same menu Terra NFT shows, so the
  * apps read as one family. Deliberately small; the tabs do the navigating.
  */
 
@@ -8,11 +8,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useLang } from 'lib/i18n'
 
 const trim = (u: string) => u.replace(/\/+$/, '')
-export const NFT_URL = trim(process.env.NEXT_PUBLIC_NFT_URL || 'https://nft.terraluna.app')
-export const GOV_URL = trim(process.env.NEXT_PUBLIC_GOV_URL || 'https://gov.terraluna.app')
-export const STATUS_URL = trim(process.env.NEXT_PUBLIC_STATUS_URL || 'https://status.terraluna.app')
-export const STAKE_URL = trim(process.env.NEXT_PUBLIC_STAKE_URL || 'https://stake.terraluna.app')
-export const HOME_URL = trim(process.env.NEXT_PUBLIC_HOME_URL || 'https://terraluna.app')
+export const NFT_URL = trim(process.env.NEXT_PUBLIC_NFT_URL || 'https://nft.openfields.app')
+export const GOV_URL = trim(process.env.NEXT_PUBLIC_GOV_URL || 'https://gov.openfields.app')
+export const STATUS_URL = trim(process.env.NEXT_PUBLIC_STATUS_URL || 'https://status.openfields.app')
+export const STAKE_URL = trim(process.env.NEXT_PUBLIC_STAKE_URL || 'https://stake.openfields.app')
+export const HOME_URL = trim(process.env.NEXT_PUBLIC_HOME_URL || 'https://openfields.app')
 
 const FONT = "'Montserrat', 'Space Grotesk', 'Inter', system-ui, sans-serif"
 
@@ -72,14 +72,14 @@ export default function AppSwitcher() {
     <div className='tls' ref={root}>
       <style>{CSS}</style>
       <button type='button' className='tls-trigger' aria-haspopup='menu' aria-expanded={open} onClick={() => setOpen(o => !o)}>
-        TerraLuna
+        Openfields
         <svg className='tls-chevron' viewBox='0 0 12 12' aria-hidden fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
           <path d='M3 4.5 6 7.5 9 4.5' />
         </svg>
       </button>
       {open && (
         <div className='tls-menu' role='menu'>
-          <div className='tls-heading'>{t('TerraLuna apps')}</div>
+          <div className='tls-heading'>{t('Openfields apps')}</div>
           {apps.map(a => (
             <a key={a.key} role='menuitem' className='tls-item' href={a.url} aria-current={a.here ? 'true' : undefined}
               onClick={e => { if (a.here) e.preventDefault(); setOpen(false) }}>
@@ -92,7 +92,7 @@ export default function AppSwitcher() {
             </a>
           ))}
           <a role='menuitem' className='tls-foot' href={HOME_URL} onClick={() => setOpen(false)}>
-            {t('All apps at terraluna.app')} <span aria-hidden>↗</span>
+            {t('All apps at openfields.app')} <span aria-hidden>↗</span>
           </a>
         </div>
       )}

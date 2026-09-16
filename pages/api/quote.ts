@@ -103,7 +103,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       trade = planTrade(q.split ?? [{ quote: q.best, share: 1 }], SLIPPAGE)
       pay = amount
     }
-    const host = req.headers.host ?? 'swap.terraluna.app'
+    const host = req.headers.host ?? 'swap.openfields.app'
     const body: QuoteResponse = {
       from: from.key,
       to: to.key,

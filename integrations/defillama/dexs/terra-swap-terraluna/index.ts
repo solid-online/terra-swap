@@ -2,10 +2,10 @@ import { FetchOptions, FetchResultV2, SimpleAdapter } from "../../adapters/types
 import { CHAIN } from "../../helpers/chains";
 import fetchURL from "../../utils/fetchURL";
 
-// Terra Swap's own pools on Terra (swap.terraluna.app). Every pool is constant-product with a 0.3% fee,
+// Terra Swap's own pools on Terra (swap.openfields.app). Every pool is constant-product with a 0.3% fee,
 // all of it paid to liquidity providers; the protocol keeps nothing.
 const fetch = async (options: FetchOptions): Promise<FetchResultV2> => {
-  const r = await fetchURL(`https://swap.terraluna.app/api/volume?start=${options.startTimestamp}&end=${options.endTimestamp}`);
+  const r = await fetchURL(`https://swap.openfields.app/api/volume?start=${options.startTimestamp}&end=${options.endTimestamp}`);
   const dailyFees = options.createBalances();
   dailyFees.addUSDValue(r.feesUsd);
   return {

@@ -72,7 +72,7 @@ vercel env add NEXT_PUBLIC_PREDICT_CONTRACT production   # paste the contract ad
 vercel --prod --yes
 ```
 
-Until the variable is set, swap.terraluna.app/predict shows "Not live yet".
+Until the variable is set, swap.openfields.app/predict shows "Not live yet".
 
 ## 5. First market (optional smoke test)
 

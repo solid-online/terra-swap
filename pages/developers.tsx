@@ -29,7 +29,7 @@ function Param({ k, v }: { k: string; v: React.ReactNode }) {
 }
 
 export const getServerSideProps: GetServerSideProps = async ctx => {
-  const base = `https://${ctx.req.headers.host ?? 'swap.terraluna.app'}`
+  const base = `https://${ctx.req.headers.host ?? 'swap.openfields.app'}`
   return {
     props: {
       base,

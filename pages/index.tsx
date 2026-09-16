@@ -2465,13 +2465,13 @@ type TransferStatus = { tx: string; chain: string; text: string; done?: boolean;
  */
 function useGasDrop(a: { me: string; incoming: boolean; from: KnownToken; target: KnownToken; amountMicro: string | null; pools: PoolView[]; refresh?: unknown }) {
   const { px } = useTokenData()
-  const [terraLuna, setTerraLuna] = useState<string | null>(null)
+  const [terraLuna, setOpenfields] = useState<string | null>(null)
   const [on, setOn] = useState(true)
   const [priced, setPriced] = useState<{ micro: string; plan: RoutePlan } | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   useEffect(() => {
-    if (!a.me) { setTerraLuna(null); return }
-    queryBalance(a.me, LUNA.info).then(setTerraLuna).catch(() => {})
+    if (!a.me) { setOpenfields(null); return }
+    queryBalance(a.me, LUNA.info).then(setOpenfields).catch(() => {})
   }, [a.me, a.refresh])
   const wanted = a.incoming && terraLuna != null && BigInt(terraLuna || '0') < GAS_DROP_BELOW_MICRO && !sameAsset(a.target.info, LUNA.info)
   const micro = wanted ? gasDropMicro({ from: a.from, amountMicro: a.amountMicro, fromUsd: px?.[assetId(a.from.info)], lunaUsd: px?.uluna }) : null
@@ -4345,7 +4345,7 @@ const PCL_DEFAULTS = {
 function CreatePanel({ pools, marketPx, onDone, onCreated, onBack, onParty }: { pools: PoolView[]; marketPx?: Record<string, number> | null; onDone: () => void; onCreated: () => void; onBack?: () => void; onParty: (x: Party) => void }) {
   const me = useMyAddress()
   const create = useCreatePair()
-  // Both factories from one page since pools.terraluna.app was folded into this one (2026-09-14).
+  // Both factories from one page since pools.openfields.app was folded into this one (2026-09-14).
   const [venue, setVenue] = useState<Venue>(HOME_VENUE)
   const [a, setA] = useState(assetId(KNOWN_TOKENS[0].info))
   const [b, setB] = useState(assetId(KNOWN_TOKENS[1].info))
@@ -5049,7 +5049,7 @@ function Hero({ poolFeeBps, onReplay, onHome, onToast, me, right }: { poolFeeBps
     <div className='terra-hero' style={{ marginTop: SPACE['3'], display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SPACE['3'], flexWrap: 'wrap' }}>
      <div style={{ minWidth: 0 }}>
       <div style={{ fontSize: '0.62rem', letterSpacing: '0.34em', color: C.korea, fontWeight: 800, textTransform: 'uppercase', marginBottom: SPACE['2'], display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-        {/* The other TerraLuna apps, and terraluna.app with all of them. Not on the Astroport-only pools site. */}
+        {/* The other Openfields apps, and openfields.app with all of them. Not on the Astroport-only pools site. */}
         {!LITE && <><AppSwitcher /><span aria-hidden>·</span></>}
         <span>{(() => {
           const h = new Date().getHours()
@@ -5360,7 +5360,7 @@ function SwapPageInner() {
     return () => { alive = false; clearInterval(iv) }
   }, [])
   const swapVenuePools = useMemo(() => [...venuePools, ...skeletonPools.filter(p => p.swapsEnabled === true)], [venuePools, skeletonPools])
-  /** Every venue's pools in one list: both sites', since pools.terraluna.app was folded into this page (2026-09-14), and Skeleton Swap's (2026-09-15). */
+  /** Every venue's pools in one list: both sites', since pools.openfields.app was folded into this page (2026-09-14), and Skeleton Swap's (2026-09-15). */
   const allPools = useMemo(() => {
     const own = data?.pools ?? []
     const seen = new Set(own.map(p => p.contract_addr))
@@ -5530,7 +5530,7 @@ function SwapPageInner() {
       ...(!LITE ? [
         { id: 'app-nft', group: 'Pages', label: 'Terra NFT', hint: 'collections, listings and offers on Terra NFT, Necropolis and Boost', keywords: 'nft collectibles marketplace necropolis boost listings offers buy sell terraluna apps', icon: icon('◆'), run: () => { window.location.href = NFT_URL } },
         { id: 'app-gov', group: 'Pages', label: 'Terra Gov', hint: 'proposals, votes, validators and where the community pool’s money went', keywords: 'governance proposals vote validators community pool phoenix directive treasury terraluna apps', icon: icon('§'), run: () => { window.location.href = GOV_URL } },
-        { id: 'app-home', group: 'Pages', label: 'All TerraLuna apps', hint: 'terraluna.app', keywords: 'terraluna apps home other products nft gov switcher', icon: icon('🌍'), run: () => { window.location.href = HOME_URL } },
+        { id: 'app-home', group: 'Pages', label: 'All Openfields apps', hint: 'openfields.app', keywords: 'terraluna apps home other products nft gov switcher', icon: icon('🌍'), run: () => { window.location.href = HOME_URL } },
       ] : []),
     ]
     const tokens = new Map<string, KnownToken>()

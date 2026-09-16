@@ -1,7 +1,7 @@
-# Checks the TerraLuna sites and atrium.markets every 10 minutes from GitHub's machines
+# Checks the Openfields sites and atrium.markets every 10 minutes from GitHub's machines
 # and appends each result to uptime/YYYY-MM.jsonl on the `status` branch, and reads Terra
 # itself and every public endpoint into chain/YYYY-MM-DD.jsonl beside it. Both logs are
-# public, and status.terraluna.app reads them back. See scripts/uptime-check.mjs and
+# public, and status.openfields.app reads them back. See scripts/uptime-check.mjs and
 # scripts/chain-check.mjs.
 #
 # GitHub starts scheduled workflows when it has capacity, not on the minute: the
@@ -67,8 +67,8 @@ jobs:
               done
               echo "could not push this result; the next one carries it"
             )
-            curl -fsS -m 90 -o /dev/null https://swap.terraluna.app/api/price-record || echo "price record did not answer"
-            curl -fsS -m 90 -o /dev/null https://swap.terraluna.app/api/push-check || echo "alert check did not answer"
+            curl -fsS -m 90 -o /dev/null https://swap.openfields.app/api/price-record || echo "price record did not answer"
+            curl -fsS -m 90 -o /dev/null https://swap.openfields.app/api/push-check || echo "alert check did not answer"
             now=$(date +%s)
             next=$(( (now / 600 + 1) * 600 ))
             if [ "$next" -ge "$end" ]; then break; fi

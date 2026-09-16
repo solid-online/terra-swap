@@ -35,7 +35,7 @@ function Embed() {
   const [quote, setQuote] = useState<QuoteResponse | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [origin, setOrigin] = useState('https://swap.terraluna.app')
+  const [origin, setOrigin] = useState('https://swap.openfields.app')
 
   useEffect(() => {
     const p = new URLSearchParams(window.location.search)

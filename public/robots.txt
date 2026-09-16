@@ -2,4 +2,4 @@ User-agent: *
 Allow: /
 Disallow: /api/
 
-Sitemap: https://swap.terraluna.app/sitemap.xml
+Sitemap: https://swap.openfields.app/sitemap.xml

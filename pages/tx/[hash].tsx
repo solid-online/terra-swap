@@ -50,7 +50,7 @@ export const getServerSideProps: GetServerSideProps = async ctx => {
   const hash = raw.toUpperCase()
   if (raw !== hash) return { redirect: { destination: `/tx/${hash}`, permanent: true } }
   const receipt = await readReceipt(hash)
-  const base = `https://${ctx.req.headers.host ?? 'swap.terraluna.app'}`
+  const base = `https://${ctx.req.headers.host ?? 'swap.openfields.app'}`
   // A transaction never changes once it is in a block, so a found receipt can be kept at the edge.
   if (receipt) ctx.res.setHeader('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400')
   const vs = receipt ? vsQuote(receipt) : null

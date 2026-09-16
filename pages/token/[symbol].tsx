@@ -55,7 +55,7 @@ export const getServerSideProps: GetServerSideProps = async ctx => {
   const t = KNOWN_TOKENS.find(x => x.key.toLowerCase() === raw.toLowerCase())
   if (!t) return { notFound: true }
   if (t.key !== raw) return { redirect: { destination: `/token/${encodeURIComponent(t.key)}`, permanent: false } }
-  const base = `https://${ctx.req.headers.host ?? 'swap.terraluna.app'}`
+  const base = `https://${ctx.req.headers.host ?? 'swap.openfields.app'}`
   const meta = TOKEN_META[t.key]
   return {
     props: {

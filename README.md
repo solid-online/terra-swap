@@ -6,7 +6,7 @@ plus **Terra Predict**, an admin-less prediction market. Experimental.
 Anyone can run this. The pools are on chain and belong to no one; this
 repository is one way to look at them.
 
-**Live instance:** https://swap.terraluna.app
+**Live instance:** https://swap.openfields.app
 
 ## What it is
 
