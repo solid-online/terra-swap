@@ -59,6 +59,13 @@ const TARGETS = [
     ],
   },
   {
+    site: 'stake.terraluna.app',
+    checks: [
+      { url: 'https://stake.terraluna.app/', expect: (r) => r.status === 200 },
+      { url: 'https://stake.terraluna.app/api/validators', json: true, expect: (r, j) => r.status === 200 && j?.rows?.length > 0 },
+    ],
+  },
+  {
     site: 'atrium.markets',
     checks: [
       { url: 'https://atrium.markets/', expect: (r) => r.status === 200 },
