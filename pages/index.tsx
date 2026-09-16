@@ -72,6 +72,10 @@ import { askNotifications, fmtUsdPrice, notificationsAllowed, removeAlert, toggl
 
 type Tab = 'swap' | 'pools' | 'positions' | 'wallet' | 'history' | 'transfer' | 'create' | 'board'
 
+/** How the pools list is ordered. */
+type PoolSort = 'suggested' | 'tvl' | 'traded' | 'name'
+const POOL_SORT_LABEL: Record<PoolSort, string> = { suggested: 'Suggested', tvl: 'TVL', traded: 'Most traded', name: 'Name' }
+
 /**
  * Each section has an address (?tab=bridge, ?tab=portfolio…), so any of them can be linked to and survives
  * a reload. Named for what people call them; the keys inside stay as they were. Swap is the page itself.
@@ -5405,12 +5409,24 @@ function SwapPageInner() {
   const [venueFilter, setVenueFilter] = useState<'all' | Venue>('all')
   /** Find a pool by any of its tokens: "luna", "sol usdc". Every word has to match. */
   const [poolQuery, setPoolQuery] = useState('')
+  /* How the list is ordered. "Suggested" is the house order (SOLID first, then
+     depth); the rest are what people ask for: deepest, most traded, name. */
+  const [poolSort, setPoolSort] = useState<PoolSort>(LITE ? 'tvl' : 'suggested')
 
-  /* SOLID pairs first, then deepest first. That is the book people came for,
-     and depth is the only thing that decides whether a trade is worth making.
-     Empty pools sink to the bottom without being asked to. */
+  /* Depth and most-traded are the two people came for; the order below decides
+     the rest. Empty pools sink to the bottom without being asked to.
+     "Most traded" ranks by recorded moves on the pool (board activity), 0 when
+     the board has not loaded or a pool has none. */
   const sortedPools = useMemo(() => {
+    const activity = (p: PoolView) => board?.poolActivity?.[p.contract_addr]?.count ?? 0
     const solidFirst = (p: PoolView) => (!LITE && p.tokens.some(t => t.key === 'SOLID') ? 0 : 1)
+    const tvl = (p: PoolView) => p.tvlUsd ?? 0
+    const cmp: Record<PoolSort, (a: PoolView, b: PoolView) => number> = {
+      suggested: (a, b) => solidFirst(a) - solidFirst(b) || tvl(b) - tvl(a),
+      tvl: (a, b) => tvl(b) - tvl(a),
+      traded: (a, b) => activity(b) - activity(a) || tvl(b) - tvl(a),
+      name: (a, b) => a.label.localeCompare(b.label),
+    }
     const words = poolQuery.toLowerCase().split(/[\s/]+/).filter(Boolean)
     const matches = (p: PoolView) => {
       const hay = `${p.label} ${p.tokens.map(t => `${t.key} ${TOKEN_META[t.key]?.name ?? ''}`).join(' ')}`.toLowerCase()
@@ -5418,8 +5434,8 @@ function SwapPageInner() {
     }
     return allPools
       .filter(p => (venueFilter === 'all' || p.venue === venueFilter) && matches(p))
-      .sort((a, b) => solidFirst(a) - solidFirst(b) || (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))
-  }, [allPools, venueFilter, poolQuery])
+      .sort(cmp[poolSort])
+  }, [allPools, venueFilter, poolQuery, poolSort, board])
 
   /* Anyone can open a pool, so most of them are empty shells someone made to
      see what happened. Showing fifteen of those buries the five that matter.
@@ -5782,6 +5798,18 @@ function SwapPageInner() {
                           </button>
                         ))}
                       </div>
+                      <div style={{ display: 'flex', gap: SPACE['2'], flexWrap: 'wrap', alignItems: 'center' }}>
+                        <span style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>Sort</span>
+                        {(['suggested', 'tvl', 'traded', 'name'] as const).filter(s => s !== 'suggested' || !LITE).map(s => (
+                          <button key={s} type='button' onClick={() => setPoolSort(s)} aria-pressed={poolSort === s}
+                            style={{ ...ghostBtn, padding: '3px 10px', color: poolSort === s ? C.goldLit : C.textMuted, borderColor: poolSort === s ? C.goldCore : C.divider }}>
+                            {POOL_SORT_LABEL[s]}
+                          </button>
+                        ))}
+                      </div>
+                      {poolSort === 'traded' && !board && (
+                        <div style={{ fontSize: TEXT.xs.size, color: C.textWhisper, lineHeight: 1.5 }}>Reading recent activity…</div>
+                      )}
                       {poolQuery.trim() && visiblePools.length === 0 && (
                         <div style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6 }}>
                           No pool here holds that. <button type='button' onClick={() => setTab('create')} style={{ background: 'transparent', border: 'none', color: C.goldLit, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit', padding: 0 }}>Open one</button>, it takes one signature.
