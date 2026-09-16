@@ -88,6 +88,7 @@ for (const p of prices ?? []) {
 const markets = []
 let sumSupplied = 0
 let sumBorrowed = 0
+let sumReserves = 0
 for (const a of states ?? []) {
   const k = keyOf(a.info)
   const meta = priceOf.get(k)
@@ -95,10 +96,18 @@ for (const a of states ?? []) {
   const unit = 10 ** meta.decimals
   const supplied = (Number(a.supply_vtotal) * Number(a.supply_index)) / unit
   const borrowed = (Number(a.borrow_vtotal) * Number(a.borrow_index)) / unit
+  // What the protocol has kept for itself, in the same units as everything else.
+  // reserve_total is raw, so it goes through decimals and price like the rest:
+  // read as-is it is hundreds of thousands of times too large.
+  const reservesUsd = (Number(a.reserve_total) / unit) * meta.price
   const suppliedUsd = supplied * meta.price
   const borrowedUsd = borrowed * meta.price
   sumSupplied += suppliedUsd
   sumBorrowed += borrowedUsd
+  sumReserves += reservesUsd
+  // A fixed take rate on a market means the protocol charges there even though
+  // no reserve factor is set on the ordinary interest.
+  const take = a.take_rate && typeof a.take_rate === 'object' ? Number(a.take_rate.fixed) : null
   markets.push({
     k: k.length > 46 ? `${k.slice(0, 43)}…` : k,
     s: round(suppliedUsd),
@@ -107,6 +116,9 @@ for (const a of states ?? []) {
     ltv: Number(a.ltv),
     rate: round(Number(a.borrow_rate_per_year), 6),
     cap: round(Number(a.supply_cap) / unit, 0),
+    res: round(reservesUsd),
+    take: Number.isFinite(take) ? take : null,
+    liqPenalty: Number(a.liquidation_penalty),
   })
 }
 
