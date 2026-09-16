@@ -282,6 +282,132 @@ async function txsLastDay(addr, height) {
   return Number.isFinite(total) ? total : null
 }
 
+/**
+ * The transactions themselves, for the pools that were used, so they can be
+ * counted once each and their signers read.
+ *
+ * Adding up the per-pool counts does not give the number of transactions. One
+ * swap routed through three pools appears in all three, and 41% of the summed
+ * figure was that same transaction counted again. The per-pool numbers are each
+ * correct; the sum is not a total.
+ *
+ * Two constraints shape this. `pagination.offset` is ignored by these nodes, so
+ * paging is impossible and a window has to be narrow enough to fit one page.
+ * And activity comes in bursts, so fixed windows do not work: this halves only
+ * where it is dense. Sweeping all 847 pools to find the active ones costs 848
+ * requests and earns an HTTP 429, so only the pools already known to be in use
+ * are asked.
+ */
+async function dayTransactions(pools, height) {
+  const from = height - BLOCKS_PER_DAY
+  const seen = new Map()
+  const poolsOf = new Map()
+
+  const queryFor = (addr, lo, hi) =>
+    encodeURIComponent(`wasm._contract_address='${addr}' AND tx.height>=${lo} AND tx.height<=${hi}`)
+
+  const countIn = async (addr, lo, hi) => {
+    const j = await lcdJson(
+      `/cosmos/tx/v1beta1/txs?query=${queryFor(addr, lo, hi)}&pagination.limit=1&pagination.count_total=true`,
+      { lcds: TX_LCDS, tries: 2 },
+    ).catch(() => null)
+    const n = Number(j?.total ?? j?.pagination?.total)
+    return Number.isFinite(n) ? n : 0
+  }
+
+  const pageIn = async (addr, lo, hi) => {
+    const j = await lcdJson(
+      `/cosmos/tx/v1beta1/txs?query=${queryFor(addr, lo, hi)}&pagination.limit=200&pagination.count_total=true`,
+      { lcds: TX_LCDS, tries: 2 },
+    ).catch(() => null)
+    return j?.tx_responses ?? []
+  }
+
+  const take = async (addr, lo, hi, known, depth) => {
+    if (lo > hi || depth > 18) return
+    const n = known ?? await countIn(addr, lo, hi)
+    if (n === 0) return
+    if (n <= 200) {
+      const rows = await pageIn(addr, lo, hi)
+      // Trust the counter over the page: a short page means the node held back,
+      // and taking it at face value silently lost a quarter of a day once.
+      if (rows.length >= n || lo === hi) {
+        for (const tx of rows) {
+          const hash = tx?.txhash
+          if (!hash) continue
+          seen.set(hash, tx)
+          if (!poolsOf.has(hash)) poolsOf.set(hash, new Set())
+          poolsOf.get(hash).add(addr)
+        }
+        return
+      }
+    }
+    if (lo === hi) return
+    const mid = Math.floor((lo + hi) / 2)
+    await take(addr, lo, mid, null, depth + 1)
+    await take(addr, mid + 1, hi, null, depth + 1)
+  }
+
+  await mapLimit(pools, 4, p => take(p.addr, from, height, p.txs ?? null, 0).catch(() => {}))
+  return { seen, poolsOf }
+}
+
+/**
+ * Who traded, and which of them look like arbitrage.
+ *
+ * Creda's test does not carry over. There, automation batched a dozen messages
+ * into one signature; here a routed multi-hop swap is a single message, so every
+ * busy address reads as 1.0 and the measure is blind. Events per transaction and
+ * the regularity of the gaps between them were both tried and neither separates
+ * anything: the distribution is continuous.
+ *
+ * What does separate them is how many pools an address touches in a day. Buying
+ * in one pool and selling in another is what arbitrage is, and it cannot be done
+ * from a single pool. The threshold is stated rather than derived, and the raw
+ * counts are recorded so a reader can draw the line elsewhere.
+ */
+const ARBITRAGE_POOLS = 3
+
+function walletsFrom(seen, poolsOf) {
+  const txsOf = new Map()
+  const poolCount = new Map()
+  for (const [hash, tx] of seen) {
+    const signers = new Set()
+    for (const m of tx?.tx?.body?.messages ?? []) {
+      const s = m?.sender
+      if (typeof s === 'string' && s.startsWith('terra1')) signers.add(s)
+    }
+    for (const s of signers) {
+      if (!txsOf.has(s)) txsOf.set(s, new Set())
+      txsOf.get(s).add(hash)
+      if (!poolCount.has(s)) poolCount.set(s, new Set())
+      for (const p of poolsOf.get(hash) ?? []) poolCount.get(s).add(p)
+    }
+  }
+  if (txsOf.size === 0) return null
+
+  let across = 0, acrossTxs = 0, singleTxs = 0, busiest = 0, busiestPools = 0, once = 0
+  for (const [signer, hashes] of txsOf) {
+    const n = hashes.size
+    const pools = poolCount.get(signer)?.size ?? 0
+    if (n > busiest) { busiest = n; busiestPools = pools }
+    if (n === 1) once += 1
+    if (pools >= ARBITRAGE_POOLS) { across += 1; acrossTxs += n } else { singleTxs += n }
+  }
+
+  return {
+    day: txsOf.size,
+    // Addresses trading across three pools or more in the day.
+    across,
+    acrossTxs,
+    focused: txsOf.size - across,
+    focusedTxs: singleTxs,
+    busiest,
+    busiestPools,
+    once,
+  }
+}
+
 const round = (n, d = 2) => (Number.isFinite(n) ? Math.round(n * 10 ** d) / 10 ** d : null)
 
 // ── The reading ─────────────────────────────────────────────────────────
@@ -358,8 +484,19 @@ const top = valued.slice(0, ACTIVITY_POOLS)
 const counts = await mapLimit(top, 6, p => txsLastDay(p.addr, height))
 top.forEach((p, i) => { p.txs = counts[i] })
 
-const txs24h = top.reduce((s, p) => s + (p.txs ?? 0), 0)
 const activePools = top.filter(p => (p.txs ?? 0) > 0).length
+
+// Adding the per-pool counts is not a transaction total: a swap routed through
+// three pools is counted in each of them, and 41% of that sum was the same
+// transaction again. The pools that were used are fetched once and the unique
+// transactions counted, which also gives the signers.
+const used = top.filter(p => (p.txs ?? 0) > 0)
+const { seen, poolsOf } = await dayTransactions(used, height).catch(() => ({ seen: new Map(), poolsOf: new Map() }))
+const txs24h = seen.size > 0 ? seen.size : null
+// Kept because each per-pool number is right on its own, and the gap between
+// this and txs24h is how much routing happens.
+const poolVisits = top.reduce((s, p) => s + (p.txs ?? 0), 0)
+const wallets = seen.size > 0 ? walletsFrom(seen, poolsOf) : null
 
 const share = n => {
   if (!(tvl > 0)) return null
@@ -394,7 +531,13 @@ const line = JSON.stringify({
   // Left out because no asset in the pool could be reached from USDC through a
   // hop with real depth behind it.
   noRoute: priceable.length - valued.length,
+  // Unique transactions, counted once each however many pools they touched.
   txs24h,
+  // The sum of the per-pool counts. Larger than txs24h by however much routing
+  // there is, and never to be presented as a transaction total.
+  poolVisits,
+  // Who traded that day, with cross-pool trading kept apart from single-pool.
+  wallets,
   activePools,
   top3: share(3),
   top10: share(10),
