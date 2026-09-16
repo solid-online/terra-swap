@@ -57,9 +57,10 @@ jobs:
           while :; do
             node scripts/uptime-check.mjs status-data || echo "check did not complete"
             node scripts/chain-check.mjs status-data || echo "chain check did not complete"
+            node scripts/creda-check.mjs status-data || echo "creda check did not complete"
             (
               cd status-data
-              git add uptime chain
+              git add uptime chain creda
               git commit -q -m "uptime $(date -u +%Y-%m-%dT%H:%MZ)" || exit 0
               for i in 1 2 3; do
                 git pull -q --rebase origin status && git push -q origin HEAD:status && exit 0
