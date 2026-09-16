@@ -554,3 +554,10 @@
 {"t":"2026-09-16T08:10Z","site":"status.terraluna.app","ok":true,"ms":553,"detail":null}
 {"t":"2026-09-16T08:10Z","site":"stake.terraluna.app","ok":true,"ms":307,"detail":null}
 {"t":"2026-09-16T08:10Z","site":"atrium.markets","ok":true,"ms":484,"detail":null}
+{"t":"2026-09-16T08:13Z","site":"swap.openfields.app","ok":true,"ms":1193,"detail":null}
+{"t":"2026-09-16T08:13Z","site":"nft.openfields.app","ok":true,"ms":919,"detail":null}
+{"t":"2026-09-16T08:13Z","site":"gov.openfields.app","ok":true,"ms":470,"detail":null}
+{"t":"2026-09-16T08:13Z","site":"openfields.app","ok":true,"ms":636,"detail":null}
+{"t":"2026-09-16T08:13Z","site":"status.openfields.app","ok":true,"ms":614,"detail":null}
+{"t":"2026-09-16T08:13Z","site":"stake.openfields.app","ok":true,"ms":571,"detail":null}
+{"t":"2026-09-16T08:13Z","site":"atrium.markets","ok":true,"ms":638,"detail":null}
