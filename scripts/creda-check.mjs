@@ -72,11 +72,36 @@ const keyOf = (info) => info?.native ?? info?.cw20 ?? '?'
 
 const round = (n, d = 2) => (Number.isFinite(n) ? Math.round(n * 10 ** d) / 10 ** d : null)
 
-const [metrics, states, prices, portfolios] = await Promise.all([
+/**
+ * How many transactions have ever touched the portfolio contract. Asking for one
+ * result with a total costs a few seconds; paging through them all costs a
+ * minute and gets pruned away anyway. The difference between two readings is
+ * the activity in that interval, so the daily figure grows out of the log
+ * instead of being recomputed on every page view.
+ */
+async function txCount() {
+  const query = encodeURIComponent(`wasm._contract_address='${PORTFOLIO}'`)
+  for (const lcd of ['https://terra-lcd.publicnode.com', 'https://terra-api.polkachu.com']) {
+    try {
+      const r = await fetch(`${lcd}/cosmos/tx/v1beta1/txs?query=${query}&pagination.limit=1&pagination.count_total=true`, {
+        headers: { 'user-agent': UA, accept: 'application/json' },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      })
+      const j = await r.json()
+      const total = Number(j?.total ?? j?.pagination?.total)
+      // Nodes prune at different depths, so the deepest answer is the real one.
+      if (Number.isFinite(total) && total > 0) return total
+    } catch { /* try the next one */ }
+  }
+  return null
+}
+
+const [metrics, states, prices, portfolios, txs] = await Promise.all([
   smart(PORTFOLIO, { metrics: {} }),
   smart(PORTFOLIO, { asset_states: {} }),
   smart(ORACLE, { prices: {} }),
   smart(PORTFOLIO, { portfolios: { limit: 500 } }),
+  txCount(),
 ])
 
 // Price and decimals per asset, from the oracle the protocol itself prices with.
@@ -145,6 +170,10 @@ const line = JSON.stringify({
   utilization: supplied > 0 ? round(borrowed / supplied, 4) : null,
   accounts: (portfolios ?? []).length,
   borrowers: withDebt.length,
+  // Every transaction that has ever touched the contract. The daily figure is
+  // the difference between two of these, which is why it is recorded rather
+  // than counted again on every visit.
+  txs,
   atRisk: {
     below2: below(2).length,
     below1_2: below(1.2).length,
