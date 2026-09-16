@@ -66,6 +66,13 @@ const TARGETS = [
     ],
   },
   {
+    site: 'data.openfields.app',
+    checks: [
+      { url: 'https://data.openfields.app/', expect: (r) => r.status === 200 },
+      { url: 'https://data.openfields.app/api/creda', json: true, expect: (r, j) => r.status === 200 && j?.markets?.length > 0 && j?.trustworthy === true },
+    ],
+  },
+  {
     site: 'atrium.markets',
     checks: [
       { url: 'https://atrium.markets/', expect: (r) => r.status === 200 },
