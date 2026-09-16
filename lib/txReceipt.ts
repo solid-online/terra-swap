@@ -6,7 +6,7 @@
  * link carries is shown as fact.
  */
 
-import { TERRA_SWAP_ROUTER } from 'lib/dex'
+import { TERRA_SWAP_ROUTERS } from 'lib/dex'
 import { parseTx, type HistoryRow } from 'lib/history'
 import { lcdFetch } from 'lib/lcd'
 
@@ -49,7 +49,7 @@ export async function readReceipt(hash: string, timeoutMs = 8000): Promise<Recei
   let account = String(messages[0]?.sender ?? '')
   // Tokens relayed in: the receipt belongs to whoever they arrived to, not to the relayer that signed.
   if (messages.some(m => String(m['@type'] ?? '').endsWith('MsgRecvPacket'))) {
-    const routed = events.find(e => e.type === 'wasm' && attr(e, 'action') === 'execute_swap_operations' && attr(e, '_contract_address') === TERRA_SWAP_ROUTER)
+    const routed = events.find(e => e.type === 'wasm' && attr(e, 'action') === 'execute_swap_operations' && TERRA_SWAP_ROUTERS.includes(attr(e, '_contract_address') ?? ''))
     let receiver = ''
     try { receiver = String(JSON.parse(attr(events.find(e => e.type === 'recv_packet'), 'packet_data') ?? '{}').receiver ?? '') } catch { /* not a token transfer */ }
     account = attr(routed, 'receiver') || receiver || account

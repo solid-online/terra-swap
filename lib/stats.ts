@@ -10,7 +10,7 @@
  * against each other.
  */
 
-import { ASTRO_ROUTER, TERRA_SWAP_ROUTER, assetId, toMicro, type KnownToken, type PoolView } from 'lib/dex'
+import { ASTRO_ROUTER, TERRA_SWAP_ROUTERS, assetId, toMicro, type KnownToken, type PoolView } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
 import { planRoute, planTrade, quoteBest, readTradeMemo, tradeText } from 'lib/route'
 
@@ -99,7 +99,7 @@ function routerActivity(w: Window & { txs: Tx[] }, tokens: Map<string, KnownToke
     for (const ev of tx.events) {
       if (ev.type !== 'wasm') continue
       const at = attrsOf(ev)
-      if (at._contract_address !== TERRA_SWAP_ROUTER || at.action !== 'execute_swap_operations') continue
+      if (!TERRA_SWAP_ROUTERS.includes(at._contract_address ?? '') || at.action !== 'execute_swap_operations') continue
       swaps++
       if (arrival) arrivals++
       else if (site) fromInterface++
@@ -220,16 +220,28 @@ async function uptime(): Promise<StatsResponse['uptime']> {
   } catch { return null }
 }
 
+/** Several scans as one window: every transaction once, complete only when each scan is, back to the latest point an incomplete scan reached. */
+function mergeWindows(parts: (Window & { txs: Tx[] })[]): Window & { txs: Tx[] } {
+  const seen = new Set<string>()
+  const txs: Tx[] = []
+  for (const p of parts) for (const tx of p.txs) { if (!seen.has(tx.txhash)) { seen.add(tx.txhash); txs.push(tx) } }
+  txs.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+  const cut = parts.filter(p => !p.complete).map(p => p.since).filter((s): s is string => !!s).sort().pop() ?? null
+  return { txs, since: cut, complete: parts.every(p => p.complete), read: parts.length === 0 || parts.some(p => p.read !== false) }
+}
+
 export async function computeStats(pools: PoolView[], px: Record<string, number>): Promise<StatsResponse> {
   const tokens = new Map<string, KnownToken>()
   for (const p of pools) for (const t of p.tokens) tokens.set(assetId(t.info), t)
-  const [router, astro, bench, up] = await Promise.all([
-    TERRA_SWAP_ROUTER ? recentTxs(`wasm._contract_address='${TERRA_SWAP_ROUTER}'`, WINDOW_DAYS, 10) : Promise.resolve({ txs: [] as Tx[], since: null, complete: true, read: true }),
+  const [routerParts, astro, bench, up] = await Promise.all([
+    // Both of Terra Swap's routers: v1 until the switch to router v2 on 2026-09-16, v2 since.
+    Promise.all(TERRA_SWAP_ROUTERS.map(r => recentTxs(`wasm._contract_address='${r}'`, WINDOW_DAYS, 10))),
     // Astroport's router writes no attributes of its own, so its calls are found by the execute event.
     recentTxs(`execute._contract_address='${ASTRO_ROUTER}'`, WINDOW_DAYS, 5),
     benchmark(pools, px).catch(() => []),
     uptime(),
   ])
+  const router = mergeWindows(routerParts)
   // A scan that reached 30 days covers the whole window; one that stopped early covers back to its oldest transaction.
   // The tag counts cover the shorter of the two: Astroport's router is busy, and its scan may stop early.
   const bound = (w: Window) => (w.complete ? null : w.since)

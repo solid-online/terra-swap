@@ -12,7 +12,7 @@
  * (lib/route tradeMemo), which the page sets beside what arrived.
  */
 
-import { TERRA_SWAP_ROUTER, VENUE_INCENTIVES } from 'lib/dex'
+import { TERRA_SWAP_ROUTERS, VENUE_INCENTIVES } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
 import { readTradeMemo } from 'lib/route'
 
@@ -108,7 +108,7 @@ export function parseTx(r: TxResponse, body: TxBody | undefined, address: string
 
   const types = (body?.messages ?? []).map(m => String(m['@type'] ?? ''))
   const has = (a: string) => actions.some(x => x.action === a)
-  const routed = actions.filter(x => x.action === 'execute_swap_operations' && x.contract === TERRA_SWAP_ROUTER && x.at.receiver === address)
+  const routed = actions.filter(x => x.action === 'execute_swap_operations' && TERRA_SWAP_ROUTERS.includes(x.contract) && x.at.receiver === address)
   const incentives = actions.filter(x => x.contract === VENUE_INCENTIVES.astroport)
   let kind: HistoryKind = 'other'
   if (types.some(t => t.endsWith('MsgRecvPacket'))) kind = routed.length > 0 ? 'arrived swapped' : 'transfer in'

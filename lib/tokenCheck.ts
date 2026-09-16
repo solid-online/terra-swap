@@ -12,7 +12,7 @@
 
 import { createHash } from 'crypto'
 import { fromBech32, toBech32 } from '@cosmjs/encoding'
-import { KNOWN_TOKENS, TERRA_SWAP_ROUTER, VENUE_INCENTIVES, VENUE_NAME, assetId, type KnownToken, type PoolView } from 'lib/dex'
+import { KNOWN_TOKENS, TERRA_SWAP_ROUTER, TERRA_SWAP_ROUTERS, VENUE_INCENTIVES, VENUE_NAME, assetId, type KnownToken, type PoolView } from 'lib/dex'
 import { RPC_ENDPOINTS, lcdFetch } from 'lib/lcd'
 import { NOBLE_REST_ENDPOINTS } from 'lib/noble'
 import { HUB_REST_ENDPOINTS } from 'lib/cosmoshub'
@@ -190,7 +190,7 @@ function namedAddresses(pools: PoolView[]): Map<string, string> {
   const m = new Map<string, string>()
   for (const p of pools) m.set(p.contract_addr, `${p.label} pool on ${VENUE_NAME[p.venue]}`)
   if (VENUE_INCENTIVES.astroport) m.set(VENUE_INCENTIVES.astroport, "Astroport's incentives contract")
-  if (TERRA_SWAP_ROUTER) m.set(TERRA_SWAP_ROUTER, "Terra Swap's router")
+  for (const r of TERRA_SWAP_ROUTERS) m.set(r, r === TERRA_SWAP_ROUTER ? "Terra Swap's router" : "Terra Swap's first router")
   return m
 }
 

@@ -90,6 +90,8 @@ export const ASTRO_ROUTER = 'terra1j8hayvehh3yy02c2vtw5fdhz9f4drhtee8p5n5rguvg3n
 export const TERRA_SWAP_ROUTER = process.env.NEXT_PUBLIC_TERRA_SWAP_ROUTER ?? 'terra1u2uh0jsl2u76j52e6egf09zslsns27qsmzxxzcsxdxymeax8883s9prc4l'
 /** Router v1 trusts the first factory and Astroport's. Router v2 (contracts/factory-v2) is the same code trusting factory v2 as well. */
 export const TERRA_SWAP_ROUTER_V1 = 'terra1u2uh0jsl2u76j52e6egf09zslsns27qsmzxxzcsxdxymeax8883s9prc4l'
+/** Every router Terra Swap has run, for reading history: swaps signed through router v1 stay recognisable after the switch to v2. */
+export const TERRA_SWAP_ROUTERS: readonly string[] = Array.from(new Set([TERRA_SWAP_ROUTER, TERRA_SWAP_ROUTER_V1].filter(Boolean)))
 /**
  * The factories the configured router trusts, in its own order. A router
  * other than v1 is only taken to know factory v2 when factory v2 is set too,
