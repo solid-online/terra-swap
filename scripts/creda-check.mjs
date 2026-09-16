@@ -140,16 +140,103 @@ async function txsLastDay(h) {
   return Math.max(...found)
 }
 
+/**
+ * Who used the contract in the last day, and how many of them were people.
+ *
+ * Two mistakes are easy here and both were made before this worked:
+ *
+ *  - Counting a signer once per message rather than once per transaction. One
+ *    transaction can carry many messages, and that alone turned a wallet with
+ *    11 transactions into the apparent busiest user of the day with "141".
+ *  - Naming an address as the bot. Which wallet is busiest changes from day to
+ *    day, so volume is the wrong test, and hardcoding an address is a judgement
+ *    about a party rather than a measurement.
+ *
+ * What does separate them is messages per transaction: one address has sat
+ * between 12.8 and 13.9 every day for a week while the median for everyone else
+ * is exactly 1.0. Batching many operations into one signature is what automatic
+ * compounding looks like, so the ratio is the test and the threshold is far
+ * below the gap it has to straddle.
+ */
+const AUTOMATION_MSGS_PER_TX = 5
+
+async function walletsLastDay(h) {
+  if (h === null) return null
+  const from = h - BLOCKS_PER_DAY
+  const query = encodeURIComponent(
+    `wasm._contract_address='${PORTFOLIO}' AND tx.height>=${from} AND tx.height<=${h}`,
+  )
+  let best = null
+  for (const lcd of LCDS) {
+    try {
+      const r = await fetch(
+        `${lcd}/cosmos/tx/v1beta1/txs?query=${query}&pagination.limit=200&pagination.count_total=true`,
+        { headers: { 'user-agent': UA, accept: 'application/json' }, signal: AbortSignal.timeout(TIMEOUT_MS) },
+      )
+      const j = await r.json()
+      const rows = j?.tx_responses ?? []
+      // Nodes prune at different depths, so the one that holds most of the day wins.
+      if (rows.length > 0 && (best === null || rows.length > best.length)) best = rows
+    } catch { /* try the next one */ }
+  }
+  if (best === null) return null
+
+  const txsOf = new Map()
+  const msgsOf = new Map()
+  for (const tx of best) {
+    const hash = tx?.txhash
+    for (const m of tx?.tx?.body?.messages ?? []) {
+      const s = m?.sender
+      if (typeof s !== 'string' || !s.startsWith('terra1')) continue
+      if (!txsOf.has(s)) txsOf.set(s, new Set())
+      txsOf.get(s).add(hash)
+      msgsOf.set(s, (msgsOf.get(s) ?? 0) + 1)
+    }
+  }
+  if (txsOf.size === 0) return null
+
+  let auto = 0, autoTxs = 0, autoMsgs = 0, peopleTxs = 0, busiest = 0, once = 0
+  for (const [signer, hashes] of txsOf) {
+    const n = hashes.size
+    const msgs = msgsOf.get(signer) ?? 0
+    if (n > busiest) busiest = n
+    if (n === 1) once += 1
+    if (msgs / n >= AUTOMATION_MSGS_PER_TX) {
+      auto += 1
+      autoTxs += n
+      autoMsgs += msgs
+    } else {
+      peopleTxs += n
+    }
+  }
+
+  return {
+    // Distinct addresses that signed something against the contract.
+    day: txsOf.size,
+    // Of those, the ones batching many operations per signature.
+    auto,
+    autoTxs,
+    autoMsgs,
+    people: txsOf.size - auto,
+    peopleTxs,
+    busiest,
+    once,
+    // Transactions seen here, to hold against the count taken separately.
+    seen: best.length,
+  }
+}
+
 // The window has to be pinned to a block before it can be counted, so this one
 // query cannot join the batch below.
 const blockHeight = await height()
 
-const [metrics, states, prices, portfolios, txs24h] = await Promise.all([
+const [metrics, states, prices, portfolios, txs24h, wallets] = await Promise.all([
   smart(PORTFOLIO, { metrics: {} }),
   smart(PORTFOLIO, { asset_states: {} }),
   smart(ORACLE, { prices: {} }),
   smart(PORTFOLIO, { portfolios: { limit: 500 } }),
   txsLastDay(blockHeight),
+  walletsLastDay(blockHeight).catch(() => null),
 ])
 
 // Price and decimals per asset, from the oracle the protocol itself prices with.
@@ -223,6 +310,9 @@ const line = JSON.stringify({
   // within a fixed range of blocks. Each reading stands on its own, so a missed
   // run leaves a gap in the line rather than a spike in the next one.
   txs24h,
+  // Distinct addresses that used the contract that day, with the automated one
+  // kept apart rather than folded in. 182 accounts exist; about ten move.
+  wallets,
   atRisk: {
     below2: below(2).length,
     below1_2: below(1.2).length,
