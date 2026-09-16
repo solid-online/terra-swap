@@ -69,7 +69,8 @@ attr() {
 }
 smart() { terrad query wasm contract-state smart "$1" "$2" "${Q[@]}" | jq -c '.data'; }
 admin_of() { terrad query wasm contract "$1" "${Q[@]}" | jq -r '.contract_info.admin // ""'; }
-code_sha() { terrad query wasm code-info "$1" "${Q[@]}" | jq -r '(.data_hash // .code_info.data_hash // "") | ascii_downcase'; }
+# terrad's code-info names the field `checksum` on wasmd 0.54 and `data_hash` on older versions.
+code_sha() { terrad query wasm code-info "$1" "${Q[@]}" | jq -r '.checksum // .data_hash // .code_info.data_hash // empty' | tr 'A-F' 'a-f'; }
 
 # ─── preflight ─────────────────────────────────────────────────────────
 say "Preflight"
