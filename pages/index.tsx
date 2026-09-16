@@ -2559,8 +2559,16 @@ function TransferPanel({ routePools, onDone, initialNet = 'noble' }: { routePool
           const on = c === chain
           return (
             <button key={c.name} type='button' role='tab' aria-selected={on} onClick={() => setNet(c.tokens[0][0])}
-              style={{ ...ghostBtn, padding: '4px 12px', color: on ? C.goldLit : C.textMuted, borderColor: on ? C.goldCore : C.divider }}>
-              {c.tokens.length === 1 ? `${c.tokens[0][1]} · ${c.name}` : c.name}
+              title={`${c.tokens.map(([, label]) => label).join(', ')} on ${c.name}`}
+              style={{ ...ghostBtn, padding: '4px 12px', display: 'inline-flex', alignItems: 'center', gap: 7, color: on ? C.goldLit : C.textMuted, borderColor: on ? C.goldCore : C.divider }}>
+              {/* The marks say which tokens; the chain keeps its name, because a row of
+                  coins alone does not tell anyone where the tokens are coming from. */}
+              <span aria-hidden style={{ display: 'inline-flex', alignItems: 'center' }}>
+                {c.tokens.map(([k, label], i) => (
+                  <TokenIcon key={k} label={label} size={15} style={i > 0 ? { marginLeft: -5 } : undefined} />
+                ))}
+              </span>
+              {c.name}
             </button>
           )
         })}
@@ -5048,9 +5056,10 @@ function Hero({ poolFeeBps, onReplay, onHome, onToast, me, right }: { poolFeeBps
   return (
     <div className='terra-hero' style={{ marginTop: SPACE['3'], display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SPACE['3'], flexWrap: 'wrap' }}>
      <div style={{ minWidth: 0 }}>
-      <div style={{ fontSize: '0.62rem', letterSpacing: '0.34em', color: C.korea, fontWeight: 800, textTransform: 'uppercase', marginBottom: SPACE['2'], display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-        {/* The other Openfields apps, and openfields.app with all of them. Not on the Astroport-only pools site. */}
-        {!LITE && <><AppSwitcher /><span aria-hidden>·</span></>}
+      {/* The family on its own line: inside the kicker it inherited uppercase and wide
+          tracking, which is exactly what made two navigations read as one muddle. */}
+      {!LITE && <AppSwitcher />}
+      <div style={{ fontSize: '0.62rem', letterSpacing: '0.34em', color: C.korea, fontWeight: 800, textTransform: 'uppercase', margin: `${SPACE['2']} 0`, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
         <span>{(() => {
           const h = new Date().getHours()
           const gm = isChuseok() ? '추석 · happy harvest moon' : moonPhase().full ? '🌕 full moon' : h >= 5 && h < 11 ? 'gm' : h >= 22 || h < 5 ? 'gn' : ''
@@ -5066,13 +5075,11 @@ function Hero({ poolFeeBps, onReplay, onHome, onToast, me, right }: { poolFeeBps
         display: 'flex', alignItems: 'baseline', gap: '0.4rem', flexWrap: 'wrap',
       }}>
         <Link href='/' className='atrium-swap-title' aria-label={`${APP_NAME} home`} style={{ fontFamily: TERRA_FONT, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.28em', whiteSpace: 'nowrap', textDecoration: 'none' }} onClick={wordmarkClick} title='Home'>
-          {/* The Terra globe (terra-money/assets). Sits on the cap-height line, same size as the letters. */}
-          <img src='/img/terra-globe.svg' alt='' aria-hidden width={52} height={49} draggable={false}
-            style={{ width: '0.82em', height: 'auto', flex: 'none', filter: 'drop-shadow(0 2px 10px rgba(52,88,184,0.45))' }} />
           {/* Like the original lockup: "Terra" heavy, the product word light. */}
           <span><span style={{ fontWeight: 700 }}>Terra</span> <span style={{ fontWeight: 300, letterSpacing: '0' }}>{LITE ? 'Pools' : 'Swap'}</span></span>
         </Link>
       </h1>
+      <div style={{ margin: '2px 0 0.6rem', fontSize: '0.72rem', letterSpacing: '0.12em', color: '#9a927f' }}>openfields.app</div>
       {/* Above the fold on purpose: nobody should have to reach the footer to learn who does not stand behind this. */}
       <p className='tl-independent' style={{ margin: '0 0 0.6rem', maxWidth: '46rem', fontSize: '0.72rem', lineHeight: 1.55, color: '#9a927f' }}>
         An independent project, not an official Terra product. Not affiliated with, endorsed by or connected to

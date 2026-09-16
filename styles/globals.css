@@ -21,3 +21,27 @@ input[type='number']::-webkit-inner-spin-button { -webkit-appearance: none; marg
 
 /* Who does not stand behind this. Stated under the wordmark, not only in the footer. */
 .tl-independent { margin: 8px 0 0; max-width: 46rem; font-size: 0.72rem; line-height: 1.55; color: var(--tl-whisper); }
+
+/* The address under the wordmark. Small on purpose: it names the place, it is not the brand. */
+.tl-domain { margin: 2px 0 0; font-size: 0.72rem; letter-spacing: 0.12em; color: var(--tl-muted, #9a927f); }
+
+/* ── The family, shown rather than hidden ──────────────────────────── */
+/* One line above the wordmark. Lighter than the page's own tabs on purpose:
+   two navigations that shout equally loudly are two navigations nobody reads. */
+.tl-eco { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; }
+.tl-eco-item { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.18rem 0.5rem; border-radius: 999px;
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.02em; text-transform: none; text-decoration: none;
+  color: var(--tl-muted, #9a927f); border: 1px solid transparent; white-space: nowrap; }
+.tl-eco-item:hover { color: var(--tl-gold, #ffd83d); border-color: var(--tl-divider, rgba(255, 216, 61, 0.13)); }
+.tl-eco-item.is-here { color: var(--tl-text, #f4f1e8); background: rgba(255, 216, 61, 0.06);
+  border-color: var(--tl-divider, rgba(255, 216, 61, 0.13)); }
+.tl-eco-glyph { font-size: 0.85em; opacity: 0.85; }
+.tl-eco-home { margin-left: 0.15rem; font-size: 0.64rem; letter-spacing: 0.1em; text-transform: none;
+  color: var(--tl-whisper, #6b6555); text-decoration: none; white-space: nowrap; }
+.tl-eco-home:hover { color: var(--tl-gold, #ffd83d); }
+@media (max-width: 560px) { .tl-eco-item { padding: 0.16rem 0.42rem; font-size: 0.66rem; } }
+
+/* Air above the wordmark: the family row, the tagline and the wordmark are three
+   separate things and should not read as one block stuck to the top edge. */
+.tl-eco { margin-bottom: 0.45rem; }
+.tl-kicker { margin-bottom: 0.15rem; }
