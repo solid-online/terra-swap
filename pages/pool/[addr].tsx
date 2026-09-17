@@ -14,6 +14,8 @@ import { SPACE, TEXT } from 'components/tokens'
 import { C, Figure, Page, Panel, fmtNum, linkBtn, row } from 'components/PageShell'
 import { PairIcons, TokenIcon } from 'components/TokenIcon'
 import PriceHistoryChart from 'components/PriceHistoryChart'
+import dynamic from 'next/dynamic'
+const CandleChart = dynamic(() => import('components/CandleChart'), { ssr: false })
 import DepthCurve, { markLine } from 'components/DepthCurve'
 import {
   KNOWN_TOKENS, NOBLE_USDC, USDC_INJ_DENOM, VENUE_NAME, annotateMarket, annotateValues, assetId, fromMicro, smart, tokenFor,
@@ -176,6 +178,12 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
           </div>
         ))}
       </Panel>
+
+      {!pool.empty && (
+        <Panel title='Candlesticks' note='Open, high, low and close of this pool’s price, with the volume traded each candle. Drawn from this site’s own record; it deepens over time.'>
+          <CandleChart pair={pool.contract_addr} base={t0.label} quote={t1.label} />
+        </Panel>
+      )}
 
       {charted && !pool.empty && (
         <Panel title='Price over time' note={`${t1.label} per ${t0.label}: this pool's own price each hour, beside the market for the same pair from the two tokens' reference prices, both as this site wrote them down. Where the lines part, the pool drifted.`}>

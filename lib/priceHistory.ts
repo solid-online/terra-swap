@@ -28,11 +28,24 @@ const MIN_POOL_USD = 50
 const KEEP_S = 400 * 86_400
 const DAY_MS = 86_400_000
 
-/** One UTC day. Token prices in US dollars per 10-minute slot, pool prices (token 1 per token 0) per hour. Missing slots are null. */
+/**
+ * One UTC day. Token prices in US dollars per 10-minute slot, pool prices
+ * (token 1 per token 0) per hour. Missing slots are null.
+ *
+ * `ps` and `pvs` were added for candlesticks: the pool's price and the quote-
+ * side volume traded, both per 10-minute slot, so a 1-hour candle has six
+ * samples to open/high/low/close over. They start on the day recording of them
+ * began; older days have only the hourly `p` and no volume, which the candle
+ * builder falls back to.
+ */
 export interface DayRecord {
   day: string
   t: Record<string, (number | null)[]>
   p: Record<string, (number | null)[]>
+  /** pool price (token 1 per token 0) per 10-minute slot */
+  ps?: Record<string, (number | null)[]>
+  /** quote-side volume traded in each 10-minute slot, in the quote token's whole units */
+  pvs?: Record<string, (number | null)[]>
 }
 
 export type Range = '1d' | '7d' | '30d' | '90d'
@@ -93,10 +106,11 @@ export interface RecordResult { recorded: boolean; day: string; slot: number; to
  * Write one slot: `px` is US dollars per whole token keyed by asset id, `pools` both sites' pools with prices.
  * A slot already written stays as it is.
  */
-export async function recordPrices(px: Record<string, number>, pools: PoolView[], now = Date.now()): Promise<RecordResult> {
+export async function recordPrices(px: Record<string, number>, pools: PoolView[], vol: Record<string, number> = {}, now = Date.now()): Promise<RecordResult> {
   const { day, slot } = slotOf(now)
   const hour = Math.floor(slot / SLOTS_PER_HOUR)
   const rec: DayRecord = (await readDays([day]))[0] ?? { day, t: {}, p: {} }
+  rec.ps ??= {}; rec.pvs ??= {}
   const none = { recorded: false, day, slot, tokens: 0, pools: 0 }
   if (Object.values(rec.t).some(a => a?.[slot] != null)) return none
   let tokens = 0, written = 0
@@ -113,13 +127,16 @@ export async function recordPrices(px: Record<string, number>, pools: PoolView[]
     if (p.empty || !(p.price > 0) || !Number.isFinite(p.price) || (p.tvlUsd ?? 0) < MIN_POOL_USD) continue
     const arr = rec.p[p.contract_addr] ?? (rec.p[p.contract_addr] = [])
     if (arr[hour] == null) { arr[hour] = sig(p.price); written++ }
+    // Per-slot price and volume for the candlesticks; volume defaults to 0 for a slot with no trades.
+    const ps = rec.ps[p.contract_addr] ?? (rec.ps[p.contract_addr] = [])
+    ps[slot] = sig(p.price)
+    const v = vol[p.contract_addr]
+    const pvs = rec.pvs[p.contract_addr] ?? (rec.pvs[p.contract_addr] = [])
+    pvs[slot] = Number.isFinite(v) && v > 0 ? sig(v) : 0
   }
   // Arrays with holes serialize as null, which is what a missing slot is.
-  const clean: DayRecord = {
-    day,
-    t: Object.fromEntries(Object.entries(rec.t).map(([k, a]) => [k, Array.from(a, v => v ?? null)])),
-    p: Object.fromEntries(Object.entries(rec.p).map(([k, a]) => [k, Array.from(a, v => v ?? null)])),
-  }
+  const fill = (m: Record<string, (number | null)[]>) => Object.fromEntries(Object.entries(m).map(([k, a]) => [k, Array.from(a, v => v ?? null)]))
+  const clean: DayRecord = { day, t: fill(rec.t), p: fill(rec.p), ps: fill(rec.ps), pvs: fill(rec.pvs) }
   await writeDay(clean)
   if (HAS_KV) await vercelKv.set(SINCE_KEY, day, { nx: true })
   else if (!mem.has(SINCE_KEY)) mem.set(SINCE_KEY, day)
@@ -225,3 +242,56 @@ export async function dayAverages(day: string): Promise<Record<string, number> |
 }
 
 export const isRange = (v: unknown): v is Range => typeof v === 'string' && (RANGES as string[]).includes(v)
+
+// ── Candlesticks ──────────────────────────────────────────────────────────
+
+export type CandleInterval = '1h' | '4h' | '1d'
+export const CANDLE_INTERVALS: CandleInterval[] = ['1h', '4h', '1d']
+const INTERVAL_S: Record<CandleInterval, number> = { '1h': 3600, '4h': 4 * 3600, '1d': 86_400 }
+/** How far back each interval looks, so every view is a few dozen to a few hundred candles. */
+const INTERVAL_DAYS: Record<CandleInterval, number> = { '1h': 14, '4h': 60, '1d': 200 }
+export const isCandleInterval = (v: unknown): v is CandleInterval => typeof v === 'string' && (CANDLE_INTERVALS as string[]).includes(v)
+
+/** One candle: time is the bucket's start in unix seconds; volume is quote-token whole units. */
+export interface Candle { t: number; o: number; h: number; l: number; c: number; v: number }
+export interface Candles {
+  interval: CandleInterval
+  candles: Candle[]
+  since: string | null
+  at: number
+}
+
+/** A pool's price per 10-minute slot with the volume traded in it, oldest first, from the record. */
+function poolTicks(recs: (DayRecord | null)[], addr: string): { t: number; p: number; v: number }[] {
+  const out: { t: number; p: number; v: number }[] = []
+  for (const r of recs) {
+    if (!r) continue
+    const start = dayStart(r.day)
+    const perSlot = r.ps?.[addr]
+    if (perSlot) {
+      perSlot.forEach((p, i) => { if (p != null && p > 0) out.push({ t: start + i * STEP_S * 1000, p, v: r.pvs?.[addr]?.[i] ?? 0 }) })
+    } else {
+      // A day recorded before per-slot pool data: fall back to the hourly price, no volume.
+      (r.p?.[addr] ?? []).forEach((p, h) => { if (p != null && p > 0) out.push({ t: start + h * 3600_000, p, v: 0 }) })
+    }
+  }
+  return out.sort((a, b) => a.t - b.t)
+}
+
+/** OHLC + volume candles for one pool over `interval`, oldest first. */
+export async function poolCandles(addr: string, interval: CandleInterval, now = Date.now()): Promise<Candles> {
+  const from = now - INTERVAL_DAYS[interval] * DAY_MS
+  const days = daysCovering(from, now)
+  const [recs, since] = await Promise.all([readDays(days), recordingSince()])
+  const ticks = poolTicks(recs, addr).filter(t => t.t >= from && t.t <= now)
+  const stepMs = INTERVAL_S[interval] * 1000
+  const byBucket = new Map<number, Candle>()
+  for (const tk of ticks) {
+    const bucket = Math.floor(tk.t / stepMs) * INTERVAL_S[interval]
+    const c = byBucket.get(bucket)
+    if (!c) byBucket.set(bucket, { t: bucket, o: tk.p, h: tk.p, l: tk.p, c: tk.p, v: tk.v })
+    else { c.h = Math.max(c.h, tk.p); c.l = Math.min(c.l, tk.p); c.c = tk.p; c.v += tk.v }
+  }
+  const candles = Array.from(byBucket.values()).sort((a, b) => a.t - b.t)
+  return { interval, candles, since, at: Date.now() }
+}

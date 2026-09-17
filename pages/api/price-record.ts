@@ -10,6 +10,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { recordPrices, slotRecorded, type RecordResult } from 'lib/priceHistory'
 import { sitePools } from 'lib/sitePools'
+import { scanVolumes } from 'lib/volumeScan'
 
 export const config = { maxDuration: 60 }
 
@@ -19,7 +20,9 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
     if (await slotRecorded()) return res.status(200).json({ recorded: false, reason: 'this slot is already written' })
     const { pools, px } = await sitePools()
     if (pools.length === 0) return res.status(503).json({ recorded: false, reason: 'the pools did not answer' })
-    return res.status(200).json(await recordPrices(px, pools))
+    // Volume for the candlestick bars; it never blocks the price write, so a slow scan just means no bars this slot.
+    const vol = await scanVolumes(pools).catch(() => ({}))
+    return res.status(200).json(await recordPrices(px, pools, vol))
   } catch {
     return res.status(503).json({ recorded: false, reason: 'the chain or the store did not answer' })
   }
