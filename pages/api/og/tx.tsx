@@ -55,7 +55,7 @@ export default async function handler(req: NextRequest) {
     (
       <div style={{ width: 1200, height: 630, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: 64, fontFamily: font ? 'SG' : 'sans-serif', color: TEXT, backgroundColor: NAVY, backgroundImage: `radial-gradient(circle at 50% -20%, #1a1d30 0%, #0a0d18 45%, ${NAVY} 100%)` }}>
         <div style={{ display: 'flex', alignItems: 'center' }}>
-          <img src={`${url.origin}/img/openfields-x.png`} alt='' width={64} height={64} style={{ marginRight: 18 }} />
+          <img src={`${url.origin}/img/openfields-x.png`} alt='' width={64} height={64} style={{ borderRadius: 9999, marginRight: 18 }} />
           <div style={{ display: 'flex', fontSize: 56, lineHeight: 1, backgroundImage: 'linear-gradient(180deg, #fff8dc 0%, #ffd83d 55%, #caa022 100%)', backgroundClip: 'text', color: 'transparent' }}>
             <span style={{ fontWeight: 700 }}>Terra</span><span style={{ fontWeight: 300, marginLeft: 14 }}>Swap</span>
           </div>
