@@ -1,8 +1,8 @@
 /**
  * What GET /api/dex serves: every pool this build lists, with live reserves
  * and spot prices, and the latest block for the live chain pill. Built by the
- * pool-scan workflow every 30 s (lib/scanPlan), or by the route when that has
- * stopped.
+ * pool-scan workflow once a minute (lib/scanPlan), or by the route when that
+ * has stopped.
  */
 
 import { createHash } from 'crypto'

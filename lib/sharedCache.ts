@@ -18,7 +18,7 @@ import { marketPrices } from 'lib/dex'
 import { SCAN_PLAN, keepSeconds, type Freshness } from 'lib/scanPlan'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
-/** `checked`: when this process last built it or read it from KV */
+/** `checked`: when this process last started building it or read it from KV */
 const local = new Map<string, { checked: number; value: { at: number } }>()
 const inflight = new Map<string, Promise<unknown>>()
 
@@ -42,13 +42,14 @@ export async function shared<T extends { at: number }>(key: string, f: Freshness
     inflight.set(key, p)
   }
   const v = await p
-  if (keep(v)) await store(key, f, v)
+  // Counted from the start of the build, so the next one is due `everyMs` after this one began.
+  if (keep(v)) await store(key, f, v, now)
   return v
 }
 
 /** Keep a value as this process's copy and, with KV, as everyone's. */
-export async function store(key: string, f: Freshness, value: { at: number }): Promise<void> {
-  local.set(key, { checked: Date.now(), value })
+export async function store(key: string, f: Freshness, value: { at: number }, checked = Date.now()): Promise<void> {
+  local.set(key, { checked, value })
   if (HAS_KV) await vercelKv.set(key, value, { ex: keepSeconds(f) }).catch(() => {})
 }
 

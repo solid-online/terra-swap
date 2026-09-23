@@ -25,8 +25,11 @@ const DRY_RUN = process.env.DRY_RUN === '1'
 const TICK_MS = 5_000
 /** A scan is asked again at most this often, so one that keeps failing does not hammer the chain. */
 const RETRY_MS = 30_000
-/** Pending scans ride along with the next home scan, or go on their own after this long. */
-const BATCH_MS = 25_000
+/**
+ * Pending scans ride along with the next home scan (once a minute), or go on
+ * their own after this long. Hobby counts every request to the site.
+ */
+const BATCH_MS = 75_000
 const SLOT_MS = 600_000
 /** Into a slot before writing it, so the new slot's first blocks are in. */
 const SLOT_SETTLE_MS = 5_000
@@ -158,14 +161,18 @@ async function main() {
 
   let slotDone = -1
   let slotTried = 0
+  /** Pools whose volume cursors here are the site's: after a slot this run wrote, the site answers the cursors it kept. */
+  let inStep = new Set<string>()
   async function writeSlot(slot: number) {
     slotTried = Date.now()
     const site = await sitePools()
     if (!keepSitePools(site) || Date.now() - site.at > 2 * SCAN_PLAN.site.everyMs) return
     const addrs = volumePools(site.pools).map(p => p.contract_addr)
     if (DRY_RUN) { log(`slot ${slot}: would scan volume on ${addrs.length} pools`); slotDone = slot; return }
-    const want = await post(audience, { want: addrs })
-    setCursors(addrs, want.cursors ?? {})
+    if (addrs.some(a => !inStep.has(a))) {
+      const want = await post(audience, { want: addrs })
+      setCursors(addrs, want.cursors ?? {})
+    }
     const vol = await scanVolumes(site.pools).catch(() => ({} as Record<string, number>))
     const a = await post(audience, { record: { vol, cursors: memCursors(addrs) } })
     const r = a.record
@@ -174,6 +181,9 @@ async function main() {
       count.slots++
       log(r.recorded ? `slot written: ${r.tokens} tokens, ${r.pools} pool hours, volume on ${Object.keys(vol).length} pools` : `slot not written here: ${'reason' in r ? r.reason : ''}`)
     }
+    // After a slot written here the site answers the cursors it kept. A slot written elsewhere had its trades
+    // counted there, so the next slot starts from the site's cursors again.
+    if (r?.recorded && a.cursors) { setCursors(addrs, a.cursors); inStep = new Set(addrs) } else inStep = new Set()
   }
 
   log(`scanning for ${SITE} for ${WATCH_MS / 60_000} min${DRY_RUN ? ', dry run' : ''}`)

@@ -11,7 +11,8 @@
  * Why (2026-09-24): the scans were most of this site's Active CPU on Vercel,
  * and Openfields is moving to Vercel's Hobby plan, which allows 4 CPU-hours a
  * month for every site together. Actions minutes are free for a public
- * repository.
+ * repository. Each handover is a request to the site too, and Hobby counts
+ * those as well, so the workflow sends what it built about once a minute.
  */
 
 import { DEX_FACTORY } from 'lib/dex'
@@ -29,7 +30,7 @@ export type ScanName = 'home' | 'site' | 'venue' | 'skeleton' | 'market' | 'lst'
 
 export const SCAN_PLAN: Record<ScanName, ScanPlan> = {
   /** /api/dex: this site's pools, the latest block, Seoul's weather */
-  home: { key: 'atrium:dex:home:v1', everyMs: 30_000, freshMs: 120_000 },
+  home: { key: 'atrium:dex:home:v1', everyMs: 60_000, freshMs: 180_000 },
   /** lib/sitePools: both sites' pools with dollar values, for the server's own routing */
   site: { key: 'atrium:site-pools:v1', everyMs: 60_000, freshMs: 180_000 },
   /** /api/dex-venue: the other site's pools */

@@ -16,8 +16,8 @@ import { stale } from 'lib/sharedCache'
 export type { DexResponse }
 
 async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) {
-  // Each CDN region revalidates on its own; a few seconds here meant a full rebuild per region every few seconds (Vercel usage, 2026-09-23).
-  res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=120')
+  // Each CDN region revalidates on its own, and each revalidation is a request Hobby counts; the scan behind it changes once a minute.
+  res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120')
   if (!isDexLive()) {
     return res.status(200).json({ live: false, mode: DEX_MODE, pools: [], feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd: 0, height: 0, chainId: '', proposer: '', seoul: null })
   }

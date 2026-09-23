@@ -13,7 +13,8 @@
  * those pools (lib/volumeScan), which the workflow scans on from. With
  * `record`, it writes the price-history slot from the site pools and the
  * volume the workflow scanned, and only then moves the cursors on to where the
- * workflow stopped: if someone else wrote the slot, they counted its trades.
+ * workflow stopped, answering them: if someone else wrote the slot, they
+ * counted its trades.
  *
  * Accepted from the repository in POOL_SCANS_REPO ("owner/name"), else the one
  * Vercel built this deployment from, on POOL_SCANS_BRANCH (default main).
@@ -139,7 +140,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     else {
       answer.record = await recordPrices(site.px, site.pools, numbers(body.record.vol), now)
       const cursors = numbers(body.record.cursors)
-      if (answer.record.recorded) await advanceCursors(Object.keys(cursors), cursors)
+      if (answer.record.recorded) answer.cursors = await advanceCursors(Object.keys(cursors), cursors)
     }
   }
 
