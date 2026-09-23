@@ -6260,7 +6260,7 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
     props: {
       og: {
         title: LITE ? 'Terra Pools' : who ? `${short} on Terra Swap` : share ? share.title : 'Terra Swap',
-        image: LITE ? `${base}/img/terra-globe-180.png` : `${base}/api/og/swap${who ? `?who=${who}` : share ? share.query : ''}`,
+        image: LITE ? `${base}/img/openfields-x.png` : `${base}/api/og/swap${who ? `?who=${who}` : share ? share.query : ''}`,
         contract: '', token: '',
         description: LITE
           ? `An unofficial, open-source interface to Astroport's pool contracts on Terra. No fee, no keys, self-hostable. Not affiliated with Astroport.`

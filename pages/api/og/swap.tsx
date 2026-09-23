@@ -116,8 +116,8 @@ export default async function handler(req: NextRequest) {
             {personal ? 'WRITTEN DOWN · TERRA SWAP' : share ? 'A SWAP ON TERRA · NO INTERFACE FEE' : 'EXPERIMENTAL · DEX ON TERRA'}
           </div>
           <div style={{ display: 'flex', alignItems: 'flex-end', marginTop: 18 }}>
-            {/* The Terra globe, cap-height with the wordmark. */}
-            <img src={`${origin}/img/terra-globe-180.png`} width={92} height={92} style={{ marginRight: 22, marginBottom: 4 }} />
+            {/* The Openfields mark, cap-height with the wordmark. */}
+            <img src={`${origin}/img/openfields-x.png`} width={92} height={92} style={{ marginRight: 22, marginBottom: 4 }} />
             <div style={{
               display: 'flex', fontSize: 104, lineHeight: 1, letterSpacing: -2,
               backgroundImage: 'linear-gradient(180deg, #fff8dc 0%, #ffd83d 55%, #caa022 100%)',
