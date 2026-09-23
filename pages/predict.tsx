@@ -26,7 +26,6 @@ import type { PredictResponse } from 'pages/api/predict'
 import { useBet, useClaim, useCreateMarket, useObserve, useResolve, useVoidMarket } from 'components/transactions/usePredict'
 import { humanizeTxError } from 'lib/errors'
 import { TERRA_FONT } from 'lib/font'
-import { withCpuSsr } from 'lib/cpuLog'
 
 
 const C = {
@@ -395,7 +394,7 @@ export default function PredictPage() {
   return <PredictPageInner />
 }
 
-export const getServerSideProps: GetServerSideProps = withCpuSsr('page:predict', async (ctx) => {
+export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const base = `https://${ctx.req.headers.host ?? 'localhost:3000'}`
   return ({
   props: {
@@ -409,4 +408,4 @@ export const getServerSideProps: GetServerSideProps = withCpuSsr('page:predict',
     },
   },
 })
-})
+}

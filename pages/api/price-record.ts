@@ -11,11 +11,10 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { recordPrices, slotRecorded, type RecordResult } from 'lib/priceHistory'
 import { sitePools } from 'lib/sitePools'
 import { scanVolumes } from 'lib/volumeScan'
-import { withCpu } from 'lib/cpuLog'
 
 export const config = { maxDuration: 60 }
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<RecordResult | { recorded: false; reason: string }>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<RecordResult | { recorded: false; reason: string }>) {
   res.setHeader('Cache-Control', 'no-store')
   try {
     if (await slotRecorded()) return res.status(200).json({ recorded: false, reason: 'this slot is already written' })
@@ -28,5 +27,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<RecordResult |
     return res.status(503).json({ recorded: false, reason: 'the chain or the store did not answer' })
   }
 }
-
-export default withCpu('api/price-record', handler)

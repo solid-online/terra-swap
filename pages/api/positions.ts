@@ -14,7 +14,6 @@ import { VENUE_INCENTIVES } from 'lib/dex'
 import { readAstroLegacy, readFlows, readPositions, type AstroLegacy, type Position } from 'lib/positions'
 import { readUnstaking, type Unstaking } from 'lib/lst'
 import type { LpFlow } from 'lib/dex-ledger'
-import { withCpu } from 'lib/cpuLog'
 
 export interface PositionsResponse {
   address: string
@@ -49,7 +48,7 @@ function terraAddress(v: unknown): string | null {
   } catch { return null }
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse<PositionsResponse | { error: string }>) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse<PositionsResponse | { error: string }>) {
   const address = terraAddress(req.query.address)
   if (!address) return res.status(400).json({ error: 'address required' })
   res.setHeader('Cache-Control', 'no-store')
@@ -87,5 +86,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse<PositionsRespon
     return hit ? res.status(200).json(hit) : res.status(502).json({ error: 'could not read positions' })
   }
 }
-
-export default withCpu('api/positions', handler)

@@ -14,7 +14,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kv as vercelKv } from '@vercel/kv'
 import { DEX_FACTORY, isDexLive, queryPairs, smart, IS_ASTRO } from 'lib/dex'
-import { withCpu } from 'lib/cpuLog'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 const KEY = `atrium:dex:holders:v1:${DEX_FACTORY}`
@@ -53,7 +52,7 @@ async function readPool(lpToken: string): Promise<PoolHolders | null> {
   return { total: info.total_supply, holders }
 }
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<HoldersResponse>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<HoldersResponse>) {
   res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=3600')
   const now = Date.now()
   // Astroport mode: LP there sits mostly in their incentives contract, so a holder list misleads, and reading ~850 pools' holders is not a request.
@@ -76,5 +75,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<HoldersRespons
   }
   return res.status(200).json(cached ?? body)
 }
-
-export default withCpu('api/dex-holders', handler)

@@ -15,7 +15,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kv as vercelKv } from '@vercel/kv'
 import { DEX_FACTORY, marketPrices } from 'lib/dex'
-import { withCpu } from 'lib/cpuLog'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 // v2 (2026-09-09): v1 holds prices computed before usdPrices learned to prefer
@@ -28,7 +27,7 @@ export interface MarketResponse { px: Record<string, number>; at: number }
 
 let mem: MarketResponse | null = null
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<MarketResponse>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<MarketResponse>) {
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1800')
   const cached = HAS_KV ? await vercelKv.get<MarketResponse>(KEY) : mem
   if (cached && Date.now() - cached.at < FRESH_MS) return res.status(200).json(cached)
@@ -41,5 +40,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<MarketResponse
   // Scan failed or came back empty: serve whatever we last had rather than nothing.
   return res.status(200).json(cached ?? body)
 }
-
-export default withCpu('api/dex-market', handler)

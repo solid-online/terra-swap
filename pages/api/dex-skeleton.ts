@@ -11,7 +11,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { annotateValues, marketPrices, usdPrices, type PoolView } from 'lib/dex'
 import { skeletonPools } from 'lib/skeleton'
-import { withCpu } from 'lib/cpuLog'
 
 export interface SkeletonResponse { pools: PoolView[]; at: number }
 
@@ -25,7 +24,7 @@ async function build(): Promise<SkeletonResponse> {
   return { pools, at: Date.now() }
 }
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<SkeletonResponse>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<SkeletonResponse>) {
   // Other venues' pools move slowly and a swap is re-checked on chain before signing; three minutes at the CDN is enough, and each region revalidates on its own.
   res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=900')
   if (mem && Date.now() - mem.at < FRESH_MS) return res.status(200).json(mem)
@@ -38,5 +37,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<SkeletonRespon
     return res.status(200).json(mem ?? { pools: [], at: 0 })
   }
 }
-
-export default withCpu('api/dex-skeleton', handler)

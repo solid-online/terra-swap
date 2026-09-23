@@ -14,7 +14,6 @@ import {
   POOL_FEE_BPS, DEX_MODE, type PoolView,
 } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
-import { withCpu } from 'lib/cpuLog'
 
 export interface DexResponse {
   live: boolean
@@ -87,7 +86,7 @@ async function seoulWeather(): Promise<{ temp: number; code: number } | null> {
   } catch { return wx?.v ?? null }
 }
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) {
   // Each CDN region revalidates on its own; a few seconds here meant a full rebuild per region every few seconds (Vercel usage, 2026-09-23).
   res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=120')
   if (!isDexLive()) {
@@ -115,5 +114,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) 
   const tvlUsd = pools.reduce((s, p) => s + (p.tvlUsd ?? 0), 0)
   return res.status(200).json({ live: true, mode: DEX_MODE, pools, feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd, height: head.height, chainId: head.chainId, proposer: head.proposer, seoul })
 }
-
-export default withCpu('api/dex', handler)

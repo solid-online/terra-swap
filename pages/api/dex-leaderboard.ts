@@ -15,7 +15,6 @@ import {
   scanContract, mergeLedger, getLedger, computeLeaderboard, computeFlows,
   BADGES, POINTS, FIRST_HAND_POINTS, CRYSTAL_MULTIPLIER, EARLY_CUTOFF_HEIGHT, LIQUIDITY_POINTS_COEFF, type LeaderRow, type DexEvent, type LpFlow,
 } from 'lib/dex-ledger'
-import { withCpu } from 'lib/cpuLog'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 const CACHE_KEY = `atrium:dex:board:v2:${DEX_FACTORY}`
@@ -46,7 +45,7 @@ export interface BoardResponse {
 type Snap = { at: number; rows: LeaderRow[]; total: number; recent: DexEvent[]; poolActivity: Record<string, PoolActivity>; firstHands: Record<string, { address: string; height: number; txhash: string }>; lotd: { address: string; moves: number } | null; flows: Record<string, LpFlow> }
 let memCache: Snap | null = null
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>) {
   res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120')
   const rules = { points: POINTS, firstHand: FIRST_HAND_POINTS, crystalMultiplier: CRYSTAL_MULTIPLIER, badges: BADGES, cutoffHeight: EARLY_CUTOFF_HEIGHT, liquidityCoeff: LIQUIDITY_POINTS_COEFF }
   // Astroport mode has no board: their history is not ours to score, and the scan would fan out over ~850 pools.
@@ -108,5 +107,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>
 
   return res.status(200).json({ live: true, rows, totalEvents: total, scannedAt: snap.at, rules, recent, poolActivity, firstHands, lotd, flows })
 }
-
-export default withCpu('api/dex-leaderboard', handler)

@@ -11,7 +11,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { assetId, isDexLive, knownPairs, queryPairs, queryPairsOf, tokenFor, AWAY_VENUE, VENUE_FACTORY } from 'lib/dex'
 import { poolCandles, isCandleInterval, type Candle, type CandleInterval } from 'lib/priceHistory'
-import { withCpu } from 'lib/cpuLog'
 
 export interface CandlesResponse {
   pair: string
@@ -23,7 +22,7 @@ export interface CandlesResponse {
   at: number
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse<CandlesResponse | { error: string }>) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse<CandlesResponse | { error: string }>) {
   const pair = String(req.query.pair || '')
   const interval: CandleInterval = isCandleInterval(req.query.interval) ? req.query.interval : '1h'
   const empty: CandlesResponse = { pair, interval, base: '', quote: '', candles: [], since: null, at: Date.now() }
@@ -48,5 +47,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse<CandlesResponse
     return res.status(200).json(empty)
   }
 }
-
-export default withCpu('api/dex-candles', handler)

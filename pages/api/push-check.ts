@@ -13,7 +13,6 @@ import webpush from 'web-push'
 import { DEX_FACTORY, marketPrices } from 'lib/dex'
 import { fmtUsdPrice } from 'lib/alerts'
 import { deleteSub, listIds, readSubs, writeSub } from 'lib/pushStore'
-import { withCpu } from 'lib/cpuLog'
 
 export const config = { maxDuration: 60 }
 
@@ -27,7 +26,7 @@ const LOCK = 'atrium:push:v1:lock'
 const MARKET_KEY = `atrium:dex:market:v2:${DEX_FACTORY}`
 let lastRun = 0
 
-async function handler(_req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store')
   if (!PUBLIC_KEY || !PRIVATE_KEY) return res.status(200).json({ sent: 0, reason: 'not configured on this host' })
   const now = Date.now()
@@ -80,5 +79,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse) {
     return res.status(503).json({ sent: 0, reason: 'the store or the chain did not answer' })
   }
 }
-
-export default withCpu('api/push-check', handler)

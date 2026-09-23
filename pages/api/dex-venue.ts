@@ -13,7 +13,6 @@ import {
   AWAY_VENUE, VENUE_FACTORY, knownPairs, queryPairsOf, queryPool, toPoolView, refineSpot,
   annotateValues, marketPrices, usdPrices, type PoolView, type Venue,
 } from 'lib/dex'
-import { withCpu } from 'lib/cpuLog'
 
 export interface VenueResponse { venue: Venue; pools: PoolView[]; at: number }
 
@@ -33,7 +32,7 @@ async function build(): Promise<VenueResponse> {
   return { venue: AWAY_VENUE, pools, at: Date.now() }
 }
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<VenueResponse>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<VenueResponse>) {
   // Other venues' pools move slowly and a swap is re-checked on chain before signing; three minutes at the CDN is enough, and each region revalidates on its own.
   res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=900')
   if (mem && Date.now() - mem.at < FRESH_MS) return res.status(200).json(mem)
@@ -46,5 +45,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<VenueResponse>
     return res.status(200).json(mem ?? { venue: AWAY_VENUE, pools: [], at: 0 })
   }
 }
-
-export default withCpu('api/dex-venue', handler)

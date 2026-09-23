@@ -19,7 +19,6 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { fromBech32 } from '@cosmjs/encoding'
 import { lcdFetch } from 'lib/lcd'
 import { marketPrices, resolveToken } from 'lib/dex'
-import { withCpu } from 'lib/cpuLog'
 
 /** A busy pool's fifteen pages of transactions can take twenty seconds to read. */
 export const config = { maxDuration: 60 }
@@ -102,7 +101,7 @@ async function build(pair: string): Promise<PoolFeesResponse> {
   return { pair, day7: { usd: await usd(fees7), swaps: swaps7 }, day30: { usd: await usd(fees30), swaps: swaps30 }, since, complete, at: Date.now() }
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse<PoolFeesResponse | { error: string }>) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse<PoolFeesResponse | { error: string }>) {
   const pair = contractAddress(req.query.pair)
   if (!pair) return res.status(400).json({ error: 'pair required' })
   const hit = cache.get(pair)
@@ -136,5 +135,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse<PoolFeesRespons
     return hit ? res.status(200).json(hit) : res.status(502).json({ error: 'could not read the pool' })
   }
 }
-
-export default withCpu('api/pool-fees', handler)

@@ -27,13 +27,12 @@ import type { VenueResponse } from 'pages/api/dex-venue'
 import type { PoolFeesResponse } from 'pages/api/pool-fees'
 import type { PricesResponse } from 'pages/api/dex-prices'
 import type { DepthResponse } from 'pages/api/depth'
-import { withCpuSsr } from 'lib/cpuLog'
 
 const ADDR = /^terra1[02-9ac-hj-np-z]{38,58}$/
 const enc = encodeURIComponent
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace'
 
-export const getServerSideProps: GetServerSideProps = withCpuSsr('page:pool/[addr]', async ctx => {
+export const getServerSideProps: GetServerSideProps = async ctx => {
   const addr = String(ctx.params?.addr ?? '')
   if (!ADDR.test(addr)) return { notFound: true }
   const base = `https://${ctx.req.headers.host ?? 'swap.openfields.app'}`
@@ -65,7 +64,7 @@ export const getServerSideProps: GetServerSideProps = withCpuSsr('page:pool/[add
       },
     },
   }
-})
+}
 
 function Spark({ points }: { points: number[] }) {
   const W = 300, H = 56, PAD = 3
