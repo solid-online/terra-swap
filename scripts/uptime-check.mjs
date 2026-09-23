@@ -81,6 +81,14 @@ const TARGETS = [
     ],
   },
   {
+    // The live feed reads the newest blocks and their transactions, so it answers only when the chain does.
+    site: 'scan.openfields.app',
+    checks: [
+      { url: 'https://scan.openfields.app/', expect: (r) => r.status === 200 },
+      { url: 'https://scan.openfields.app/api/live', json: true, expect: (r, j) => r.status === 200 && j?.latest > 0 && j?.blocks?.length > 0 },
+    ],
+  },
+  {
     site: 'atrium.markets',
     checks: [
       { url: 'https://atrium.markets/', expect: (r) => r.status === 200 },
