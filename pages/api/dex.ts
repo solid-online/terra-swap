@@ -2,122 +2,18 @@
  * GET /api/dex — every pool this build lists, with live reserves and spot prices.
  *
  * One server-side fan-out so the swap page makes one request instead of
- * N+1 LCD calls from every visitor's browser. Short edge cache: reserves
- * move with every swap, but a few seconds of staleness is invisible next
- * to the ~6s block time.
+ * N+1 LCD calls from every visitor's browser. The pool-scan workflow builds
+ * it (lib/dexHome, lib/scanPlan); this route reads it back.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { createHash } from 'crypto'
-import {
-  isDexLive, queryPairs, queryPairsOf, listedPairs, queryPool, toPoolView, refineSpot, annotateTvl, HOME_VENUE, TERRA_SWAP_FACTORY_V2,
-  POOL_FEE_BPS, DEX_MODE, type PoolView,
-} from 'lib/dex'
-import { lcdFetch } from 'lib/lcd'
-import { shared, stale } from 'lib/sharedCache'
+import { isDexLive, POOL_FEE_BPS, DEX_MODE } from 'lib/dex'
+import type { DexResponse } from 'lib/dexHome'
+import { homeScan } from 'lib/poolScans'
+import { SCAN_PLAN } from 'lib/scanPlan'
+import { stale } from 'lib/sharedCache'
 
-export interface DexResponse {
-  live: boolean
-  /** which factory this build fronts */
-  mode: typeof DEX_MODE
-  pools: PoolView[]
-  feeBps: number
-  poolFeeBps: number
-  tvlUsd: number
-  /** latest block, for the live chain pill */
-  height: number
-  chainId: string
-  /** moniker of the validator that proposed the latest block */
-  proposer: string
-  /** live Seoul weather, because the chain was born there */
-  seoul: { temp: number; code: number } | null
-}
-
-const UA = { 'User-Agent': 'Mozilla/5.0 atrium-dex', accept: 'application/json' }
-
-/** One cheap call so the page can show a live block height, Terra Station style. */
-async function latestBlock(): Promise<{ height: number; chainId: string; proposer: string }> {
-  try {
-    const r = await lcdFetch('/cosmos/base/tendermint/v1beta1/blocks/latest', { headers: UA, timeoutMs: 6000 })
-    if (!r.ok) return { height: 0, chainId: '', proposer: '' }
-    const h = (await r.json())?.block?.header
-    const proposer = await Promise.race([monikerFor(String(h?.proposer_address ?? '')), new Promise<string>(r => setTimeout(() => r(''), 1500))])
-    return { height: Number(h?.height ?? 0), chainId: String(h?.chain_id ?? ''), proposer }
-  } catch { return { height: 0, chainId: '', proposer: '' } }
-}
-
-/**
- * Terra Station used to tell you who proposed the block. So do we. The block
- * header carries the proposer's consensus address (base64 of 20 bytes); for an
- * ed25519 validator that is sha256(pubkey)[:20], so the bonded set maps
- * straight onto monikers with no bech32 involved. Cached ten minutes.
- */
-let valMap: { at: number; map: Record<string, string> } | null = null
-async function monikerFor(proposerB64: string): Promise<string> {
-  if (!proposerB64) return ''
-  try {
-    if (!valMap || Date.now() - valMap.at > 600_000) {
-      const r = await lcdFetch('/cosmos/staking/v1beta1/validators?status=BOND_STATUS_BONDED&pagination.limit=300', { headers: UA, timeoutMs: 8000 })
-      if (!r.ok) return ''
-      const vs = ((await r.json())?.validators ?? []) as { consensus_pubkey?: { key?: string }; description?: { moniker?: string } }[]
-      const map: Record<string, string> = {}
-      for (const v of vs) {
-        const key = v.consensus_pubkey?.key
-        if (!key) continue
-        const cons = createHash('sha256').update(Buffer.from(key, 'base64')).digest().subarray(0, 20).toString('base64')
-        // Monikers are free text on-chain; some carry stray whitespace.
-        map[cons] = (v.description?.moniker ?? '').trim()
-      }
-      valMap = { at: Date.now(), map }
-    }
-    return valMap.map[proposerB64] ?? ''
-  } catch { return '' }
-}
-
-/** Open-Meteo, no key, cached ten minutes. Seoul City Hall. */
-let wx: { at: number; v: { temp: number; code: number } | null } | null = null
-async function seoulWeather(): Promise<{ temp: number; code: number } | null> {
-  if (wx && Date.now() - wx.at < 600_000) return wx.v
-  try {
-    const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=37.5665&longitude=126.978&current=temperature_2m,weather_code', { headers: UA, signal: AbortSignal.timeout(5000) })
-    const j = r.ok ? await r.json() : null
-    const v = j?.current ? { temp: Math.round(Number(j.current.temperature_2m)), code: Number(j.current.weather_code) } : null
-    wx = { at: Date.now(), v }
-    return v
-  } catch { return wx?.v ?? null }
-}
-
-/**
- * One build every 15 s for all instances together (lib/sharedCache): each
- * build reads every pool from the chain and re-prices it, and the CDN's
- * regions each revalidate on their own (Vercel usage, 2026-09-23).
- */
-const FRESH_MS = 15_000
-const KEY = 'atrium:dex:home:v1'
-
-async function build(): Promise<DexResponse> {
-  // No market scan here: it lives in /api/dex-market so a cold start never blocks the page.
-  const [allPairs, v2Pairs, head, seoul] = await Promise.all([queryPairs(), queryPairsOf(TERRA_SWAP_FACTORY_V2).catch(() => []), latestBlock(), seoulWeather()])
-  const pairs = listedPairs(allPairs)
-  // Factory v2's concentrated and stable pools are Terra Swap's too; each carries its factory for the router.
-  const pools = await Promise.all([
-    ...pairs.map(async (p) => toPoolView(p, await queryPool(p.contract_addr))),
-    ...v2Pairs.map(async (p) => toPoolView(p, await queryPool(p.contract_addr), HOME_VENUE, undefined, TERRA_SWAP_FACTORY_V2)),
-  ])
-  // Order: pools with liquidity before empty ones, then pools made of tokens
-  // we can name before unknown ones, then by the named side's reserve. Raw
-  // reserve maths across unrelated tokens says nothing, so it is only used
-  // as the final tiebreak within the same tier.
-  const known = (p: PoolView) => p.tokens.filter(t => t.key === t.label && t.key.length <= 8).length
-  pools.sort((a, b) =>
-    Number(a.empty) - Number(b.empty)
-    || known(b) - known(a)
-    || Number(b.reserves[0]) - Number(a.reserves[0]))
-  await refineSpot(pools)
-  annotateTvl(pools)
-  const tvlUsd = pools.reduce((s, p) => s + (p.tvlUsd ?? 0), 0)
-  return { live: true, mode: DEX_MODE, pools, feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd, height: head.height, chainId: head.chainId, proposer: head.proposer, seoul }
-}
+export type { DexResponse }
 
 async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) {
   // Each CDN region revalidates on its own; a few seconds here meant a full rebuild per region every few seconds (Vercel usage, 2026-09-23).
@@ -126,10 +22,9 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) 
     return res.status(200).json({ live: false, mode: DEX_MODE, pools: [], feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd: 0, height: 0, chainId: '', proposer: '', seoul: null })
   }
   try {
-    const built = await shared(KEY, FRESH_MS, async () => ({ at: Date.now(), body: await build() }), v => v.body.pools.length > 0)
-    return res.status(200).json(built.body)
+    return res.status(200).json((await homeScan()).body)
   } catch (e) {
-    const last = await stale<{ at: number; body: DexResponse }>(KEY)
+    const last = await stale<{ at: number; body: DexResponse }>(SCAN_PLAN.home.key)
     if (last) return res.status(200).json(last.body)
     throw e
   }

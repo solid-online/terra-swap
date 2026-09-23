@@ -1,0 +1,58 @@
+# Builds the pool scans (every pool's reserves and prices, the other venues'
+# pools, the market reference, the LST board, the stats) on GitHub's machines
+# and hands each result to swap.openfields.app, which only reads them back. It
+# also writes each ten-minute slot of the price history. See
+# scripts/pool-scans.ts, lib/scanPlan.ts and pages/api/pool-scans.ts.
+#
+# Why (2026-09-24): building them on Vercel was most of this site's Active CPU,
+# and Openfields is moving to Vercel's Hobby plan (4 CPU-hours a month for every
+# site together). Actions minutes are free for a public repository. When this
+# stops, the site builds its scans itself again, only less often.
+#
+# The site takes the results only with an OIDC token GitHub issues to this
+# workflow file on main of this repository, so there is no secret to keep.
+#
+# Like the uptime workflow, one run keeps going for close to the six hours a job
+# may last and then starts the next itself; the hourly schedule restarts the
+# chain if a run ever fails. Runs share one concurrency group, so they never
+# overlap. To stop it, disable this workflow in the Actions tab.
+name: pool-scans
+
+on:
+  schedule:
+    - cron: '43 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pool-scans
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    permissions:
+      contents: read
+      id-token: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      # No install scripts: nothing the scans load needs one, and this job can ask GitHub for a token.
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Scan and hand over each result
+        env:
+          WATCH_MINUTES: '340'
+        run: npx tsx scripts/pool-scans.ts
+      - name: Hand over to the next run
+        # Only after a watch that ended as planned: a run the site refused would refuse again.
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pool-scans.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}"

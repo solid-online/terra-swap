@@ -10,7 +10,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kv as vercelKv } from '@vercel/kv'
 import webpush from 'web-push'
-import { DEX_FACTORY, marketPrices } from 'lib/dex'
+import { sharedMarketPrices } from 'lib/sharedCache'
 import { fmtUsdPrice } from 'lib/alerts'
 import { deleteSub, listIds, readSubs, writeSub } from 'lib/pushStore'
 
@@ -22,8 +22,6 @@ const PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || ''
 /** Who push services should contact about these messages: the site itself. */
 const SUBJECT = process.env.VAPID_SUBJECT || 'https://swap.openfields.app'
 const LOCK = 'atrium:push:v1:lock'
-/** The market reference /api/dex-market keeps; read from there when it is fresh, so a check does not scan Astroport again. */
-const MARKET_KEY = `atrium:dex:market:v2:${DEX_FACTORY}`
 let lastRun = 0
 
 export default async function handler(_req: NextApiRequest, res: NextApiResponse) {
@@ -39,8 +37,8 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
   }
 
   try {
-    const kept = HAS_KV ? await vercelKv.get<{ px: Record<string, number>; at: number }>(MARKET_KEY) : null
-    const px = kept && now - kept.at < 15 * 60_000 ? kept.px : await marketPrices()
+    // The market reference the pool-scan workflow keeps, so a check does not scan Astroport again.
+    const px = await sharedMarketPrices()
     if (Object.keys(px).length < 2) return res.status(503).json({ sent: 0, reason: 'no market reference right now' })
 
     webpush.setVapidDetails(SUBJECT, PUBLIC_KEY, PRIVATE_KEY)

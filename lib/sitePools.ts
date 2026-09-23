@@ -2,14 +2,15 @@
  * Both sites' pools, built on the server the way /api/dex and /api/dex-venue
  * build them: live reserves, spot prices, and dollar values at the market
  * reference. For server routes that route or price (the LST board, the stats
- * page) without calling this site's own API over HTTP. Kept for a minute per
- * instance, and built once however many requests ask at the same time.
+ * page) without calling this site's own API over HTTP. Built by the pool-scan
+ * workflow once a minute (lib/scanPlan), or here when that has stopped.
  */
 
 import {
   AWAY_VENUE, VENUE_FACTORY, annotateTvl, annotateValues, knownPairs, listedPairs,
   queryPairs, queryPairsOf, queryPool, refineSpot, toPoolView, usdPrices, type PoolView,
 } from 'lib/dex'
+import { SCAN_PLAN } from 'lib/scanPlan'
 import { shared, sharedMarketPrices, stale } from 'lib/sharedCache'
 
 export interface SitePools {
@@ -20,7 +21,7 @@ export interface SitePools {
   px: Record<string, number>
 }
 
-const FRESH_MS = 60_000
+export const keepSitePools = (v: SitePools): boolean => v.pools.length > 0
 
 async function build(): Promise<SitePools> {
   const [own, away, market] = await Promise.all([
@@ -47,9 +48,9 @@ async function build(): Promise<SitePools> {
   return { at: Date.now(), pools, px }
 }
 
-/** One build a minute for every instance together (lib/sharedCache). */
 export async function sitePools(): Promise<SitePools> {
-  const built = await shared('atrium:site-pools:v1', FRESH_MS, build, v => v.pools.length > 0)
-  if (built.pools.length > 0) return built
-  return (await stale<SitePools>('atrium:site-pools:v1')) ?? built
+  const { key } = SCAN_PLAN.site
+  const built = await shared(key, SCAN_PLAN.site, build, keepSitePools)
+  if (keepSitePools(built)) return built
+  return (await stale<SitePools>(key)) ?? built
 }

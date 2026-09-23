@@ -13,11 +13,12 @@
 
 import {
   ASTRO_CONVERTER, ASTRO_CW20, ASTRO_FACTORY, ASTRO_IBC_DENOM, ASTRO_STAKING, SKELETON_FACTORY, TERRA_SWAP_FACTORY, TERRA_SWAP_FACTORY_V2, VENUE_INCENTIVES, XASTRO_CW20,
-  assetId, knownPairs, marketPrices, queryCw20Balance, queryNativeBalance, queryPairsOf, queryPool,
+  assetId, knownPairs, queryCw20Balance, queryNativeBalance, queryPairsOf, queryPool,
   resolveToken, smart, toPoolView,
   type Asset, type KnownToken, type PairInfo, type PoolView, type Venue,
 } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
+import { sharedMarketPrices } from 'lib/sharedCache'
 import { withPlainLp } from 'lib/skeleton'
 import { parseAssets, type LpFlow } from 'lib/dex-ledger'
 
@@ -205,7 +206,7 @@ export async function readPositions(address: string): Promise<Position[]> {
   const [tsPairs1, tsPairs2, astroPairs, skeletonPairs, touched, px] = await Promise.all([
     queryPairsOf(TERRA_SWAP_FACTORY), queryPairsOf(TERRA_SWAP_FACTORY_V2).catch(() => [] as PairInfo[]), queryPairsOf(ASTRO_FACTORY),
     queryPairsOf(SKELETON_FACTORY).then(ps => ps.map(withPlainLp)).catch(() => [] as PairInfo[]),
-    historyTouches(address), marketPrices(),
+    historyTouches(address), sharedMarketPrices(),
   ])
   // Both of Terra Swap's factories: standard pools on the first, concentrated and stable pools on factory v2.
   const tsPairs = [...tsPairs1, ...tsPairs2]

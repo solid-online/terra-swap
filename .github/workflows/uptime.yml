@@ -13,9 +13,10 @@
 # they never overlap: a run started while another watches waits its turn. To stop
 # the checks, disable this workflow in the Actions tab.
 #
-# The same ten-minute beat writes down prices for the charts (/api/price-record,
-# lib/priceHistory) and sends price alerts to browsers with the page closed
-# (/api/push-check, lib/push). Both ignore a second call in the same slot.
+# The same ten-minute beat sends price alerts to browsers with the page closed
+# (/api/push-check, lib/push), and calls /api/price-record, which writes down
+# prices for the charts (lib/priceHistory) if the pool-scans workflow has not
+# written that slot already. Both ignore a second call in the same slot.
 name: uptime
 
 on:

@@ -78,11 +78,7 @@ async function scanPoolVolume(p: PoolView, sinceHeight: number): Promise<{ vol: 
  * an unbounded backfill.
  */
 export async function scanVolumes(pools: PoolView[]): Promise<Record<string, number>> {
-  const top = pools
-    .filter(p => !p.empty && (p.tvlUsd ?? 0) > 0)
-    .sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))
-    .slice(0, MAX_POOLS)
-
+  const top = volumePools(pools)
   const out: Record<string, number> = {}
   for (let i = 0; i < top.length; i += CONCURRENCY) {
     const batch = top.slice(i, i + CONCURRENCY)
@@ -94,5 +90,51 @@ export async function scanVolumes(pools: PoolView[]): Promise<Record<string, num
       if (cursor > 0 && vol > 0) out[p.contract_addr] = vol
     }))
   }
+  return out
+}
+
+/** The pools that get volume bars: the deepest MAX_POOLS with liquidity. */
+export function volumePools(pools: PoolView[]): PoolView[] {
+  return pools
+    .filter(p => !p.empty && (p.tvlUsd ?? 0) > 0)
+    .sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))
+    .slice(0, MAX_POOLS)
+}
+
+// ─── Cursors across machines ───────────────────────────────────────
+//
+// The pool-scan workflow scans volume on GitHub's machines, which have no KV.
+// Before each slot it takes the site's cursors (/api/pool-scans), and it hands
+// its new ones back with the slot; the site keeps them only if it wrote that
+// slot. So a trade is counted once wherever the slot is scanned.
+
+/** Start these pools from the given cursors (0 where there is none: the next scan only anchors it). */
+export function setCursors(addrs: string[], c: Record<string, number>): void {
+  for (const a of addrs) {
+    const h = c[a]
+    if (Number.isFinite(h) && h > 0) cursorMem.set(a, h)
+    else cursorMem.delete(a)
+  }
+}
+
+/** This process's cursors for these pools. */
+export function memCursors(addrs: string[]): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const a of addrs) { const h = cursorMem.get(a); if (h) out[a] = h }
+  return out
+}
+
+/** The stored cursors for these pools, first moved on to the given ones where those are ahead (server side, with KV). */
+export async function advanceCursors(addrs: string[], given: Record<string, number> = {}): Promise<Record<string, number>> {
+  if (!HAS_KV || addrs.length === 0) return {}
+  const got = await vercelKv.mget<(number | null)[]>(...addrs.map(a => CURSOR_PREFIX + a)).catch(() => [] as (number | null)[])
+  const out: Record<string, number> = {}
+  await Promise.all(addrs.map(async (a, i) => {
+    const kept = Number(got?.[i] ?? 0) || 0
+    const next = Number(given[a] ?? 0) || 0
+    if (next > kept) await setCursor(a, next)
+    const h = Math.max(kept, next)
+    if (h > 0) out[a] = h
+  }))
   return out
 }

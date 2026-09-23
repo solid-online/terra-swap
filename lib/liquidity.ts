@@ -9,9 +9,10 @@
  */
 
 import {
-  DEX_FACTORY, annotateValues, marketPrices, queryPairs, queryPool, smart, toPoolView,
+  DEX_FACTORY, annotateValues, queryPairs, queryPool, smart, toPoolView,
   type PoolView,
 } from 'lib/dex'
+import { sharedMarketPrices } from 'lib/sharedCache'
 
 /** Holders read per pool. Beyond this the tail is dust. */
 const MAX_HOLDERS = 40
@@ -46,7 +47,7 @@ export async function readLiquidity(): Promise<PoolLiquidity[]> {
   if (pairs.length === 0) return []
   const [views, px] = await Promise.all([
     Promise.all(pairs.map(async p => toPoolView(p, await queryPool(p.contract_addr)))),
-    marketPrices(),
+    sharedMarketPrices(),
   ])
   annotateValues(views, px)
   const out = await Promise.all(views.map(async (pool, i) => {

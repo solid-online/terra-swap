@@ -100,6 +100,27 @@ export async function slotRecorded(now = Date.now()): Promise<boolean> {
   return !!rec && Object.values(rec.t).some(a => a?.[slot] != null)
 }
 
+const LOCK = 'atrium:price-record:lock'
+let localLock = 0
+
+/**
+ * Null when the caller may write this slot now, or why not. Callers that
+ * arrive while a slot is being written wait for nobody: before this lock,
+ * every call in the first ~20 s of a slot wrote it again, about a dozen full
+ * pool scans a minute from outside callers (Vercel logs, 2026-09-23). The
+ * pool-scan workflow and /api/price-record both claim a slot here first.
+ */
+export async function claimSlot(now = Date.now()): Promise<string | null> {
+  if (await slotRecorded(now)) return 'this slot is already written'
+  if (HAS_KV) {
+    if ((await vercelKv.set(LOCK, now, { nx: true, ex: 90 })) !== 'OK') return 'this slot is being written'
+  } else {
+    if (now - localLock < 90_000) return 'this slot is being written'
+    localLock = now
+  }
+  return null
+}
+
 export interface RecordResult { recorded: boolean; day: string; slot: number; tokens: number; pools: number }
 
 /**
