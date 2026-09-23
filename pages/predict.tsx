@@ -25,8 +25,8 @@ import {
 import type { PredictResponse } from 'pages/api/predict'
 import { useBet, useClaim, useCreateMarket, useObserve, useResolve, useVoidMarket } from 'components/transactions/usePredict'
 import { humanizeTxError } from 'lib/errors'
+import { TERRA_FONT } from 'lib/font'
 
-const TERRA_FONT = "'Montserrat', 'Space Grotesk', 'Inter', system-ui, sans-serif"
 
 const C = {
   void: '#05070f', surface: '#0b0f1c', surfaceElev: '#111729',
@@ -326,9 +326,6 @@ function PredictPageInner() {
     <>
       <Head>
         <title>Terra Predict</title>
-        <link rel='preconnect' href='https://fonts.googleapis.com' />
-        <link rel='preconnect' href='https://fonts.gstatic.com' crossOrigin='anonymous' />
-        <link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800&display=swap' />
       </Head>
       <div aria-hidden style={{ position: 'fixed', inset: 0, zIndex: 1, background: `radial-gradient(circle at 50% -20%, #1a1d30 0%, #0a0d18 45%, ${C.void} 100%)` }} />
       {toast && <div style={{ position: 'fixed', left: '50%', bottom: 24, transform: 'translateX(-50%)', zIndex: 50, padding: '10px 16px', background: '#f4f1e8', color: '#1a1405', borderRadius: 999, fontFamily: TERRA_FONT, fontWeight: 600, fontSize: TEXT.sm.size, boxShadow: '0 10px 30px rgba(0,0,0,0.45)' }}>{toast}</div>}

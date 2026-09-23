@@ -9,6 +9,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { TEXT } from 'components/tokens'
+import { TERRA_FONT } from 'lib/font'
 
 export interface PaletteItem {
   id: string
@@ -21,7 +22,6 @@ export interface PaletteItem {
   run: () => void
 }
 
-const TERRA_FONT = "'Montserrat', 'Space Grotesk', 'Inter', system-ui, sans-serif"
 const C = {
   surface: '#0b0f1c', surfaceElev: '#111729', divider: 'rgba(255,216,61,0.13)', goldCore: '#caa022', goldLit: '#ffd83d',
   textPrimary: '#f4f1e8', textSecondary: '#d6cfbd', textMuted: '#9a927f', textWhisper: '#6b6555',

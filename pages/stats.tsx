@@ -18,8 +18,8 @@ import type { DexResponse } from 'pages/api/dex'
 import type { VenueResponse } from 'pages/api/dex-venue'
 import type { StatsResponse } from 'pages/api/stats'
 import type { PoolFeesResponse } from 'pages/api/pool-fees'
+import { TERRA_FONT } from 'lib/font'
 
-const TERRA_FONT = "'Montserrat', 'Space Grotesk', 'Inter', system-ui, sans-serif"
 const C = {
   surface: '#0b0f1c', surfaceElev: '#111729', divider: 'rgba(255,216,61,0.13)', goldCore: '#caa022', goldLit: '#ffd83d',
   textPrimary: '#f4f1e8', textSecondary: '#d6cfbd', textMuted: '#9a927f', textWhisper: '#6b6555', success: '#3ddc97', alert: '#e04a5a', ember: '#ffb347',
@@ -110,7 +110,6 @@ export default function StatsPage() {
     <>
       <Head>
         <title>Stats · Terra Swap</title>
-        <link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&display=swap' />
       </Head>
       <main style={{ minHeight: '100vh', background: 'radial-gradient(120% 80% at 50% -10%, #111729 0%, #0a0d18 42%, #05070f 100%)', color: C.textPrimary, fontFamily: TERRA_FONT, padding: '1.4rem 1.2rem 4rem' }}>
         <div style={{ maxWidth: 860, margin: '0 auto', display: 'grid', gap: SPACE['3'] }}>

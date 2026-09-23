@@ -9,7 +9,7 @@ html, body {
   padding: 0;
   background: #05070f;
   color: #f4f1e8;
-  font-family: 'Montserrat', 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: var(--tl-font, 'Inter', system-ui, -apple-system, sans-serif);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

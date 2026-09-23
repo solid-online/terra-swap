@@ -4,6 +4,7 @@ import Head from 'next/head'
 import ErrorBoundary from 'components/ErrorBoundary'
 import { TxRegionGateProvider } from 'components/RegionGate'
 import RegionBanner from 'components/RegionBanner'
+import { MONTSERRAT } from 'lib/font'
 import 'styles/globals.css'
 
 // The wallet stack (cosmos-kit, wallet adapters, WalletConnect) is client-only.
@@ -27,6 +28,9 @@ export default function App({ Component, pageProps }: AppProps) {
   const description = og?.description ?? 'A decentralized exchange on Terra. Experimental.'
   return (
     <>
+      <style jsx global>{`
+        :root { --tl-font: ${MONTSERRAT}, 'Inter', system-ui, -apple-system, sans-serif; }
+      `}</style>
       <Head>
         <title>{title}</title>
         <meta key='description' name='description' content={description} />

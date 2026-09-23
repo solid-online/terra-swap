@@ -12,8 +12,9 @@ import { useEffect, useState } from 'react'
 import { KNOWN_TOKENS } from 'lib/dex'
 import { TokenIcon } from 'components/TokenIcon'
 import type { QuoteResponse } from 'pages/api/quote'
+import { MONTSERRAT } from 'lib/font'
 
-const FONT = "'Montserrat', 'Inter', system-ui, sans-serif"
+const FONT = `${MONTSERRAT}, 'Inter', system-ui, sans-serif`
 const C = {
   void: '#05070f', surface: '#0b0f1c', elev: '#111729', divider: 'rgba(255,216,61,0.16)', gold: '#ffd83d', goldCore: '#caa022',
   text: '#f4f1e8', muted: '#9a927f', whisper: '#6b6555', alert: '#e04a5a',
@@ -78,7 +79,6 @@ function Embed() {
       <Head>
         <title>Terra Swap quote</title>
         <meta name='robots' content='noindex' />
-        <link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Montserrat:wght@300;500;700&display=swap' />
       </Head>
       <div style={{ minHeight: '100vh', background: C.void, color: C.text, fontFamily: FONT, padding: 8, boxSizing: 'border-box', display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
         <div style={{ width: '100%', maxWidth: 440, background: C.elev, border: `1px solid ${C.divider}`, borderRadius: 16, padding: 14, boxSizing: 'border-box', display: 'grid', gap: 10, alignContent: 'start' }}>

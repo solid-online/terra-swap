@@ -69,6 +69,7 @@ import { recentMovePct, suggestSlippage, type SlipAdvice } from 'lib/slippage'
 import { SWEEP_KEEP_LUNA_MICRO, SWEEP_MAX, planSweep, poolsFor, type SweepLine, type SweepPick } from 'lib/sweep'
 import { GAS_DROP_BELOW_MICRO, LUNA, gasDropMicro, planGasDrop } from 'lib/gasDrop'
 import { askNotifications, fmtUsdPrice, notificationsAllowed, removeAlert, toggleFavorite, useAlertWatcher, usePrefs } from 'lib/alerts'
+import { MONTSERRAT, TERRA_FONT } from 'lib/font'
 
 type Tab = 'swap' | 'pools' | 'positions' | 'wallet' | 'history' | 'transfer' | 'create' | 'board'
 
@@ -83,12 +84,6 @@ const POOL_SORT_LABEL: Record<PoolSort, string> = { suggested: 'Suggested', tvl:
 const TAB_PARAM: Record<Tab, string> = { swap: '', pools: 'pools', positions: 'portfolio', wallet: 'wallet', history: 'history', transfer: 'bridge', create: 'open-pool', board: 'board' }
 const PARAM_TAB: Record<string, Tab> = { pools: 'pools', portfolio: 'positions', positions: 'positions', wallet: 'wallet', history: 'history', bridge: 'transfer', transfer: 'transfer', 'open-pool': 'create', create: 'create', board: 'board' }
 
-// The classic Terra brand face is Gotham (terra.money served "Gotham A/B"
-// from Hoefler & Co's cloud.typography in 2020–21; the wordmark is Gotham
-// Bold). Gotham is a commercial licence and not on Google Fonts, which is the
-// only font host our CSP allows, so we use Montserrat — the well-known free
-// Gotham lookalike (same geometric skeleton, double-storey a, flat e).
-const TERRA_FONT = "'Montserrat', 'Space Grotesk', 'Inter', system-ui, sans-serif"
 /** Astroport mode: this page as a plain interface to Astroport's pools. See DEX_MODE in lib/dex. */
 const LITE = IS_ASTRO
 const APP_NAME = LITE ? 'Terra Pools' : 'Terra Swap'
@@ -681,8 +676,8 @@ function CapitalGame({ onClose }: { onClose: () => void }) {
         drawKwon(g.x, false)
         const n = Math.ceil(-elapsed)
         ctx.fillStyle = '#ffd83d'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-        ctx.font = '700 84px "Montserrat", system-ui, sans-serif'; ctx.fillText(n > 0 && -elapsed > 0.5 ? String(Math.min(3, n)) : '화이팅!', W / 2, H / 2 - 20)
-        ctx.fillStyle = '#9a927f'; ctx.font = '700 14px "Montserrat", system-ui, sans-serif'; ctx.fillText('준비 · READY · CATCH THE CAPITAL', W / 2, H / 2 + 44)
+        ctx.font = `700 84px ${MONTSERRAT}, system-ui, sans-serif`; ctx.fillText(n > 0 && -elapsed > 0.5 ? String(Math.min(3, n)) : '화이팅!', W / 2, H / 2 - 20)
+        ctx.fillStyle = '#9a927f'; ctx.font = `700 14px ${MONTSERRAT}, system-ui, sans-serif`; ctx.fillText('준비 · READY · CATCH THE CAPITAL', W / 2, H / 2 + 44)
         raf = requestAnimationFrame(loop); return
       }
       if (!g.over) {
@@ -726,7 +721,7 @@ function CapitalGame({ onClose }: { onClose: () => void }) {
       ctx.font = '26px system-ui, "Apple Color Emoji", "Segoe UI Emoji", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
       for (const d of g.drops) ctx.fillText(DROP_EMOJI[d.kind], d.x, d.y)
       drawKwon(g.x, g.flash > 0); if (g.flash > 0) g.flash -= 1
-      ctx.fillStyle = '#9a927f'; ctx.font = '700 12px "Montserrat", system-ui, sans-serif'; ctx.textAlign = 'left'
+      ctx.fillStyle = '#9a927f'; ctx.font = `700 12px ${MONTSERRAT}, system-ui, sans-serif`; ctx.textAlign = 'left'
       ctx.fillText(`CAPITAL  ${g.score}`, 14, 20); ctx.textAlign = 'right'; ctx.fillText(`${'🫡'.repeat(Math.max(0, g.lives))}   ${Math.ceil(left)}s`, W - 14, 20)
       if (!g.over) raf = requestAnimationFrame(loop)
     }
@@ -5719,9 +5714,6 @@ function SwapPageInner() {
     <>
       <Head>
         <title>{APP_NAME}</title>
-        <link rel='preconnect' href='https://fonts.googleapis.com' />
-        <link rel='preconnect' href='https://fonts.gstatic.com' crossOrigin='anonymous' />
-        <link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800&display=swap' />
       </Head>
       {intro && <IntroSplash onDone={() => setIntro(false)} />}
       {party && <Celebrate party={party} onDone={clearParty} />}
