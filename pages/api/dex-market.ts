@@ -28,7 +28,7 @@ export interface MarketResponse { px: Record<string, number>; at: number }
 let mem: MarketResponse | null = null
 
 export default async function handler(_req: NextApiRequest, res: NextApiResponse<MarketResponse>) {
-  res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=600')
+  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1800')
   const cached = HAS_KV ? await vercelKv.get<MarketResponse>(KEY) : mem
   if (cached && Date.now() - cached.at < FRESH_MS) return res.status(200).json(cached)
   const px = await marketPrices()

@@ -5358,7 +5358,7 @@ function SwapPageInner() {
       setMarketPx(j.px)
       setData(d => d ? { ...d, pools: annotateValues(annotateMarket(d.pools.map(p => ({ ...p })), j.px!), j.px!) } : d)
     }).catch(() => {})
-    pull(); const iv = setInterval(pull, 300_000)
+    pull(); const iv = setInterval(() => { if (!document.hidden) pull() }, 300_000)
     return () => { alive = false; clearInterval(iv) }
   }, [])
 
@@ -5375,7 +5375,7 @@ function SwapPageInner() {
     const pull = () => fetch('/api/dex-venue').then(r => (r.ok ? r.json() : null)).then((j: VenueResponse | null) => {
       if (alive && j?.pools) setVenuePools(j.pools)
     }).catch(() => {})
-    pull(); const iv = setInterval(pull, 60_000)
+    pull(); const iv = setInterval(() => { if (!document.hidden) pull() }, 60_000)
     return () => { alive = false; clearInterval(iv) }
   }, [])
   /**
@@ -5389,7 +5389,7 @@ function SwapPageInner() {
     const pull = () => fetch('/api/dex-skeleton').then(r => (r.ok ? r.json() : null)).then((j: SkeletonResponse | null) => {
       if (alive && j?.pools) setSkeletonPools(j.pools)
     }).catch(() => {})
-    pull(); const iv = setInterval(pull, 60_000)
+    pull(); const iv = setInterval(() => { if (!document.hidden) pull() }, 60_000)
     return () => { alive = false; clearInterval(iv) }
   }, [])
   const swapVenuePools = useMemo(() => [...venuePools, ...skeletonPools.filter(p => p.swapsEnabled === true)], [venuePools, skeletonPools])
@@ -5451,7 +5451,7 @@ function SwapPageInner() {
     const pull = () => fetch('/api/dex-holders').then(r => (r.ok ? r.json() : null)).then((j: HoldersResponse | null) => {
       if (alive && j?.pools) setHolders(j.pools)
     }).catch(() => {})
-    pull(); const iv = setInterval(pull, 120_000)
+    pull(); const iv = setInterval(() => { if (!document.hidden) pull() }, 120_000)
     return () => { alive = false; clearInterval(iv) }
   }, [])
   const routePoolsAll = useMemo(() => [...(data?.pools ?? []).filter(p => !p.empty), ...venuePools], [data, venuePools])
@@ -5466,7 +5466,7 @@ function SwapPageInner() {
     if (!alertsArmed) return
     let alive = true
     const read = () => fetch('/api/dex-market').then(r => (r.ok ? r.json() : null)).then((j: { px?: Record<string, number> } | null) => { if (alive && j?.px) setAlertPx(j.px) }).catch(() => {})
-    const t = setInterval(read, 60_000)
+    const t = setInterval(() => { if (!document.hidden) read() }, 60_000)
     return () => { alive = false; clearInterval(t) }
   }, [alertsArmed])
   useAlertWatcher(alertPx ?? marketPx, fired => setToast({ msg: fired.map(f => `${f.label} is ${f.dir} $${fmtUsdPrice(f.usd)}: $${fmtUsdPrice(f.firedUsd ?? 0)} now.`).join(' ') }))

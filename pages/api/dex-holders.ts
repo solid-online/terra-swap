@@ -53,7 +53,7 @@ async function readPool(lpToken: string): Promise<PoolHolders | null> {
 }
 
 export default async function handler(_req: NextApiRequest, res: NextApiResponse<HoldersResponse>) {
-  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
+  res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=3600')
   const now = Date.now()
   // Astroport mode: LP there sits mostly in their incentives contract, so a holder list misleads, and reading ~850 pools' holders is not a request.
   if (!isDexLive() || IS_ASTRO) return res.status(200).json({ live: false, at: now, pools: {} })

@@ -87,7 +87,8 @@ async function seoulWeather(): Promise<{ temp: number; code: number } | null> {
 }
 
 export default async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) {
-  res.setHeader('Cache-Control', 's-maxage=8, stale-while-revalidate=30')
+  // Each CDN region revalidates on its own; a few seconds here meant a full rebuild per region every few seconds (Vercel usage, 2026-09-23).
+  res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=120')
   if (!isDexLive()) {
     return res.status(200).json({ live: false, mode: DEX_MODE, pools: [], feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd: 0, height: 0, chainId: '', proposer: '', seoul: null })
   }

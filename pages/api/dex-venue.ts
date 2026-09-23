@@ -16,7 +16,7 @@ import {
 
 export interface VenueResponse { venue: Venue; pools: PoolView[]; at: number }
 
-const FRESH_MS = 20_000
+const FRESH_MS = 55_000
 let mem: VenueResponse | null = null
 let inflight: Promise<VenueResponse> | null = null
 
@@ -33,7 +33,8 @@ async function build(): Promise<VenueResponse> {
 }
 
 export default async function handler(_req: NextApiRequest, res: NextApiResponse<VenueResponse>) {
-  res.setHeader('Cache-Control', 's-maxage=15, stale-while-revalidate=60')
+  // Other venues' pools move slowly; a minute at the CDN is enough, and each region revalidates on its own.
+  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=600')
   if (mem && Date.now() - mem.at < FRESH_MS) return res.status(200).json(mem)
   if (!inflight) inflight = build().finally(() => { inflight = null })
   try {
