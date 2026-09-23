@@ -45,7 +45,7 @@ type State = 'checking' | 'ok' | 'bad' | 'note'
 interface Check { group: string; what: string; expected: string; found: string; state: State; href?: string }
 interface PairConfig { code_id: number; pair_type: Record<string, unknown>; total_fee_bps: number; maker_fee_bps: number; is_disabled: boolean }
 
-const addressUrl = (a: string) => `https://terrasco.pe/mainnet/address/${a}`
+const addressUrl = (a: string) => `https://scan.openfields.app/address/${a}`
 const shortHash = (h: string) => (h ? `${h.slice(0, 10)}…${h.slice(-6)}` : 'no answer')
 
 async function readJson<T>(path: string): Promise<T | null> {

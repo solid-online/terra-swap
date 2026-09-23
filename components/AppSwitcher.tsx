@@ -19,6 +19,7 @@ export const GOV_URL = trim(process.env.NEXT_PUBLIC_GOV_URL || 'https://gov.open
 export const STATUS_URL = trim(process.env.NEXT_PUBLIC_STATUS_URL || 'https://status.openfields.app')
 export const STAKE_URL = trim(process.env.NEXT_PUBLIC_STAKE_URL || 'https://stake.openfields.app')
 export const DATA_URL = trim(process.env.NEXT_PUBLIC_DATA_URL || 'https://data.openfields.app')
+export const SCAN_URL = trim(process.env.NEXT_PUBLIC_SCAN_URL || 'https://scan.openfields.app')
 export const HOME_URL = trim(process.env.NEXT_PUBLIC_HOME_URL || 'https://openfields.app')
 
 export default function AppSwitcher() {
@@ -31,6 +32,7 @@ export default function AppSwitcher() {
     { key: 'status', word: 'Status', glyph: '●', description: t('Blocks, validators, bridges and endpoints, live'), url: STATUS_URL, here: false },
     { key: 'stake', word: 'Stake', glyph: '⬢', description: t('Stake LUNA, move it, collect rewards'), url: STAKE_URL, here: false },
     { key: 'data', word: 'Data', glyph: '▦', description: t('How the apps on Terra are actually used'), url: DATA_URL, here: false },
+    { key: 'scan', word: 'Scan', glyph: '⌕', description: t('Transactions, addresses and blocks, in plain words'), url: SCAN_URL, here: false },
   ]
 
   return (

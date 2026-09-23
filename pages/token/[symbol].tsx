@@ -117,7 +117,7 @@ function Controls({ token }: { token: KnownToken }) {
   if (failed) return <div style={muted}>The chain did not answer. Try again in a moment.</div>
   if (!c) return <div style={muted}>Reading the contracts, and the chain it comes from…</div>
 
-  const terra = (a: string) => <a href={`https://terrasco.pe/mainnet/address/${a}`} target='_blank' rel='noreferrer' style={{ color: 'inherit', fontFamily: mono }}>{short(a)} ↗</a>
+  const terra = (a: string) => <a href={`https://scan.openfields.app/address/${a}`} target='_blank' rel='noreferrer' style={{ color: 'inherit', fontFamily: mono }}>{short(a)} ↗</a>
   const line = (k: string, v: React.ReactNode, color: string = C.textSecondary) => (
     <div style={row}><span>{k}</span><span style={{ color, textAlign: 'right', maxWidth: '72%', lineHeight: 1.5 }}>{v}</span></div>
   )
@@ -345,7 +345,7 @@ export default function TokenPage({ symbol }: { symbol: string }) {
         <div style={row}>
           <span>{cw20 ? 'Contract' : 'Denom'}</span>
           <span style={{ color: C.textSecondary, fontFamily: mono, wordBreak: 'break-all', textAlign: 'right' }}>
-            {cw20 ? <a href={`https://terrasco.pe/mainnet/address/${id}`} target='_blank' rel='noreferrer' style={{ color: 'inherit' }}>{id} ↗</a> : id}
+            {cw20 ? <a href={`https://scan.openfields.app/address/${id}`} target='_blank' rel='noreferrer' style={{ color: 'inherit' }}>{id} ↗</a> : id}
           </span>
         </div>
         <div style={row}><span>Decimals</span><span style={{ color: C.textSecondary }}>{token.decimals}</span></div>

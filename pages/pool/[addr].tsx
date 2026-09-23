@@ -115,7 +115,7 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
           {done && (
             <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: 0 }}>
               This site lists pools on Terra Swap&apos;s factory and Astroport&apos;s pools of the tokens it trades. This one is not among them, or the chain did not answer just now.{' '}
-              <a href={`https://terrasco.pe/mainnet/address/${addr}`} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>See it on Terrascope ↗</a>
+              <a href={`https://scan.openfields.app/address/${addr}`} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>See it on Terra Scan ↗</a>
             </p>
           )}
         </Panel>
@@ -223,7 +223,7 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
         {prices && prices.tape.length === 0 && <div style={{ fontSize: TEXT.xs.size, color: C.textMuted }}>No trades found in its recent history.</div>}
         <Spark points={series} />
         {(prices?.tape ?? []).slice(0, 6).map(r => (
-          <a key={r.tx} href={`https://terrasco.pe/mainnet/tx/${r.tx}`} target='_blank' rel='noreferrer' style={{ ...row, textDecoration: 'none' }}>
+          <a key={r.tx} href={`https://scan.openfields.app/tx/${r.tx}`} target='_blank' rel='noreferrer' style={{ ...row, textDecoration: 'none' }}>
             <span style={{ color: r.side === 'buy' ? C.success : C.alert }}>{r.side === 'buy' ? '▲ bought' : '▼ sold'} {fmtAmount(r.base)} {t0.label}</span>
             <span style={{ color: C.textSecondary, fontVariantNumeric: 'tabular-nums' }}>for {fmtAmount(r.quote)} {t1.label} · #{r.h.toLocaleString('en-US')} ↗</span>
           </a>
@@ -233,7 +233,7 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
       <Panel title='About'>
         <div style={row}>
           <span>Pool contract</span>
-          <a href={`https://terrasco.pe/mainnet/address/${pool.contract_addr}`} target='_blank' rel='noreferrer' style={{ color: C.textSecondary, fontFamily: mono, wordBreak: 'break-all', textAlign: 'right' }}>{pool.contract_addr} ↗</a>
+          <a href={`https://scan.openfields.app/address/${pool.contract_addr}`} target='_blank' rel='noreferrer' style={{ color: C.textSecondary, fontFamily: mono, wordBreak: 'break-all', textAlign: 'right' }}>{pool.contract_addr} ↗</a>
         </div>
         <div style={row}><span>LP token</span><span style={{ color: C.textSecondary, fontFamily: mono, wordBreak: 'break-all', textAlign: 'right' }}>{pool.liquidity_token}</span></div>
         <div style={row}><span>LP tokens issued</span><span style={{ color: C.textSecondary }}>{fromMicro(pool.totalShare, 6)}</span></div>

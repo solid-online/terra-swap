@@ -548,7 +548,7 @@ function Wire({ board, pools, onOpen }: { board: BoardResponse | null; pools: Po
   )
 }
 
-/** The wire, unrolled: every recent move with its receipt on Terrascope. */
+/** The wire, unrolled: every recent move with its receipt on Terra Scan. */
 function LedgerOverlay({ board, pools, onClose }: { board: BoardResponse | null; pools: PoolView[]; onClose: () => void }) {
   const byAddr = new Map(pools.map(p => [p.contract_addr, p.label]))
   const rows = board?.recent ?? []
@@ -1136,9 +1136,9 @@ function Credits({ board }: { board: BoardResponse | null }) {
 /**
  * Explorer links. Terra Finder's shell is still up but its backend is gone —
  * a tx page spins on "Searching transaction" forever (checked 2026-09-08).
- * Terrascope resolves phoenix-1 fully, memo and decoded swap included.
+ * Terra Scan resolves phoenix-1 fully, memo and decoded swap included.
  */
-const finderTx = (hash: string) => `https://terrasco.pe/mainnet/tx/${hash}`
+const finderTx = (hash: string) => `https://scan.openfields.app/tx/${hash}`
 
 interface Party { emoji: string; title: string; sub: string; tone?: 'red' | 'moon' }
 
@@ -1169,7 +1169,7 @@ function Toast({ msg, href, onDone }: { msg: string; href?: string; onDone: () =
   return (
     <div className='terra-toast' role='status'>
       <span>{msg}</span>
-      {href && <a href={href} target='_blank' rel='noreferrer' style={{ color: C.goldLit, fontWeight: 700, marginLeft: 10, whiteSpace: 'nowrap' }}>View on Terrascope →</a>}
+      {href && <a href={href} target='_blank' rel='noreferrer' style={{ color: C.goldLit, fontWeight: 700, marginLeft: 10, whiteSpace: 'nowrap' }}>View on Terra Scan →</a>}
     </div>
   )
 }
@@ -4278,7 +4278,7 @@ function PoolTrades({ p }: { p: PoolView }) {
             <div style={tradePanel}>
               <div style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], flexWrap: 'wrap' }}>
                 <span style={{ fontSize: TEXT.sm.size, color: C.textPrimary, fontWeight: 700 }}><Nick address={who} head={10} tail={6} /></span>
-                <a href={`https://terrasco.pe/mainnet/address/${who}`} target='_blank' rel='noreferrer' style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>explorer ↗</a>
+                <a href={`https://scan.openfields.app/address/${who}`} target='_blank' rel='noreferrer' style={{ fontSize: TEXT.xs.size, color: C.textWhisper }}>explorer ↗</a>
                 <button type='button' style={{ ...ghostBtn, padding: '2px 8px', marginLeft: 'auto' }} onClick={() => setWho(null)}>all wallets</button>
               </div>
               {data.wallets[0] && data.wallets[0].trades > 0
@@ -4726,7 +4726,7 @@ const STEADY_LINES: string[] = [
   'click him too many times. go on. he is a unit. units have opinions.',
   'connected? there is a fortune on your card. 오늘의 운세. it changes at midnight.',
   'to the moon is a destination. steady lads is a lifestyle.',
-  'terra finder is a ghost now, still says "searching" forever. we link terrascope. respect to both.',
+  'terra finder is a ghost now, still says "searching" forever. so we built terra scan.',
   'terra station used to show you the block. look top right. so do we.',
   'press / to type an amount. press f to flip. you are welcome.',
   'there is a code. up up down down. you know the rest.',

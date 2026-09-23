@@ -78,7 +78,7 @@ export const getServerSideProps: GetServerSideProps = async ctx => {
 
 export default function TxPage({ hash, receipt }: { hash: string; receipt: Receipt | null }) {
   const [copied, setCopied] = useState(false)
-  const terrascope = `https://terrasco.pe/mainnet/tx/${hash}`
+  const terrascope = `https://scan.openfields.app/tx/${hash}`
   const share = () => {
     navigator.clipboard?.writeText(window.location.href).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800) }).catch(() => {})
   }
@@ -90,7 +90,7 @@ export default function TxPage({ hash, receipt }: { hash: string; receipt: Recei
         <Panel title='Not found yet'>
           <p style={{ fontSize: TEXT.xs.size, color: C.textMuted, lineHeight: 1.6, margin: 0 }}>
             The chain&apos;s public endpoints did not return this transaction. One that just landed can take a few seconds to be indexed; refresh in a moment.{' '}
-            <a href={terrascope} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>Look it up on Terrascope ↗</a>
+            <a href={terrascope} target='_blank' rel='noreferrer' style={{ color: C.goldLit }}>Look it up on Terra Scan ↗</a>
           </p>
         </Panel>
       </Page>
@@ -124,14 +124,14 @@ export default function TxPage({ hash, receipt }: { hash: string; receipt: Recei
       <div style={{ display: 'flex', gap: SPACE['2'], flexWrap: 'wrap' }}>
         {pairLink && <Link href={pairLink} style={linkBtn(true)}>Swap the same pair</Link>}
         <button type='button' onClick={share} style={{ ...linkBtn(), cursor: 'pointer' }}>{copied ? 'Link copied ✓' : 'Copy link'}</button>
-        <a href={terrascope} target='_blank' rel='noreferrer' style={linkBtn()}>Terrascope ↗</a>
+        <a href={terrascope} target='_blank' rel='noreferrer' style={linkBtn()}>Terra Scan ↗</a>
       </div>
 
       <Panel title='What moved' note={r.ok ? "Read from the chain's own transfer events: what left the wallet and what arrived, with the network fee on its own." : 'It failed, so nothing moved but the network fee.'}>
         {r.out.length > 0 && <div style={row}><span>Left</span>{moved(r.out)}</div>}
         {r.in.length > 0 && <div style={row}><span>Arrived</span>{moved(r.in)}</div>}
         <div style={row}><span>Network fee</span><span style={{ color: C.textSecondary }}>{r.feeUluna !== '0' ? `${fromMicro(r.feeUluna, 6, 4)} LUNA` : 'paid by the relayer'}</span></div>
-        {r.account && <div style={row}><span>Wallet</span><a href={`https://terrasco.pe/mainnet/address/${r.account}`} target='_blank' rel='noreferrer' style={{ color: C.textSecondary }}>{r.account.slice(0, 10)}…{r.account.slice(-6)} ↗</a></div>}
+        {r.account && <div style={row}><span>Wallet</span><a href={`https://scan.openfields.app/address/${r.account}`} target='_blank' rel='noreferrer' style={{ color: C.textSecondary }}>{r.account.slice(0, 10)}…{r.account.slice(-6)} ↗</a></div>}
       </Panel>
 
       {r.quote && (
