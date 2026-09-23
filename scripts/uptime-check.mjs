@@ -73,6 +73,14 @@ const TARGETS = [
     ],
   },
   {
+    // "pending" is the few minutes after midnight UTC before the day's first readings are written, and is normal.
+    site: 'daily.openfields.app',
+    checks: [
+      { url: 'https://daily.openfields.app/', expect: (r) => r.status === 200 },
+      { url: 'https://daily.openfields.app/api/puzzle/today', json: true, expect: (r, j) => r.status === 200 && (j?.status === 'ready' || j?.status === 'pending') },
+    ],
+  },
+  {
     site: 'atrium.markets',
     checks: [
       { url: 'https://atrium.markets/', expect: (r) => r.status === 200 },
