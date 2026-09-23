@@ -9,17 +9,16 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { annotateValues, marketPrices, usdPrices, type PoolView } from 'lib/dex'
+import { annotateValues, usdPrices, type PoolView } from 'lib/dex'
 import { skeletonPools } from 'lib/skeleton'
+import { shared, sharedMarketPrices, stale } from 'lib/sharedCache'
 
 export interface SkeletonResponse { pools: PoolView[]; at: number }
 
 const FRESH_MS = 170_000
-let mem: SkeletonResponse | null = null
-let inflight: Promise<SkeletonResponse> | null = null
 
 async function build(): Promise<SkeletonResponse> {
-  const [pools, market] = await Promise.all([skeletonPools(), marketPrices()])
+  const [pools, market] = await Promise.all([skeletonPools(), sharedMarketPrices()])
   annotateValues(pools, { ...usdPrices(pools), ...market })
   return { pools, at: Date.now() }
 }
@@ -27,13 +26,11 @@ async function build(): Promise<SkeletonResponse> {
 export default async function handler(_req: NextApiRequest, res: NextApiResponse<SkeletonResponse>) {
   // Other venues' pools move slowly and a swap is re-checked on chain before signing; three minutes at the CDN is enough, and each region revalidates on its own.
   res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=900')
-  if (mem && Date.now() - mem.at < FRESH_MS) return res.status(200).json(mem)
-  if (!inflight) inflight = build().finally(() => { inflight = null })
   try {
-    const body = await inflight
-    if (body.pools.length > 0) mem = body
-    return res.status(200).json(mem ?? body)
+    const body = await shared('atrium:dex:skeleton:v1', FRESH_MS, build, v => v.pools.length > 0)
+    if (body.pools.length > 0) return res.status(200).json(body)
+    return res.status(200).json((await stale<typeof body>('atrium:dex:skeleton:v1')) ?? body)
   } catch {
-    return res.status(200).json(mem ?? { pools: [], at: 0 })
+    return res.status(200).json((await stale('atrium:dex:skeleton:v1')) ?? { pools: [], at: 0 })
   }
 }

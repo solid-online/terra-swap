@@ -47,7 +47,8 @@ export interface QuoteResponse {
 
 const SLIPPAGE = 0.01
 const FRESH_MS = 55_000
-const PER_MINUTE = 120
+// Outside callers asked ~60 fresh quotes a minute on 2026-09-23; each is a full route search. Cached answers do not count.
+const PER_MINUTE = 20
 const AMOUNT = /^\d{1,15}(\.\d{1,18})?$/
 const cache = new Map<string, QuoteResponse>()
 let windowAt = 0

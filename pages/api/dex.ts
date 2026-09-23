@@ -14,6 +14,7 @@ import {
   POOL_FEE_BPS, DEX_MODE, type PoolView,
 } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
+import { shared, stale } from 'lib/sharedCache'
 
 export interface DexResponse {
   live: boolean
@@ -86,12 +87,15 @@ async function seoulWeather(): Promise<{ temp: number; code: number } | null> {
   } catch { return wx?.v ?? null }
 }
 
-export default async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) {
-  // Each CDN region revalidates on its own; a few seconds here meant a full rebuild per region every few seconds (Vercel usage, 2026-09-23).
-  res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=120')
-  if (!isDexLive()) {
-    return res.status(200).json({ live: false, mode: DEX_MODE, pools: [], feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd: 0, height: 0, chainId: '', proposer: '', seoul: null })
-  }
+/**
+ * One build every 15 s for all instances together (lib/sharedCache): each
+ * build reads every pool from the chain and re-prices it, and the CDN's
+ * regions each revalidate on their own (Vercel usage, 2026-09-23).
+ */
+const FRESH_MS = 15_000
+const KEY = 'atrium:dex:home:v1'
+
+async function build(): Promise<DexResponse> {
   // No market scan here: it lives in /api/dex-market so a cold start never blocks the page.
   const [allPairs, v2Pairs, head, seoul] = await Promise.all([queryPairs(), queryPairsOf(TERRA_SWAP_FACTORY_V2).catch(() => []), latestBlock(), seoulWeather()])
   const pairs = listedPairs(allPairs)
@@ -112,5 +116,23 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
   await refineSpot(pools)
   annotateTvl(pools)
   const tvlUsd = pools.reduce((s, p) => s + (p.tvlUsd ?? 0), 0)
-  return res.status(200).json({ live: true, mode: DEX_MODE, pools, feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd, height: head.height, chainId: head.chainId, proposer: head.proposer, seoul })
+  return { live: true, mode: DEX_MODE, pools, feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd, height: head.height, chainId: head.chainId, proposer: head.proposer, seoul }
 }
+
+async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) {
+  // Each CDN region revalidates on its own; a few seconds here meant a full rebuild per region every few seconds (Vercel usage, 2026-09-23).
+  res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=120')
+  if (!isDexLive()) {
+    return res.status(200).json({ live: false, mode: DEX_MODE, pools: [], feeBps: 0, poolFeeBps: POOL_FEE_BPS, tvlUsd: 0, height: 0, chainId: '', proposer: '', seoul: null })
+  }
+  try {
+    const built = await shared(KEY, FRESH_MS, async () => ({ at: Date.now(), body: await build() }), v => v.body.pools.length > 0)
+    return res.status(200).json(built.body)
+  } catch (e) {
+    const last = await stale<{ at: number; body: DexResponse }>(KEY)
+    if (last) return res.status(200).json(last.body)
+    throw e
+  }
+}
+
+export default handler

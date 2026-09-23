@@ -7,9 +7,10 @@
  */
 
 import {
-  AWAY_VENUE, VENUE_FACTORY, annotateTvl, annotateValues, knownPairs, listedPairs, marketPrices,
+  AWAY_VENUE, VENUE_FACTORY, annotateTvl, annotateValues, knownPairs, listedPairs,
   queryPairs, queryPairsOf, queryPool, refineSpot, toPoolView, usdPrices, type PoolView,
 } from 'lib/dex'
+import { shared, sharedMarketPrices, stale } from 'lib/sharedCache'
 
 export interface SitePools {
   at: number
@@ -20,8 +21,6 @@ export interface SitePools {
 }
 
 const FRESH_MS = 60_000
-let mem: SitePools | null = null
-let inflight: Promise<SitePools> | null = null
 
 async function build(): Promise<SitePools> {
   const [own, away, market] = await Promise.all([
@@ -40,7 +39,7 @@ async function build(): Promise<SitePools> {
       await refineSpot(live)
       return live
     })(),
-    marketPrices(),
+    sharedMarketPrices(),
   ])
   const pools = [...own, ...away]
   const px = { ...usdPrices(pools), ...market }
@@ -48,10 +47,9 @@ async function build(): Promise<SitePools> {
   return { at: Date.now(), pools, px }
 }
 
+/** One build a minute for every instance together (lib/sharedCache). */
 export async function sitePools(): Promise<SitePools> {
-  if (mem && Date.now() - mem.at < FRESH_MS) return mem
-  if (!inflight) inflight = build().finally(() => { inflight = null })
-  const built = await inflight
-  if (built.pools.length > 0) mem = built
-  return mem ?? built
+  const built = await shared('atrium:site-pools:v1', FRESH_MS, build, v => v.pools.length > 0)
+  if (built.pools.length > 0) return built
+  return (await stale<SitePools>('atrium:site-pools:v1')) ?? built
 }
