@@ -46,7 +46,7 @@ export interface QuoteResponse {
 }
 
 const SLIPPAGE = 0.01
-const FRESH_MS = 20_000
+const FRESH_MS = 55_000
 const PER_MINUTE = 120
 const AMOUNT = /^\d{1,15}(\.\d{1,18})?$/
 const cache = new Map<string, QuoteResponse>()
@@ -80,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const key = `${from.key}|${to.key}|${exactOut ? 'out' : 'in'}|${micro}`
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < FRESH_MS) {
-    res.setHeader('Cache-Control', 'public, s-maxage=15, stale-while-revalidate=30')
+    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=120')
     return res.status(200).json(hit)
   }
   const now = Date.now()
@@ -123,7 +123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
     cache.set(key, body)
     if (cache.size > 500) cache.delete(cache.keys().next().value as string)
-    res.setHeader('Cache-Control', 'public, s-maxage=15, stale-while-revalidate=30')
+    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=120')
     return res.status(200).json(body)
   } catch {
     return res.status(503).json({ error: 'the chain did not answer, try again in a moment' })
