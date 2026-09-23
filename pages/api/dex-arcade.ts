@@ -14,6 +14,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kv as vercelKv } from '@vercel/kv'
 import { DEX_FACTORY } from 'lib/dex'
+import { withCpu } from 'lib/cpuLog'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 const KEY = `atrium:dex:arcade:v1:${DEX_FACTORY}`
@@ -38,7 +39,7 @@ async function save(s: ArcadeState) {
   await vercelKv.set(KEY, s)
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<ArcadeResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<ArcadeResponse | { error: string }>) {
   if (!DEX_FACTORY) return res.status(200).json({ live: false, top: [], burritos: 0, plays: 0 })
 
   if (req.method === 'POST') {
@@ -61,3 +62,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const s = await load()
   return res.status(200).json({ live: true, ...s })
 }
+
+export default withCpu('api/dex-arcade', handler)

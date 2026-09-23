@@ -5,6 +5,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 
 const BLOCKED = new Set(
   (process.env.BLOCKED_COUNTRIES ?? 'US,CA,GB').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
@@ -12,7 +13,7 @@ const BLOCKED = new Set(
 const BYPASS_COOKIE = 'geo_bypass'
 const BYPASS_SECRET = process.env.GEOBLOCK_BYPASS_SECRET || ''
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store')
   const cookies = req.headers.cookie ?? ''
   const bypassed = !!BYPASS_SECRET && cookies.split(';').some(c => {
@@ -33,3 +34,5 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     reason: tx_allowed ? null : `Wallet actions (swap, add or remove liquidity) are not available in ${country}. Everything else stays open.`,
   })
 }
+
+export default withCpu('api/geo', handler)

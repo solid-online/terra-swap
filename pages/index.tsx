@@ -70,6 +70,7 @@ import { SWEEP_KEEP_LUNA_MICRO, SWEEP_MAX, planSweep, poolsFor, type SweepLine, 
 import { GAS_DROP_BELOW_MICRO, LUNA, gasDropMicro, planGasDrop } from 'lib/gasDrop'
 import { askNotifications, fmtUsdPrice, notificationsAllowed, removeAlert, toggleFavorite, useAlertWatcher, usePrefs } from 'lib/alerts'
 import { MONTSERRAT, TERRA_FONT } from 'lib/font'
+import { withCpuSsr } from 'lib/cpuLog'
 
 type Tab = 'swap' | 'pools' | 'positions' | 'wallet' | 'history' | 'transfer' | 'create' | 'board'
 
@@ -6236,7 +6237,7 @@ export default function SwapPage() {
  * server-rendered Head so crawlers get a Terra Swap card instead of Atrium's
  * default Crystal. With ?who=terra1… the image and copy become that person's.
  */
-export const getServerSideProps: GetServerSideProps = async (ctx) => {
+export const getServerSideProps: GetServerSideProps = withCpuSsr('page:index', async (ctx) => {
   const base = `https://${ctx.req.headers.host ?? 'localhost:3000'}`
   const q = ctx.query.who
   const who = typeof q === 'string' && /^terra1[0-9a-z]{38,}$/.test(q) ? q : ''
@@ -6266,4 +6267,4 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
       },
     },
   }
-}
+})

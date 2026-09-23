@@ -16,6 +16,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { kv as vercelKv } from '@vercel/kv'
 import { isDexLive, queryPairs, queryPairsOf, knownPairs, assetId, tokenFor, AWAY_VENUE, VENUE_FACTORY, type AssetInfo } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
+import { withCpu } from 'lib/cpuLog'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 const UA = 'Mozilla/5.0 atrium-dex-prices'
@@ -93,7 +94,7 @@ async function scanPrices(pair: string, base: AssetInfo, quote: AssetInfo): Prom
   return { points: out.slice(0, MAX_TICKS).reverse(), volumeQuote: vol, tape: tape.slice(0, 8) }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<PricesResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<PricesResponse | { error: string }>) {
   res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120')
   const pair = String(req.query.pair || '')
   if (!isDexLive() || !pair) return res.status(200).json({ pair, points: [], baseId: '', quoteId: '', trades: 0, volumeQuote: 0, tape: [] })
@@ -117,3 +118,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   return res.status(200).json(body)
 }
+
+export default withCpu('api/dex-prices', handler)

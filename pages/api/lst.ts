@@ -7,6 +7,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { sitePools } from 'lib/sitePools'
 import { lstBoard, type LstRow } from 'lib/lstBoard'
 import { LST_HUBS } from 'lib/lst'
+import { withCpu } from 'lib/cpuLog'
 
 export const config = { maxDuration: 60 }
 
@@ -21,7 +22,7 @@ async function build(): Promise<LstResponse> {
   return { rows: await lstBoard(pools, px), at: Date.now() }
 }
 
-export default async function handler(_req: NextApiRequest, res: NextApiResponse<LstResponse | { error: string }>) {
+async function handler(_req: NextApiRequest, res: NextApiResponse<LstResponse | { error: string }>) {
   if (mem && Date.now() - mem.at < KEEP_MS) {
     res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=900')
     return res.status(200).json(mem)
@@ -40,3 +41,5 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
     return mem ? res.status(200).json(mem) : res.status(502).json({ error: 'could not price the hubs' })
   }
 }
+
+export default withCpu('api/lst', handler)

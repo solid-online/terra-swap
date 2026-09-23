@@ -11,12 +11,13 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { volumeBetween, type VolumeResponse } from 'lib/markets'
+import { withCpu } from 'lib/cpuLog'
 
 export const config = { maxDuration: 60 }
 
 const MAX_WINDOW_S = 31 * 86_400
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<VolumeResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<VolumeResponse | { error: string }>) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   let start: number, end: number
   if (typeof req.query.date === 'string') {
@@ -37,3 +38,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(503).json({ error: 'the store or the chain did not answer, try again in a moment' })
   }
 }
+
+export default withCpu('api/volume', handler)

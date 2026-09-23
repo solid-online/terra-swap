@@ -26,6 +26,7 @@ import type { TokenCheck } from 'lib/tokenCheck'
 import type { DexResponse } from 'pages/api/dex'
 import type { VenueResponse } from 'pages/api/dex-venue'
 import type { DepthResponse } from 'pages/api/depth'
+import { withCpuSsr } from 'lib/cpuLog'
 
 /** Bought with and sold for USDC from Noble; USDC itself, and USDC.inj, which never meets it, trade against LUNA. */
 const counterpart = (key: string) => (key === 'USDC' || key === 'USDC.inj' ? 'LUNA' : 'USDC')
@@ -50,7 +51,7 @@ function kindOf(t: KnownToken): string {
   return 'native token'
 }
 
-export const getServerSideProps: GetServerSideProps = async ctx => {
+export const getServerSideProps: GetServerSideProps = withCpuSsr('page:token/[symbol]', async ctx => {
   const raw = String(ctx.params?.symbol ?? '')
   const t = KNOWN_TOKENS.find(x => x.key.toLowerCase() === raw.toLowerCase())
   if (!t) return { notFound: true }
@@ -69,7 +70,7 @@ export const getServerSideProps: GetServerSideProps = async ctx => {
       },
     },
   }
-}
+})
 
 /** How much trades before the price moves, selling the token and buying it, through the best route. */
 function Sizes({ token, other }: { token: KnownToken; other: string }) {

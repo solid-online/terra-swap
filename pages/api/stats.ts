@@ -7,6 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { sitePools } from 'lib/sitePools'
 import { computeStats, type StatsResponse } from 'lib/stats'
+import { withCpu } from 'lib/cpuLog'
 
 export const config = { maxDuration: 60 }
 
@@ -21,7 +22,7 @@ async function build(): Promise<StatsResponse> {
   return computeStats(pools, px)
 }
 
-export default async function handler(_req: NextApiRequest, res: NextApiResponse<StatsResponse | { error: string }>) {
+async function handler(_req: NextApiRequest, res: NextApiResponse<StatsResponse | { error: string }>) {
   if (mem && Date.now() - mem.at < KEEP_MS) {
     res.setHeader('Cache-Control', 'public, s-maxage=900, stale-while-revalidate=3600')
     return res.status(200).json(mem)
@@ -40,3 +41,5 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
     return mem ? res.status(200).json(mem) : res.status(502).json({ error: 'could not read the chain' })
   }
 }
+
+export default withCpu('api/stats', handler)
