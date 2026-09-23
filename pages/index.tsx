@@ -6271,9 +6271,6 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
           : 'A DEX for Terra, shipped overnight on audited pool code, with every fee handed back to the people who show up. No permission. Not affiliated with Terraswap. Steady lads.',
         url: `${base}/${who ? `?who=${who}` : share ? share.query : ''}`,
         type: 'website',
-        // The Terra globe as this page's favicon (terra-money/assets); PNG for Safari/iOS home screen.
-        icon: '/img/terra-globe.svg',
-        touchIcon: '/img/terra-globe-180.png',
       },
     },
   }

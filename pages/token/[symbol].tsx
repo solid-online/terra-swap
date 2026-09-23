@@ -66,8 +66,6 @@ export const getServerSideProps: GetServerSideProps = async ctx => {
         image: `${base}/api/og/swap?from=${encodeURIComponent(counterpart(t.key))}&to=${encodeURIComponent(t.key)}`,
         url: `${base}/token/${encodeURIComponent(t.key)}`,
         type: 'website',
-        icon: '/img/terra-globe.svg',
-        touchIcon: '/img/terra-globe-180.png',
       },
     },
   }

@@ -408,8 +408,6 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
       description: 'Yes or no on the LUNA price, settled by the chain itself. Parimutuel, no oracle, no admin. Experimental.',
       url: `${base}/predict`,
       type: 'website',
-      icon: '/img/terra-globe.svg',
-      touchIcon: '/img/terra-globe-180.png',
     },
   },
 })

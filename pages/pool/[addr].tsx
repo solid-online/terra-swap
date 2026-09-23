@@ -61,8 +61,6 @@ export const getServerSideProps: GetServerSideProps = async ctx => {
         image: `${base}/api/og/swap${share}`,
         url: `${base}/pool/${addr}`,
         type: 'website',
-        icon: '/img/terra-globe.svg',
-        touchIcon: '/img/terra-globe-180.png',
       },
     },
   }

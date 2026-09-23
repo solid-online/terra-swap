@@ -36,7 +36,7 @@ export const getServerSideProps: GetServerSideProps = async ctx => {
       og: {
         title: 'Build with Terra Swap: embed a quote, or call the open APIs',
         description: "A swap quote any site can frame, and open APIs for the best route over Terra Swap's and Astroport's pools, price history, size before the price moves, token control and market data. No key, no fee.",
-        image: `${base}/api/og/swap`, url: `${base}/developers`, type: 'website', icon: '/img/terra-globe.svg', touchIcon: '/img/terra-globe-180.png',
+        image: `${base}/api/og/swap`, url: `${base}/developers`, type: 'website',
       },
     },
   }

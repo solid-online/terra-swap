@@ -71,8 +71,6 @@ export const getServerSideProps: GetServerSideProps = async ctx => {
         image: `${base}/api/og/tx?hash=${hash}`,
         url: `${base}/tx/${hash}`,
         type: 'article',
-        icon: '/img/terra-globe.svg',
-        touchIcon: '/img/terra-globe-180.png',
       },
     },
   }

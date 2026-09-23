@@ -17,8 +17,6 @@ interface PageOg {
   description?: string
   url?: string
   type?: 'website' | 'article'
-  icon?: string
-  touchIcon?: string
 }
 
 export default function App({ Component, pageProps }: AppProps) {
@@ -41,8 +39,9 @@ export default function App({ Component, pageProps }: AppProps) {
         <meta key='twitter:title' name='twitter:title' content={title} />
         <meta key='twitter:description' name='twitter:description' content={description} />
         {og?.image && <meta key='twitter:image' name='twitter:image' content={og.image} />}
-        <link key='icon' rel='icon' type='image/svg+xml' href={og?.icon ?? '/img/terra-globe.svg'} />
-        <link key='apple-touch-icon' rel='apple-touch-icon' href={og?.touchIcon ?? '/img/terra-globe-180.png'} />
+        <link key='icon' rel='icon' type='image/png' sizes='32x32' href='/img/openfields-x-32.png?v=20260923' />
+        <link key='icon-lg' rel='icon' type='image/png' sizes='200x200' href='/img/openfields-x.png?v=20260923' />
+        <link key='apple-touch-icon' rel='apple-touch-icon' href='/img/openfields-x-180.png?v=20260923' />
         <meta name='viewport' content='width=device-width, initial-scale=1, viewport-fit=cover' />
         {/* Installable as an app: home screen icon, full screen, the night-sky colour behind the status bar. */}
         <link key='manifest' rel='manifest' href='/manifest.webmanifest' />
