@@ -11,6 +11,7 @@ import { SPACE, TEXT } from 'components/tokens'
 import type { LstResponse } from 'pages/api/lst'
 import type { LstSide } from 'lib/lstBoard'
 import { TERRA_FONT } from 'lib/font'
+import { poll } from 'lib/pageActive'
 
 const C = {
   surface: '#0b0f1c', surfaceElev: '#111729', divider: 'rgba(255,216,61,0.13)', goldCore: '#caa022', goldLit: '#ffd83d',
@@ -34,9 +35,9 @@ export default function LstBoard({ onTrade }: {
       .then(r => (r.ok ? r.json() : null))
       .then((j: LstResponse | null) => { if (!alive) return; if (j?.rows?.length) { setData(j); setFailed(false) } else if (!data) setFailed(true) })
       .catch(() => { if (alive) setFailed(true) })
-    pull()
-    const iv = setInterval(pull, 300_000)
-    return () => { alive = false; clearInterval(iv) }
+    // As often as the board is rebuilt (lib/scanPlan), and only while someone is looking.
+    const stop = poll(pull, 300_000)
+    return () => { alive = false; stop() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -42,6 +42,13 @@ export function middleware(request: NextRequest) {
   return withRegion(NextResponse.next(), !BLOCKED.has(country), country)
 }
 
+/**
+ * Pages only. It used to run on every /api request too, and Vercel bills each
+ * middleware run as compute before the CDN answers, cached or not (Hobby plan,
+ * 2026-09-24). The gate does not need it there: a page without the cookie asks
+ * /api/geo (components/RegionGate), and every signing asks /api/geo afresh
+ * (components/transactions/useDex).
+ */
 export const config = {
-  matcher: ['/', '/predict', '/api/:path*'],
+  matcher: ['/', '/predict', '/pool/:path*', '/token/:path*'],
 }

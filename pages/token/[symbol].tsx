@@ -26,6 +26,7 @@ import type { TokenCheck } from 'lib/tokenCheck'
 import type { DexResponse } from 'pages/api/dex'
 import type { VenueResponse } from 'pages/api/dex-venue'
 import type { DepthResponse } from 'pages/api/depth'
+import { pageActive } from 'lib/pageActive'
 
 /** Bought with and sold for USDC from Noble; USDC itself, and USDC.inj, which never meets it, trade against LUNA. */
 const counterpart = (key: string) => (key === 'USDC' || key === 'USDC.inj' ? 'LUNA' : 'USDC')
@@ -210,9 +211,11 @@ export default function TokenPage({ symbol }: { symbol: string }) {
   useEffect(() => {
     if (!armed) return
     let alive = true
+    // The market reference changes every five minutes (lib/scanPlan); read it that often while someone is looking.
     const t = setInterval(() => {
+      if (!pageActive()) return
       fetch('/api/dex-market').then(r => (r.ok ? r.json() : null)).then((j: { px?: Record<string, number> } | null) => { if (alive && j?.px) setPx(j.px) }).catch(() => {})
-    }, 60_000)
+    }, 300_000)
     return () => { alive = false; clearInterval(t) }
   }, [armed])
   useAlertWatcher(px, fired => setNote(fired.map(f => `${f.label} is ${f.dir} $${fmtUsdPrice(f.usd)}: $${fmtUsdPrice(f.firedUsd ?? 0)} now.`).join(' ')))

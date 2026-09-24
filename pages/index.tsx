@@ -70,6 +70,16 @@ import { SWEEP_KEEP_LUNA_MICRO, SWEEP_MAX, planSweep, poolsFor, type SweepLine, 
 import { GAS_DROP_BELOW_MICRO, LUNA, gasDropMicro, planGasDrop } from 'lib/gasDrop'
 import { askNotifications, fmtUsdPrice, notificationsAllowed, removeAlert, toggleFavorite, useAlertWatcher, usePrefs } from 'lib/alerts'
 import { MONTSERRAT, TERRA_FONT } from 'lib/font'
+import { poll } from 'lib/pageActive'
+
+/**
+ * How often an open page reads each of the site's lists, and only while someone
+ * is looking (lib/pageActive). No faster than the lists change: the pool-scan
+ * workflow rebuilds this site's pools every minute, the other venues' every
+ * 2.5 minutes and the market reference every five (lib/scanPlan), and the LP
+ * holders are cached ten minutes. Every read is a request Vercel counts.
+ */
+const POLL_MS = { pools: 60_000, venues: 180_000, market: 300_000, holders: 600_000 } as const
 
 type Tab = 'swap' | 'pools' | 'positions' | 'wallet' | 'history' | 'transfer' | 'create' | 'board'
 
@@ -598,11 +608,11 @@ function Footer({ height, soundOn, onToggleSound, onSecret, seoul }: { height?: 
       <span>·</span>
       <span>phoenix-1{height ? ` #${height.toLocaleString('en-US')}` : ''}</span>
       <span>·</span>
-      <Link href='/verify' title='check every contract from this browser' style={{ color: C.textSecondary, textDecoration: 'none' }}>verify the contracts</Link>
+      <Link href='/verify' prefetch={false} title='check every contract from this browser' style={{ color: C.textSecondary, textDecoration: 'none' }}>verify the contracts</Link>
       <span>·</span>
-      <Link href='/stats' title='liquidity, fees, liquid staking against the hubs, routing and uptime' style={{ color: C.textSecondary, textDecoration: 'none' }}>stats</Link>
+      <Link href='/stats' prefetch={false} title='liquidity, fees, liquid staking against the hubs, routing and uptime' style={{ color: C.textSecondary, textDecoration: 'none' }}>stats</Link>
       <span>·</span>
-      <Link href='/developers' title='embed a live quote on your site, or call the quote API' style={{ color: C.textSecondary, textDecoration: 'none' }}>build</Link>
+      <Link href='/developers' prefetch={false} title='embed a live quote on your site, or call the quote API' style={{ color: C.textSecondary, textDecoration: 'none' }}>build</Link>
       <select aria-label='Language' value={lang} onChange={e => setLang(e.target.value as Lang)} style={{
         marginLeft: 'auto', background: 'transparent', border: `1px solid ${C.divider}`, borderRadius: 999, padding: '2px 6px',
         color: C.textSecondary, cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.7rem',
@@ -5358,8 +5368,8 @@ function SwapPageInner() {
       setMarketPx(j.px)
       setData(d => d ? { ...d, pools: annotateValues(annotateMarket(d.pools.map(p => ({ ...p })), j.px!), j.px!) } : d)
     }).catch(() => {})
-    pull(); const iv = setInterval(() => { if (!document.hidden) pull() }, 300_000)
-    return () => { alive = false; clearInterval(iv) }
+    const stop = poll(pull, POLL_MS.market)
+    return () => { alive = false; stop() }
   }, [])
 
   /* Pools that have drifted off the reference, sized and priced. Bots skip
@@ -5375,8 +5385,8 @@ function SwapPageInner() {
     const pull = () => fetch('/api/dex-venue').then(r => (r.ok ? r.json() : null)).then((j: VenueResponse | null) => {
       if (alive && j?.pools) setVenuePools(j.pools)
     }).catch(() => {})
-    pull(); const iv = setInterval(() => { if (!document.hidden) pull() }, 60_000)
-    return () => { alive = false; clearInterval(iv) }
+    const stop = poll(pull, POLL_MS.venues)
+    return () => { alive = false; stop() }
   }, [])
   /**
    * Skeleton Swap's pools (lib/skeleton): listed in Pools, and routed through by the swap when their swaps are on.
@@ -5389,8 +5399,8 @@ function SwapPageInner() {
     const pull = () => fetch('/api/dex-skeleton').then(r => (r.ok ? r.json() : null)).then((j: SkeletonResponse | null) => {
       if (alive && j?.pools) setSkeletonPools(j.pools)
     }).catch(() => {})
-    pull(); const iv = setInterval(() => { if (!document.hidden) pull() }, 60_000)
-    return () => { alive = false; clearInterval(iv) }
+    const stop = poll(pull, POLL_MS.venues)
+    return () => { alive = false; stop() }
   }, [])
   const swapVenuePools = useMemo(() => [...venuePools, ...skeletonPools.filter(p => p.swapsEnabled === true)], [venuePools, skeletonPools])
   /** Every venue's pools in one list: both sites', since pools.openfields.app was folded into this page (2026-09-14), and Skeleton Swap's (2026-09-15). */
@@ -5451,14 +5461,14 @@ function SwapPageInner() {
     const pull = () => fetch('/api/dex-holders').then(r => (r.ok ? r.json() : null)).then((j: HoldersResponse | null) => {
       if (alive && j?.pools) setHolders(j.pools)
     }).catch(() => {})
-    pull(); const iv = setInterval(() => { if (!document.hidden) pull() }, 120_000)
-    return () => { alive = false; clearInterval(iv) }
+    const stop = poll(pull, POLL_MS.holders)
+    return () => { alive = false; stop() }
   }, [])
   const routePoolsAll = useMemo(() => [...(data?.pools ?? []).filter(p => !p.empty), ...venuePools], [data, venuePools])
   // Every token picker ranks by these.
   useEffect(() => { publishTokenData({ px: marketPx, liquidity: liquidityByToken(routePoolsAll) }) }, [marketPx, routePoolsAll])
 
-  // Price alerts (lib/alerts): read the market reference once a minute while any alert is waiting, and say so when one goes off.
+  // Price alerts (lib/alerts): read the market reference as often as it changes while any alert is waiting, and say so when one goes off.
   const { alerts: priceAlerts } = usePrefs()
   const alertsArmed = priceAlerts.some(a => !a.firedAt)
   const [alertPx, setAlertPx] = useState<Record<string, number> | null>(null)
@@ -5466,8 +5476,8 @@ function SwapPageInner() {
     if (!alertsArmed) return
     let alive = true
     const read = () => fetch('/api/dex-market').then(r => (r.ok ? r.json() : null)).then((j: { px?: Record<string, number> } | null) => { if (alive && j?.px) setAlertPx(j.px) }).catch(() => {})
-    const t = setInterval(() => { if (!document.hidden) read() }, 60_000)
-    return () => { alive = false; clearInterval(t) }
+    const stop = poll(read, POLL_MS.market)
+    return () => { alive = false; stop() }
   }, [alertsArmed])
   useAlertWatcher(alertPx ?? marketPx, fired => setToast({ msg: fired.map(f => `${f.label} is ${f.dir} $${fmtUsdPrice(f.usd)}: $${fmtUsdPrice(f.firedUsd ?? 0)} now.`).join(' ') }))
   /** "Take it" opens the round trip in one transaction. The one-sided trade stays as the fallback. */
@@ -5620,15 +5630,8 @@ function SwapPageInner() {
   }, [])
 
   // First load + gentle background poll so another trader's swap or a new pool
-  // shows up on its own. Pause while the tab is hidden; catch up on return.
-  useEffect(() => {
-    load()
-    const iv = setInterval(() => { if (!document.hidden) load() }, 20_000)
-    const onWake = () => { if (!document.hidden) load() }
-    document.addEventListener('visibilitychange', onWake)
-    window.addEventListener('focus', onWake)
-    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onWake); window.removeEventListener('focus', onWake) }
-  }, [load])
+  // shows up on its own. Paused while nobody is looking (lib/pageActive); caught up on return.
+  useEffect(() => poll(() => { load() }, POLL_MS.pools), [load])
 
   // Keep the "updated Ns ago" label honest without re-fetching.
   useEffect(() => {

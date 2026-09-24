@@ -26,6 +26,7 @@ import type { PredictResponse } from 'pages/api/predict'
 import { useBet, useClaim, useCreateMarket, useObserve, useResolve, useVoidMarket } from 'components/transactions/usePredict'
 import { humanizeTxError } from 'lib/errors'
 import { TERRA_FONT } from 'lib/font'
+import { poll } from 'lib/pageActive'
 
 
 const C = {
@@ -284,7 +285,7 @@ function PredictPageInner() {
       if (r.ok) setData(await r.json())
     } catch { /* keep the last frame */ }
   }, [])
-  useEffect(() => { refresh(); const t = setInterval(refresh, 15_000); return () => clearInterval(t) }, [refresh])
+  useEffect(() => poll(() => { refresh() }, 15_000), [refresh])
   useEffect(() => { const t = setInterval(() => setNow(Date.now() / 1000), 1000); return () => clearInterval(t) }, [])
   useEffect(() => {
     if (!me || !data?.live) { setMine({}); return }
