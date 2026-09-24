@@ -34,7 +34,7 @@ export default function AppSwitcher() {
     { key: 'stake', word: 'Stake', glyph: '⬢', description: t('Stake LUNA, move it, collect rewards'), url: STAKE_URL, here: false },
     { key: 'data', word: 'Data', glyph: '▦', description: t('How the apps on Terra are actually used'), url: DATA_URL, here: false },
     { key: 'scan', word: 'Scan', glyph: '⌕', description: t('Transactions, addresses and blocks, in plain words'), url: SCAN_URL, here: false },
-    { key: 'daily', word: 'Daily', glyph: '◷', description: t('Five questions a day about what happened on Terra'), url: DAILY_URL, here: false },
+    { key: 'daily', word: 'Daily', glyph: '◷', description: t('A daily move, a calm minute and five Terra questions'), url: DAILY_URL, here: false },
   ]
 
   return (
