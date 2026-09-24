@@ -44,7 +44,7 @@ export default function LstBoard({ onTrade }: {
   const action = (fromId: string, toId: string, fromKey: string, toKey: string, side: LstSide) => (
     onTrade
       ? <button type='button' onClick={() => onTrade(fromId, toId, side.amount)} style={{ background: 'transparent', border: `1px solid ${C.divider}`, borderRadius: 8, color: C.goldLit, fontSize: TEXT.xs.size, padding: '1px 8px', cursor: 'pointer', fontFamily: 'inherit' }}>swap</button>
-      : <Link href={`/?from=${encodeURIComponent(fromKey)}&to=${encodeURIComponent(toKey)}&amount=${side.amount}`} style={{ color: C.goldLit, fontSize: TEXT.xs.size }}>swap ↗</Link>
+      : <Link prefetch={false} href={`/?from=${encodeURIComponent(fromKey)}&to=${encodeURIComponent(toKey)}&amount=${side.amount}`} style={{ color: C.goldLit, fontSize: TEXT.xs.size }}>swap ↗</Link>
   )
 
   return (

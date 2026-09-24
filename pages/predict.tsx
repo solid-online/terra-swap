@@ -341,7 +341,7 @@ function PredictPageInner() {
               </h1>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: SPACE['2'], flex: 'none' }}>
-              <Link href='/' style={{ ...ghostBtn, textDecoration: 'none', whiteSpace: 'nowrap' }}>← Swap</Link>
+              <Link href='/' prefetch={false} style={{ ...ghostBtn, textDecoration: 'none', whiteSpace: 'nowrap' }}>← Swap</Link>
               <WalletButton />
             </div>
           </div>

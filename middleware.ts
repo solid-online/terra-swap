@@ -43,12 +43,17 @@ export function middleware(request: NextRequest) {
 }
 
 /**
- * Pages only. It used to run on every /api request too, and Vercel bills each
- * middleware run as compute before the CDN answers, cached or not (Hobby plan,
- * 2026-09-24). The gate does not need it there: a page without the cookie asks
- * /api/geo (components/RegionGate), and every signing asks /api/geo afresh
- * (components/transactions/useDex).
+ * The two pages that sign, and nothing else. It used to run on every /api
+ * request too, and Vercel bills each middleware run as compute before the CDN
+ * answers, cached or not (Hobby plan, 2026-09-24). The gate does not need it
+ * elsewhere: a page without the cookie asks /api/geo (components/RegionGate),
+ * and every signing asks /api/geo afresh (components/transactions/useDex).
+ *
+ * Every page it matches also costs a request for each link to it that Next
+ * prefetches (a data request that runs only this middleware), so links to
+ * these pages carry prefetch={false}. Adding the pool pages here made each
+ * pool card in the list prefetch one.
  */
 export const config = {
-  matcher: ['/', '/predict', '/pool/:path*', '/token/:path*'],
+  matcher: ['/', '/predict'],
 }

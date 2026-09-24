@@ -156,7 +156,7 @@ export default function StatsPage() {
                   <b style={{ color: C.textPrimary }}>{g.pool.label}</b>
                   <span style={{ color: g.off > 2 ? C.alert : C.ember }}>{g.off.toFixed(g.off >= 10 ? 0 : 2)}× off</span>
                   <span style={{ color: C.textSecondary }}>{fmtAmount(g.inAmount)} {g.inToken.label} in → {fmtAmount(g.outAmount)} {g.outToken.label}, about {fmtUsd(g.profitUsd)} over reference</span>
-                  <Link href={`/?from=${encodeURIComponent(g.inToken.key)}&to=${encodeURIComponent(g.outToken.key)}&amount=${g.inAmount.toFixed(6)}`} style={{ marginLeft: 'auto', color: C.goldLit }}>swap ↗</Link>
+                  <Link prefetch={false} href={`/?from=${encodeURIComponent(g.inToken.key)}&to=${encodeURIComponent(g.outToken.key)}&amount=${g.inAmount.toFixed(6)}`} style={{ marginLeft: 'auto', color: C.goldLit }}>swap ↗</Link>
                 </div>
               ))}
             </div>

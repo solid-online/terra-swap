@@ -5020,7 +5020,7 @@ function Explore({ pools, gaps, onGo }: { pools: number; gaps: number; onGo: (k:
       </div>
       <div className='terra-explore' style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: SPACE['2'] }}>
         {cards.map(c => (c.k === 'verify' || c.k === 'stats')
-          ? <Link key={c.k} href={`/${c.k}`} className='terra-explore-card' style={card}>{inner(c)}</Link>
+          ? <Link key={c.k} href={`/${c.k}`} prefetch={false} className='terra-explore-card' style={card}>{inner(c)}</Link>
           : <button key={c.k} type='button' className='terra-explore-card' onClick={() => onGo(c.k as ExploreKey)} disabled={c.muted} style={{ ...card, cursor: c.muted ? 'default' : 'pointer' }}>{inner(c)}</button>)}
       </div>
     </section>
@@ -5110,7 +5110,7 @@ function Hero({ poolFeeBps, onReplay, onHome, onToast, me, right }: { poolFeeBps
         margin: '0 0 0.6rem', letterSpacing: '-0.02em', fontWeight: 700,
         display: 'flex', alignItems: 'baseline', gap: '0.4rem', flexWrap: 'wrap',
       }}>
-        <Link href='/' className='atrium-swap-title' aria-label={`${APP_NAME} home`} style={{ fontFamily: TERRA_FONT, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.28em', whiteSpace: 'nowrap', textDecoration: 'none' }} onClick={wordmarkClick} title='Home'>
+        <Link href='/' prefetch={false} className='atrium-swap-title' aria-label={`${APP_NAME} home`} style={{ fontFamily: TERRA_FONT, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.28em', whiteSpace: 'nowrap', textDecoration: 'none' }} onClick={wordmarkClick} title='Home'>
           {/* Like the original lockup: "Terra" heavy, the product word light. */}
           <span><span style={{ fontWeight: 700 }}>Terra</span> <span style={{ fontWeight: 300, letterSpacing: '0' }}>{LITE ? 'Pools' : 'Swap'}</span></span>
         </Link>
@@ -5760,7 +5760,7 @@ function SwapPageInner() {
                 {tabBtn('positions', t('Portfolio'), tab === 'positions' || tab === 'wallet' || tab === 'history')}
                 {!LITE && tabBtn('board', <>{t('Board')}{board?.rows.length ? <span className='terra-tab-count'> · {board.rows.length}</span> : null}</>)}
                 {/* Terra Predict lives next door, once it is live. A link to "not live yet" is a dead end. */}
-                {!LITE && isPredictLive() && <Link href='/predict' style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, whiteSpace: 'nowrap' }}>Predict ↗</Link>}
+                {!LITE && isPredictLive() && <Link href='/predict' prefetch={false} style={{ ...ghostBtn, padding: '0.45rem 0.9rem', textDecoration: 'none', color: C.emberLit, borderColor: C.dividerWarm, whiteSpace: 'nowrap' }}>Predict ↗</Link>}
                 <button type='button' onClick={() => setPalette(true)} title='Search tokens, pools and everything this site does (⌘K)' aria-label='Search everything'
                   className='terra-search-btn' style={{ ...ghostBtn, padding: '0.45rem 0.8rem', marginLeft: 'auto', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                   <span aria-hidden style={{ color: C.goldLit }}>⌕</span>

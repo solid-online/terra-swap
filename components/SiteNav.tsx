@@ -21,11 +21,11 @@ const LINKS = [
 export default function SiteNav({ here }: { here?: 'stats' | 'verify' }) {
   return (
     <nav aria-label='Terra Swap' style={{ display: 'flex', alignItems: 'center', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
-      <Link href='/' style={{ color: C.textSecondary, fontSize: TEXT.xs.size, fontWeight: 700, textDecoration: 'none', marginRight: 6, whiteSpace: 'nowrap' }}>Terra Swap</Link>
+      <Link href='/' prefetch={false} style={{ color: C.textSecondary, fontSize: TEXT.xs.size, fontWeight: 700, textDecoration: 'none', marginRight: 6, whiteSpace: 'nowrap' }}>Terra Swap</Link>
       {LINKS.map(l => {
         const on = l.key === here
         return (
-          <Link key={l.key} href={l.href} aria-current={on ? 'page' : undefined} style={{
+          <Link key={l.key} href={l.href} prefetch={false} aria-current={on ? 'page' : undefined} style={{
             fontSize: TEXT.xs.size, textDecoration: 'none', whiteSpace: 'nowrap', padding: '3px 10px', borderRadius: 999,
             border: `1px solid ${on ? C.goldCore : C.divider}`, color: on ? C.goldLit : C.textMuted, background: on ? 'rgba(255,216,61,0.06)' : 'transparent',
           }}>{l.label}</Link>

@@ -247,9 +247,9 @@ export default function TokenPage({ symbol }: { symbol: string }) {
       </header>
 
       <div style={{ display: 'flex', gap: SPACE['2'], flexWrap: 'wrap' }}>
-        <Link href={`/?from=${encodeURIComponent(other)}&to=${encodeURIComponent(token.key)}`} style={linkBtn(true)}>Buy {token.label}</Link>
-        <Link href={`/?from=${encodeURIComponent(token.key)}&to=${encodeURIComponent(other)}`} style={linkBtn()}>Sell {token.label}</Link>
-        {bridge && <Link href={`/?tab=bridge&net=${bridge.net}`} style={linkBtn()}>Bring {token.label} in from {bridge.name}</Link>}
+        <Link prefetch={false} href={`/?from=${encodeURIComponent(other)}&to=${encodeURIComponent(token.key)}`} style={linkBtn(true)}>Buy {token.label}</Link>
+        <Link prefetch={false} href={`/?from=${encodeURIComponent(token.key)}&to=${encodeURIComponent(other)}`} style={linkBtn()}>Sell {token.label}</Link>
+        {bridge && <Link prefetch={false} href={`/?tab=bridge&net=${bridge.net}`} style={linkBtn()}>Bring {token.label} in from {bridge.name}</Link>}
         {HUB_RATE.has(token.key) && <Link href='/stats' style={linkBtn()}>Hub rate against the pools</Link>}
       </div>
 

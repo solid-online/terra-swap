@@ -156,11 +156,11 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
       <div style={{ display: 'flex', gap: SPACE['2'], flexWrap: 'wrap' }}>
         {!pool.empty && !bothDollars && (
           <>
-            <Link href={`/?from=${enc(t0.key)}&to=${enc(t1.key)}`} style={linkBtn(true)}>Swap {t0.label} for {t1.label}</Link>
-            <Link href={`/?from=${enc(t1.key)}&to=${enc(t0.key)}`} style={linkBtn()}>Swap {t1.label} for {t0.label}</Link>
+            <Link prefetch={false} href={`/?from=${enc(t0.key)}&to=${enc(t1.key)}`} style={linkBtn(true)}>Swap {t0.label} for {t1.label}</Link>
+            <Link prefetch={false} href={`/?from=${enc(t1.key)}&to=${enc(t0.key)}`} style={linkBtn()}>Swap {t1.label} for {t0.label}</Link>
           </>
         )}
-        <Link href={`/?tab=pools&pool=${pool.contract_addr}`} style={linkBtn(pool.empty)}>{pool.empty ? 'Add the first liquidity' : 'Add liquidity'}</Link>
+        <Link prefetch={false} href={`/?tab=pools&pool=${pool.contract_addr}`} style={linkBtn(pool.empty)}>{pool.empty ? 'Add the first liquidity' : 'Add liquidity'}</Link>
       </div>
 
       <Panel title='Liquidity and price' note={pool.venue === 'terraswap' ? "The market is Astroport's deepest pools on Terra." : undefined}>

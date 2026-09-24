@@ -64,6 +64,12 @@ const nextConfig = {
         ],
       },
       {
+        // Token icons and app icons: a day in the browser, then served stale while it checks. Without this every
+        // icon was checked with the server on every visit (max-age=0), about twenty requests on the Pools tab.
+        source: '/img/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=86400, stale-while-revalidate=604800' }],
+      },
+      {
         // The service worker (price alerts with the page closed) is checked for a new version on every visit.
         source: '/sw.js',
         headers: [
