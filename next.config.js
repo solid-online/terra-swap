@@ -10,6 +10,38 @@ const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
   images: { unoptimized: true },
+  // Fewer script files per page in the browser. Next splits shared code into many
+  // small files, and the swap page loaded 18 of them; every file is a request,
+  // and Vercel's Hobby plan counts each one (2026-09-24). Now each page loads
+  // Next's own four (webpack, framework, main, _app) and one file of its own,
+  // and the two pages that carry the wallet (swap and Predict) share one more
+  // with their libraries. The libraries change only when a dependency does, so
+  // that file stays cached in the browser across deploys. Code both kinds of
+  // page use is copied into each rather than split out; it is a few kB.
+  webpack(config, { isServer, dev }) {
+    const split = config.optimization && config.optimization.splitChunks
+    if (!dev && !isServer && split && split.cacheGroups) {
+      const heavy = new Set(['pages/index', 'pages/predict'])
+      config.optimization.splitChunks = {
+        ...split,
+        cacheGroups: {
+          framework: split.cacheGroups.framework,
+          lib: false,
+          default: false,
+          defaultVendors: false,
+          swapVendor: {
+            name: 'swap-vendor',
+            test: /[\\/]node_modules[\\/]/,
+            chunks: chunk => heavy.has(chunk.name),
+            priority: 20,
+            enforce: true,
+            reuseExistingChunk: true,
+          },
+        },
+      }
+    }
+    return config
+  },
   async redirects() {
     if (!canonical) return []
     return aliases.map(host => ({
