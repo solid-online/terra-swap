@@ -5,7 +5,6 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import {
   isPredictLive, PREDICT_CONTRACT, queryConfig, queryMarkets, querySpot, queryTwapNow,
   type Market, type PredictConfig, type TwapNow,
@@ -23,7 +22,7 @@ export interface PredictResponse {
   twap: Record<number, TwapNow>
 }
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<PredictResponse>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<PredictResponse>) {
   res.setHeader('Cache-Control', 's-maxage=10, stale-while-revalidate=30')
   const now = Math.floor(Date.now() / 1000)
   if (!isPredictLive()) {
@@ -46,5 +45,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<PredictRespons
 
   return res.status(200).json({ live: true, contract: PREDICT_CONTRACT, now, config, markets, spot, twap })
 }
-
-export default withCpu('predict', handler)

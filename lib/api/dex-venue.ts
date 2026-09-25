@@ -10,7 +10,6 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { AWAY_VENUE } from 'lib/dex'
 import { venueScan, type VenueResponse } from 'lib/poolScans'
 import { SCAN_PLAN } from 'lib/scanPlan'
@@ -18,7 +17,7 @@ import { stale } from 'lib/sharedCache'
 
 export type { VenueResponse }
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<VenueResponse>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<VenueResponse>) {
   // Other venues' pools move slowly and a swap is re-checked on chain before signing; three minutes at the CDN is enough, and each region revalidates on its own.
   res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=900')
   const { key } = SCAN_PLAN.venue
@@ -30,5 +29,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<VenueResponse>
     return res.status(200).json((await stale<VenueResponse>(key)) ?? { venue: AWAY_VENUE, pools: [], at: 0 })
   }
 }
-
-export default withCpu('dex-venue', handler)

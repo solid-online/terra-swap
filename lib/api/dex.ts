@@ -7,7 +7,6 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { isDexLive, POOL_FEE_BPS, DEX_MODE } from 'lib/dex'
 import type { DexResponse } from 'lib/dexHome'
 import { homeScan } from 'lib/poolScans'
@@ -31,4 +30,4 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<DexResponse>) 
   }
 }
 
-export default withCpu('dex', handler)
+export default handler

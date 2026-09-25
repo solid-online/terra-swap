@@ -10,14 +10,13 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { skeletonScan, type SkeletonResponse } from 'lib/poolScans'
 import { SCAN_PLAN } from 'lib/scanPlan'
 import { stale } from 'lib/sharedCache'
 
 export type { SkeletonResponse }
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<SkeletonResponse>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<SkeletonResponse>) {
   // Other venues' pools move slowly and a swap is re-checked on chain before signing; three minutes at the CDN is enough, and each region revalidates on its own.
   res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=900')
   const { key } = SCAN_PLAN.skeleton
@@ -29,5 +28,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<SkeletonRespon
     return res.status(200).json((await stale<SkeletonResponse>(key)) ?? { pools: [], at: 0 })
   }
 }
-
-export default withCpu('dex-skeleton', handler)

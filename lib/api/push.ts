@@ -10,7 +10,6 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { KNOWN_TOKENS, assetId } from 'lib/dex'
 import { MAX_ALERTS, MAX_SUBS, countSubs, deleteSub, readSub, subId, writeSub, type StoredAlert } from 'lib/pushStore'
 
@@ -44,7 +43,7 @@ function alertsOf(v: unknown): StoredAlert[] | null {
   return out
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store')
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
   const now = Date.now()
@@ -86,5 +85,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(503).json({ error: 'the store did not answer, try again in a moment' })
   }
 }
-
-export default withCpu('push', handler)

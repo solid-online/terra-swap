@@ -10,7 +10,6 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { fromBech32 } from '@cosmjs/encoding'
 import { KNOWN_TOKENS, assetId, type KnownToken } from 'lib/dex'
 import { poolDepth, routeDepth, type Depth } from 'lib/depth'
@@ -49,7 +48,7 @@ async function build(key: string, q: NextApiRequest['query']): Promise<DepthResp
   return d ? { kind: 'route', ...d, at: Date.now() } : null
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse<DepthResponse | { error: string }>) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse<DepthResponse | { error: string }>) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   let key: string
   if (req.query.pool !== undefined) {
@@ -86,5 +85,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse<DepthResponse |
     return hit ? res.status(200).json(hit) : res.status(503).json({ error: 'the chain did not answer, try again in a moment' })
   }
 }
-
-export default withCpu('depth', handler)

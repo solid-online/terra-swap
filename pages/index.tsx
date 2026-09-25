@@ -31,26 +31,26 @@ import {
   type PoolView, type KnownToken, type AssetInfo, type ZapPlan,
 } from 'lib/dex'
 import { arbPlans, fmtAmount, fmtUsd, totalUsd, type ArbPlan } from 'lib/arb'
-import type { DexResponse } from 'pages/api/dex'
-import type { BoardResponse, PoolActivity } from 'pages/api/dex-leaderboard'
+import type { DexResponse } from 'lib/api/dex'
+import type { BoardResponse, PoolActivity } from 'lib/api/dex-leaderboard'
 import type { LpFlow } from 'lib/dex-ledger'
-import type { PricesResponse } from 'pages/api/dex-prices'
-import type { VenueResponse } from 'pages/api/dex-venue'
-import type { SkeletonResponse } from 'pages/api/dex-skeleton'
-import type { PositionsResponse } from 'pages/api/positions'
-import type { HistoryResponse } from 'pages/api/history'
+import type { PricesResponse } from 'lib/api/dex-prices'
+import type { VenueResponse } from 'lib/api/dex-venue'
+import type { SkeletonResponse } from 'lib/api/dex-skeleton'
+import type { PositionsResponse } from 'lib/api/positions'
+import type { HistoryResponse } from 'lib/api/history'
 import type { HistoryRow, Moved } from 'lib/history'
-import type { PoolFeesResponse } from 'pages/api/pool-fees'
+import type { PoolFeesResponse } from 'lib/api/pool-fees'
 import { quoteBest, quoteExactOut, planRoute, planTrade, routeText, tradeText, tradeMemo, reachable, quoteLoop, planRoutedZap, routerPlan, type Quotes, type Loop, type RoutedZap, type RoutePlan, type TradePlan } from 'lib/route'
 import DepthCurve from 'components/DepthCurve'
-import type { DepthResponse } from 'pages/api/depth'
+import type { DepthResponse } from 'lib/api/depth'
 import { historyCsv, plainAmount } from 'lib/csv'
 import { removeContact, rememberRecipient, saveContact, useContacts } from 'lib/contacts'
 import { disablePush, enablePush, usePush } from 'lib/push'
 import { LANGS, setLang, useLang, type Lang } from 'lib/i18n'
-import type { TradesResponse } from 'pages/api/dex-trades'
+import type { TradesResponse } from 'lib/api/dex-trades'
 import type { WalletStats } from 'lib/trades'
-import type { HoldersResponse, PoolHolders } from 'pages/api/dex-holders'
+import type { HoldersResponse, PoolHolders } from 'lib/api/dex-holders'
 import { useRouteSwap, useTradeSwap, useProvideLiquidity, useExitPosition, useUnstake, useClaimRewards, useStakeLp, useAstroLegacyExit, useCreatePair, useZap, useLstBond, useLstUnbond, useLstWithdraw, useCosmosMsgs, useTerraMsgs, useInjectiveMsgs } from 'components/transactions/useDex'
 import { useChain } from '@cosmos-kit/react'
 import { fromBech32 } from '@cosmjs/encoding'
@@ -6241,6 +6241,9 @@ export default function SwapPage() {
  * default Crystal. With ?who=terra1… the image and copy become that person's.
  */
 const serverSideProps: GetServerSideProps = async (ctx) => {
+  // Nothing here depends on who asks (the region check is the middleware's and /api/geo's), so the CDN keeps it:
+  // rendering this page is most of what a cold function costs.
+  ctx.res.setHeader('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400')
   const base = `https://${ctx.req.headers.host ?? 'localhost:3000'}`
   const q = ctx.query.who
   const who = typeof q === 'string' && /^terra1[0-9a-z]{38,}$/.test(q) ? q : ''

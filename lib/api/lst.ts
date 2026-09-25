@@ -5,7 +5,6 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { lstScan, wholeLst, type LstResponse } from 'lib/poolScans'
 import { SCAN_PLAN } from 'lib/scanPlan'
 import { stale } from 'lib/sharedCache'
@@ -14,7 +13,7 @@ export const config = { maxDuration: 60 }
 
 export type { LstResponse }
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<LstResponse | { error: string }>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<LstResponse | { error: string }>) {
   const { key } = SCAN_PLAN.lst
   try {
     const body = await lstScan()
@@ -31,5 +30,3 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<LstResponse | 
     return last ? res.status(200).json(last) : res.status(502).json({ error: 'could not price the hubs' })
   }
 }
-
-export default withCpu('lst', handler)

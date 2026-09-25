@@ -17,7 +17,8 @@
  *   DRY_RUN=1 WATCH_MINUTES=3 npx tsx scripts/pool-scans.ts   (builds and prints, sends nothing)
  */
 
-import type { HandoverAnswer, PoolScansStatus } from 'pages/api/pool-scans'
+import { gzipSync } from 'zlib'
+import type { HandoverAnswer, PoolScansStatus } from 'lib/api/pool-scans'
 
 const SITE = (process.env.POOL_SCANS_SITE || 'https://swap.openfields.app').replace(/\/+$/, '')
 const WATCH_MS = Number(process.env.WATCH_MINUTES || 340) * 60_000
@@ -55,11 +56,12 @@ async function oidcToken(audience: string): Promise<string> {
 }
 
 async function post(audience: string, body: object): Promise<HandoverAnswer> {
-  const payload = JSON.stringify(body)
+  // Gzipped: a sixth of the size, and Hobby counts what reaches the site's functions.
+  const payload = gzipSync(JSON.stringify(body))
   for (let attempt = 0; ; attempt++) {
     const r = await fetch(`${SITE}/api/pool-scans`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${await oidcToken(audience)}` },
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip', authorization: `Bearer ${await oidcToken(audience)}` },
       body: payload,
       signal: AbortSignal.timeout(30_000),
     })

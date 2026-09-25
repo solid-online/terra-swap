@@ -15,18 +15,15 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { SCAN_PLAN } from 'lib/scanPlan'
 import { keepMarket, marketScan, stale, type MarketScan } from 'lib/sharedCache'
 
 export type MarketResponse = MarketScan
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<MarketResponse>) {
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<MarketResponse>) {
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1800')
   const body = await marketScan().catch(() => ({ px: {}, at: 0 }))
   if (keepMarket(body)) return res.status(200).json(body)
   // Scan failed or came back empty: serve whatever we last had rather than nothing.
   return res.status(200).json((await stale<MarketResponse>(SCAN_PLAN.market.key)) ?? body)
 }
-
-export default withCpu('dex-market', handler)

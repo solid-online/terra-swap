@@ -23,7 +23,7 @@ import {
   queryClaimable, queryPosition,
   type Market, type Phase, type Position, type Claimable, type Side,
 } from 'lib/predict'
-import type { PredictResponse } from 'pages/api/predict'
+import type { PredictResponse } from 'lib/api/predict'
 import { useBet, useClaim, useCreateMarket, useObserve, useResolve, useVoidMarket } from 'components/transactions/usePredict'
 import { humanizeTxError } from 'lib/errors'
 import { TERRA_FONT } from 'lib/font'
@@ -397,6 +397,7 @@ export default function PredictPage() {
 }
 
 const serverSideProps: GetServerSideProps = async (ctx) => {
+  ctx.res.setHeader('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400')
   const base = `https://${ctx.req.headers.host ?? 'localhost:3000'}`
   return ({
   props: {

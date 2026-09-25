@@ -9,18 +9,19 @@
  * return the series oldest-first. The frontend flips it for the direction the
  * user is looking at and appends the live reserve spot as the last point.
  *
- * Cached per pair for a minute — the scan is the cost, the merge is cheap.
+ * Cached per pair for five minutes (one until 2026-09-25, before the move to
+ * Vercel's Hobby plan) — the scan is the cost, the merge is cheap. The
+ * frontend adds the live spot as the last point, so the chart ends on now.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { kv as vercelKv } from '@vercel/kv'
 import { isDexLive, queryPairs, queryPairsOf, knownPairs, assetId, tokenFor, AWAY_VENUE, VENUE_FACTORY, type AssetInfo } from 'lib/dex'
 import { lcdFetch } from 'lib/lcd'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 const UA = 'Mozilla/5.0 atrium-dex-prices'
-const CACHE_MS = 60_000
+const CACHE_MS = 300_000
 /** Chart shows the most recent trades only, so a skewed opening print on a
  *  thin pool ages out instead of pinning the curve. */
 const MAX_TICKS = 20
@@ -94,8 +95,8 @@ async function scanPrices(pair: string, base: AssetInfo, quote: AssetInfo): Prom
   return { points: out.slice(0, MAX_TICKS).reverse(), volumeQuote: vol, tape: tape.slice(0, 8) }
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse<PricesResponse | { error: string }>) {
-  res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120')
+export default async function handler(req: NextApiRequest, res: NextApiResponse<PricesResponse | { error: string }>) {
+  res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=600')
   const pair = String(req.query.pair || '')
   if (!isDexLive() || !pair) return res.status(200).json({ pair, points: [], baseId: '', quoteId: '', trades: 0, volumeQuote: 0, tape: [] })
 
@@ -114,9 +115,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<PricesResponse 
   const { points, volumeQuote, tape } = await scanPrices(pair, base, quote)
   const body: PricesResponse = { pair, points, baseId: assetId(base), quoteId: assetId(quote), trades: points.length, volumeQuote, tape }
   const snap = { at: Date.now(), body }
-  if (HAS_KV) await vercelKv.set(`atrium:dex:px:${pair}`, snap, { ex: 180 }); else memCache.set(pair, snap)
+  if (HAS_KV) await vercelKv.set(`atrium:dex:px:${pair}`, snap, { ex: 900 }); else memCache.set(pair, snap)
 
   return res.status(200).json(body)
 }
-
-export default withCpu('dex-prices', handler)

@@ -11,7 +11,7 @@ import Head from 'next/head'
 import { useEffect, useState } from 'react'
 import { KNOWN_TOKENS } from 'lib/dex'
 import { TokenIcon } from 'components/TokenIcon'
-import type { QuoteResponse } from 'pages/api/quote'
+import type { QuoteResponse } from 'lib/api/quote'
 import { MONTSERRAT } from 'lib/font'
 
 const FONT = `${MONTSERRAT}, 'Inter', system-ui, sans-serif`

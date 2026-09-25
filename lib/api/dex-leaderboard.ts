@@ -3,12 +3,13 @@
  *
  * Scans the factory and every pool for fresh tx events, merges them into the
  * durable ledger (idempotent, so hammering this is harmless), then ranks.
- * The scan is the expensive part, so it is rate-limited to once a minute
- * across all visitors; in between, the board is served from the last result.
+ * The scan is the expensive part, so it is rate-limited to once every five
+ * minutes across all visitors (once a minute until 2026-09-25, when Openfields
+ * moved to Vercel's Hobby plan and its CPU allowance); in between, the board
+ * is served from the last result.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { kv as vercelKv } from '@vercel/kv'
 import { isDexLive, queryPairs, DEX_FACTORY, IS_ASTRO } from 'lib/dex'
 import { readLiquidity, liquidityByAddress } from 'lib/liquidity'
@@ -19,7 +20,7 @@ import {
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 const CACHE_KEY = `atrium:dex:board:v2:${DEX_FACTORY}`
-const SCAN_EVERY_MS = 60_000
+const SCAN_EVERY_MS = 300_000
 /** Safety cap so a factory with many pools cannot fan out unboundedly. */
 const MAX_POOLS_SCANNED = 40
 
@@ -46,8 +47,8 @@ export interface BoardResponse {
 type Snap = { at: number; rows: LeaderRow[]; total: number; recent: DexEvent[]; poolActivity: Record<string, PoolActivity>; firstHands: Record<string, { address: string; height: number; txhash: string }>; lotd: { address: string; moves: number } | null; flows: Record<string, LpFlow> }
 let memCache: Snap | null = null
 
-async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>) {
-  res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120')
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>) {
+  res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=600')
   const rules = { points: POINTS, firstHand: FIRST_HAND_POINTS, crystalMultiplier: CRYSTAL_MULTIPLIER, badges: BADGES, cutoffHeight: EARLY_CUTOFF_HEIGHT, liquidityCoeff: LIQUIDITY_POINTS_COEFF }
   // Astroport mode has no board: their history is not ours to score, and the scan would fan out over ~850 pools.
   if (!isDexLive() || IS_ASTRO) return res.status(200).json({ live: false, rows: [], totalEvents: 0, scannedAt: 0, rules, recent: [], poolActivity: {}, firstHands: {}, lotd: null, flows: {} })
@@ -104,9 +105,7 @@ async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>
   const lotd = lotdEntry ? { address: lotdEntry[0], moves: lotdEntry[1] } : null
   const flows = computeFlows(ledger)
   const snap: Snap = { at: Date.now(), rows, total, recent, poolActivity, firstHands, lotd, flows }
-  if (HAS_KV) await vercelKv.set(CACHE_KEY, snap, { ex: 300 }); else memCache = snap
+  if (HAS_KV) await vercelKv.set(CACHE_KEY, snap, { ex: 900 }); else memCache = snap
 
   return res.status(200).json({ live: true, rows, totalEvents: total, scannedAt: snap.at, rules, recent, poolActivity, firstHands, lotd, flows })
 }
-
-export default withCpu('dex-leaderboard', handler)

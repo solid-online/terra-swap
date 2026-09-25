@@ -8,7 +8,7 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { SPACE, TEXT } from 'components/tokens'
-import type { LstResponse } from 'pages/api/lst'
+import type { LstResponse } from 'lib/api/lst'
 import type { LstSide } from 'lib/lstBoard'
 import { TERRA_FONT } from 'lib/font'
 import { poll } from 'lib/pageActive'

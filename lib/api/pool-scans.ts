@@ -23,9 +23,9 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { kv as vercelKv } from '@vercel/kv'
 import { verifyGithubToken, type GithubClaims } from 'lib/githubOidc'
+import { BadBody, readJsonBody } from 'lib/jsonBody'
 import { SCANS } from 'lib/poolScans'
 import { claimSlot, recordPrices, type RecordResult } from 'lib/priceHistory'
 import { POOL_SCANS_AUDIENCE, SCAN_NAMES, SCAN_PLAN, type ScanName } from 'lib/scanPlan'
@@ -33,8 +33,9 @@ import { stale, store } from 'lib/sharedCache'
 import type { SitePools } from 'lib/sitePools'
 import { advanceCursors } from 'lib/volumeScan'
 
-// The scans together run to a few hundred kB; Vercel takes up to 4.5 MB.
-export const config = { api: { bodyParser: { sizeLimit: '4mb' } }, maxDuration: 30 }
+// The scans together run to a few hundred kB, sent gzipped (a sixth of that); Vercel takes up to 4.5 MB.
+// The body is read here, after the token, so it can be gzipped: Hobby counts what reaches a function.
+export const config = { api: { bodyParser: false }, maxDuration: 30 }
 
 const WORKFLOW_FILE = '.github/workflows/pool-scans.yml'
 /** A hash: `at` and `run` of the last handover, and each scan's build time. */
@@ -98,7 +99,7 @@ const numbers = (m: unknown): Record<string, number> => {
   return out
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse<PoolScansStatus | HandoverAnswer | { error: string }>) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse<PoolScansStatus | HandoverAnswer | { error: string }>) {
   res.setHeader('Cache-Control', 'no-store')
   if (req.method === 'GET') {
     const env = Object.fromEntries(Object.entries(PUBLIC_ENV).filter((e): e is [string, string] => !!e[1]))
@@ -118,7 +119,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse<PoolScansStatus
   if (why) return res.status(403).json({ error: why })
   if (!HAS_KV) return res.status(503).json({ error: 'this host has no store' })
 
-  const body = (req.body ?? {}) as Handover
+  let body: Handover
+  try {
+    body = ((await readJsonBody(req)) ?? {}) as Handover
+  } catch (e) {
+    return res.status(400).json({ error: e instanceof BadBody ? `the handover is ${e.message}` : 'the handover could not be read' })
+  }
   const now = Date.now()
   const stored: ScanName[] = []
   const refused: Partial<Record<string, string>> = {}
@@ -152,5 +158,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse<PoolScansStatus
   }
   return res.status(200).json(answer)
 }
-
-export default withCpu('pool-scans', handler)

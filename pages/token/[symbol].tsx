@@ -23,9 +23,9 @@ import { TOKEN_META } from 'lib/tokenMeta'
 import { addAlert, askNotifications, fmtUsdPrice, removeAlert, toggleFavorite, useAlertWatcher, usePrefs } from 'lib/alerts'
 import { disablePush, enablePush, usePush } from 'lib/push'
 import type { TokenCheck } from 'lib/tokenCheck'
-import type { DexResponse } from 'pages/api/dex'
-import type { VenueResponse } from 'pages/api/dex-venue'
-import type { DepthResponse } from 'pages/api/depth'
+import type { DexResponse } from 'lib/api/dex'
+import type { VenueResponse } from 'lib/api/dex-venue'
+import type { DepthResponse } from 'lib/api/depth'
 import { pageActive } from 'lib/pageActive'
 
 /** Bought with and sold for USDC from Noble; USDC itself, and USDC.inj, which never meets it, trade against LUNA. */
@@ -56,6 +56,7 @@ export const getServerSideProps: GetServerSideProps = async ctx => {
   const t = KNOWN_TOKENS.find(x => x.key.toLowerCase() === raw.toLowerCase())
   if (!t) return { notFound: true }
   if (t.key !== raw) return { redirect: { destination: `/token/${encodeURIComponent(t.key)}`, permanent: false } }
+  ctx.res.setHeader('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400')
   const base = `https://${ctx.req.headers.host ?? 'swap.openfields.app'}`
   const meta = TOKEN_META[t.key]
   return {

@@ -23,11 +23,11 @@ import {
   type AssetInfo, type PoolView,
 } from 'lib/dex'
 import { fmtAmount, fmtUsd } from 'lib/arb'
-import type { DexResponse } from 'pages/api/dex'
-import type { VenueResponse } from 'pages/api/dex-venue'
-import type { PoolFeesResponse } from 'pages/api/pool-fees'
-import type { PricesResponse } from 'pages/api/dex-prices'
-import type { DepthResponse } from 'pages/api/depth'
+import type { DexResponse } from 'lib/api/dex'
+import type { VenueResponse } from 'lib/api/dex-venue'
+import type { PoolFeesResponse } from 'lib/api/pool-fees'
+import type { PricesResponse } from 'lib/api/dex-prices'
+import type { DepthResponse } from 'lib/api/depth'
 
 const ADDR = /^terra1[02-9ac-hj-np-z]{38,58}$/
 const enc = encodeURIComponent
@@ -52,6 +52,8 @@ const serverSideProps: GetServerSideProps = async ctx => {
       if (listed && !(dollars.includes(NOBLE_USDC) && dollars.includes(USDC_INJ_DENOM))) share = `?from=${enc(t0.key)}&to=${enc(t1.key)}`
     }
   } catch { /* the page reads the pool again in the browser */ }
+  // An hour at the CDN once the pool's name is known; a minute if the chain did not answer in time.
+  ctx.res.setHeader('Cache-Control', label ? 'public, s-maxage=3600, stale-while-revalidate=86400' : 'public, s-maxage=60, stale-while-revalidate=300')
   return {
     props: {
       addr,
