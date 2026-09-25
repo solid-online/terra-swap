@@ -9,7 +9,6 @@
  */
 
 import Head from 'next/head'
-import { withCpuSsr } from 'lib/cpuLog'
 import Link from 'next/link'
 import type { GetServerSideProps } from 'next'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -396,7 +395,7 @@ export default function PredictPage() {
   return <PredictPageInner />
 }
 
-const serverSideProps: GetServerSideProps = async (ctx) => {
+export const getServerSideProps: GetServerSideProps = async (ctx) => {
   ctx.res.setHeader('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400')
   const base = `https://${ctx.req.headers.host ?? 'localhost:3000'}`
   return ({
@@ -412,5 +411,3 @@ const serverSideProps: GetServerSideProps = async (ctx) => {
   },
 })
 }
-
-export const getServerSideProps = withCpuSsr('page:/predict', serverSideProps)

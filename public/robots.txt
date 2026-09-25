@@ -1,5 +1,8 @@
+# Every transaction has a page, so /tx/ has no end for a crawler: each one is read from the chain and rendered
+# once, for nobody. Pools, tokens and the guides stay open.
 User-agent: *
 Allow: /
 Disallow: /api/
+Disallow: /tx/
 
 Sitemap: https://swap.openfields.app/sitemap.xml

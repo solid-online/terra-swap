@@ -15,7 +15,6 @@
  */
 
 import type { NextApiHandler, NextApiRequest, NextApiResponse } from 'next'
-import { withCpu } from 'lib/cpuLog'
 import { BadBody, readJsonBody } from 'lib/jsonBody'
 import depth from 'lib/api/depth'
 import dexArcade from 'lib/api/dex-arcade'
@@ -77,8 +76,6 @@ const ROUTES: Record<string, { handler: NextApiHandler; json?: boolean }> = {
   volume: { handler: volume },
 }
 
-const timed: Record<string, NextApiHandler> = Object.fromEntries(Object.entries(ROUTES).map(([name, r]) => [name, withCpu(name, r.handler)]))
-
 /** What Next's body parser allowed by default. */
 const JSON_LIMIT = 1_000_000
 
@@ -95,5 +92,5 @@ export default async function api(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: e instanceof BadBody ? `the body is ${e.message}` : 'the body could not be read' })
     }
   }
-  return timed[name](req, res)
+  return route.handler(req, res)
 }

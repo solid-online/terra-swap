@@ -8,7 +8,6 @@
  */
 
 import Head from 'next/head'
-import { withCpuSsr } from 'lib/cpuLog'
 import Link from 'next/link'
 import type { GetServerSideProps } from 'next'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -6240,7 +6239,7 @@ export default function SwapPage() {
  * server-rendered Head so crawlers get a Terra Swap card instead of Atrium's
  * default Crystal. With ?who=terra1… the image and copy become that person's.
  */
-const serverSideProps: GetServerSideProps = async (ctx) => {
+export const getServerSideProps: GetServerSideProps = async (ctx) => {
   // Nothing here depends on who asks (the region check is the middleware's and /api/geo's), so the CDN keeps it:
   // rendering this page is most of what a cold function costs.
   ctx.res.setHeader('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400')
@@ -6274,5 +6273,3 @@ const serverSideProps: GetServerSideProps = async (ctx) => {
     },
   }
 }
-
-export const getServerSideProps = withCpuSsr('page:/', serverSideProps)

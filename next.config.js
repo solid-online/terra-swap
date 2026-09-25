@@ -42,6 +42,13 @@ const nextConfig = {
     }
     return config
   },
+  async rewrites() {
+    // As on Terra Scan (2026-09-25): AI crawlers walk every transaction page, each read from the chain and rendered on
+    // a function. robots.txt closes /tx/; until they read it again, the ones below get the static 404 there, before any
+    // function runs. People and search engines are not matched.
+    const crawler = { type: 'header', key: 'user-agent', value: '.*(GPTBot|ClaudeBot|Claude-SearchBot|anthropic-ai|CCBot|Bytespider|Amazonbot|PerplexityBot|meta-externalagent|OAI-SearchBot|Applebot-Extended|Diffbot|ImagesiftBot|Timpibot).*' }
+    return { beforeFiles: [{ source: '/tx/:path*', has: [crawler], destination: '/crawler-closed' }] }
+  },
   async redirects() {
     if (!canonical) return []
     return aliases.map(host => ({

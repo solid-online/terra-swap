@@ -17,7 +17,9 @@ import { DEX_FACTORY, isDexLive, queryPairs, smart, IS_ASTRO } from 'lib/dex'
 
 const HAS_KV = !!process.env.KV_REST_API_URL && !!process.env.KV_REST_API_TOKEN
 const KEY = `atrium:dex:holders:v1:${DEX_FACTORY}`
-const FRESH_MS = 120_000
+// As long as the CDN keeps the answer (s-maxage 600): who holds a pool's LP tokens changes rarely, and each
+// rebuild reads every holder's balance (about half a second of CPU).
+const FRESH_MS = 600_000
 /** Holders read per pool. Beyond this the tail is dust and does not change the picture. */
 const MAX_HOLDERS = 40
 

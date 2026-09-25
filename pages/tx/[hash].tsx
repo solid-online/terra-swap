@@ -8,7 +8,6 @@
  */
 
 import Link from 'next/link'
-import { withCpuSsr } from 'lib/cpuLog'
 import type { GetServerSideProps } from 'next'
 import { useState } from 'react'
 import { SPACE, TEXT } from 'components/tokens'
@@ -45,7 +44,7 @@ function vsQuote(r: Receipt): number | null {
   return got ? (amountOf(got).n / q.amount - 1) * 100 : null
 }
 
-const serverSideProps: GetServerSideProps = async ctx => {
+export const getServerSideProps: GetServerSideProps = async ctx => {
   const raw = String(ctx.params?.hash ?? '')
   if (!TX_HASH.test(raw)) return { notFound: true }
   const hash = raw.toUpperCase()
@@ -163,5 +162,3 @@ export default function TxPage({ hash, receipt }: { hash: string; receipt: Recei
     </Page>
   )
 }
-
-export const getServerSideProps = withCpuSsr('page:/tx', serverSideProps)
