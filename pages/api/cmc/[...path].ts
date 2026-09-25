@@ -14,12 +14,13 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { TOKEN_META } from 'lib/tokenMeta'
 import { curveBook, dec, findMarket, readMarkets } from 'lib/markets'
 
 export const config = { maxDuration: 60 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   const parts = Array.isArray(req.query.path) ? req.query.path : [String(req.query.path ?? '')]
   const [endpoint, ...rest] = parts
@@ -65,3 +66,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   return res.status(404).json({ error: 'endpoints: summary, assets, ticker, orderbook/<market_pair>, trades/<market_pair>' })
 }
+
+export default withCpu('cmc/[...path]', handler)

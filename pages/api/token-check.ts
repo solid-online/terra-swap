@@ -5,6 +5,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { kv as vercelKv } from '@vercel/kv'
 import { DEX_FACTORY } from 'lib/dex'
 import { checkToken, findToken, type TokenCheck } from 'lib/tokenCheck'
@@ -18,7 +19,7 @@ const key = (k: string) => `atrium:dex:tokencheck:v1:${DEX_FACTORY}:${k}`
 const mem = new Map<string, TokenCheck>()
 const inflight = new Map<string, Promise<TokenCheck>>()
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<TokenCheck | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<TokenCheck | { error: string }>) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   const token = findToken(req.query.token)
   if (!token) return res.status(400).json({ error: 'token must be a listed ticker, for example LUNA' })
@@ -44,3 +45,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(503).json({ error: 'the chain did not answer, try again in a moment' })
   }
 }
+
+export default withCpu('token-check', handler)

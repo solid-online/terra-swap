@@ -10,13 +10,14 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { claimSlot, recordPrices, type RecordResult } from 'lib/priceHistory'
 import { sitePools } from 'lib/sitePools'
 import { scanVolumes } from 'lib/volumeScan'
 
 export const config = { maxDuration: 60 }
 
-export default async function handler(_req: NextApiRequest, res: NextApiResponse<RecordResult | { recorded: false; reason: string }>) {
+async function handler(_req: NextApiRequest, res: NextApiResponse<RecordResult | { recorded: false; reason: string }>) {
   res.setHeader('Cache-Control', 'no-store')
   try {
     const busy = await claimSlot()
@@ -30,3 +31,5 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
     return res.status(503).json({ recorded: false, reason: 'the chain or the store did not answer' })
   }
 }
+
+export default withCpu('price-record', handler)

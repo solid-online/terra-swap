@@ -8,6 +8,7 @@
  */
 
 import Link from 'next/link'
+import { withCpuSsr } from 'lib/cpuLog'
 import type { GetServerSideProps } from 'next'
 import { useEffect, useMemo, useState } from 'react'
 import { SPACE, TEXT } from 'components/tokens'
@@ -32,7 +33,7 @@ const ADDR = /^terra1[02-9ac-hj-np-z]{38,58}$/
 const enc = encodeURIComponent
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace'
 
-export const getServerSideProps: GetServerSideProps = async ctx => {
+const serverSideProps: GetServerSideProps = async ctx => {
   const addr = String(ctx.params?.addr ?? '')
   if (!ADDR.test(addr)) return { notFound: true }
   const base = `https://${ctx.req.headers.host ?? 'swap.openfields.app'}`
@@ -254,3 +255,5 @@ export default function PoolPage({ addr, label }: { addr: string; label: string 
     </Page>
   )
 }
+
+export const getServerSideProps = withCpuSsr('page:/pool', serverSideProps)

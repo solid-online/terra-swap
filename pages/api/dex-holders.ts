@@ -12,6 +12,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { kv as vercelKv } from '@vercel/kv'
 import { DEX_FACTORY, isDexLive, queryPairs, smart, IS_ASTRO } from 'lib/dex'
 
@@ -52,7 +53,7 @@ async function readPool(lpToken: string): Promise<PoolHolders | null> {
   return { total: info.total_supply, holders }
 }
 
-export default async function handler(_req: NextApiRequest, res: NextApiResponse<HoldersResponse>) {
+async function handler(_req: NextApiRequest, res: NextApiResponse<HoldersResponse>) {
   res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=3600')
   const now = Date.now()
   // Astroport mode: LP there sits mostly in their incentives contract, so a holder list misleads, and reading ~850 pools' holders is not a request.
@@ -75,3 +76,5 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
   }
   return res.status(200).json(cached ?? body)
 }
+
+export default withCpu('dex-holders', handler)

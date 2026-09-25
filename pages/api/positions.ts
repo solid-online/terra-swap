@@ -9,6 +9,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { fromBech32 } from '@cosmjs/encoding'
 import { VENUE_INCENTIVES } from 'lib/dex'
 import { readAstroLegacy, readFlows, readPositions, type AstroLegacy, type Position } from 'lib/positions'
@@ -48,7 +49,7 @@ function terraAddress(v: unknown): string | null {
   } catch { return null }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<PositionsResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<PositionsResponse | { error: string }>) {
   const address = terraAddress(req.query.address)
   if (!address) return res.status(400).json({ error: 'address required' })
   res.setHeader('Cache-Control', 'no-store')
@@ -86,3 +87,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return hit ? res.status(200).json(hit) : res.status(502).json({ error: 'could not read positions' })
   }
 }
+
+export default withCpu('positions', handler)

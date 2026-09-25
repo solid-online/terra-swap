@@ -10,6 +10,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { fromBech32 } from '@cosmjs/encoding'
 import { KNOWN_TOKENS } from 'lib/dex'
 import { isRange, poolSeries, tokenSeries, type Series } from 'lib/priceHistory'
@@ -20,7 +21,7 @@ const contract = (v: unknown) => {
   try { const { prefix, data } = fromBech32(v); return prefix === 'terra' && data.length === 32 ? v : null } catch { return null }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<Series | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<Series | { error: string }>) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   const range = isRange(req.query.range) ? req.query.range : '7d'
   try {
@@ -41,3 +42,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(503).json({ error: 'the store did not answer, try again in a moment' })
   }
 }
+
+export default withCpu('price-history', handler)

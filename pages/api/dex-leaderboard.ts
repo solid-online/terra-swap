@@ -8,6 +8,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { kv as vercelKv } from '@vercel/kv'
 import { isDexLive, queryPairs, DEX_FACTORY, IS_ASTRO } from 'lib/dex'
 import { readLiquidity, liquidityByAddress } from 'lib/liquidity'
@@ -45,7 +46,7 @@ export interface BoardResponse {
 type Snap = { at: number; rows: LeaderRow[]; total: number; recent: DexEvent[]; poolActivity: Record<string, PoolActivity>; firstHands: Record<string, { address: string; height: number; txhash: string }>; lotd: { address: string; moves: number } | null; flows: Record<string, LpFlow> }
 let memCache: Snap | null = null
 
-export default async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>) {
+async function handler(_req: NextApiRequest, res: NextApiResponse<BoardResponse>) {
   res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120')
   const rules = { points: POINTS, firstHand: FIRST_HAND_POINTS, crystalMultiplier: CRYSTAL_MULTIPLIER, badges: BADGES, cutoffHeight: EARLY_CUTOFF_HEIGHT, liquidityCoeff: LIQUIDITY_POINTS_COEFF }
   // Astroport mode has no board: their history is not ours to score, and the scan would fan out over ~850 pools.
@@ -107,3 +108,5 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
 
   return res.status(200).json({ live: true, rows, totalEvents: total, scannedAt: snap.at, rules, recent, poolActivity, firstHands, lotd, flows })
 }
+
+export default withCpu('dex-leaderboard', handler)

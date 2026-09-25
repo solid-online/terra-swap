@@ -12,11 +12,12 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { curveBook, dec, findMarket, readMarkets } from 'lib/markets'
 
 export const config = { maxDuration: 60 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   const endpoint = String(req.query.endpoint ?? '')
   let markets
@@ -54,3 +55,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   return res.status(404).json({ error: 'endpoints: pairs, tickers, orderbook, historical_trades' })
 }
+
+export default withCpu('coingecko/[endpoint]', handler)

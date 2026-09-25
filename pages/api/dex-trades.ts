@@ -9,6 +9,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { isDexLive, queryPairs, listedPairs, assetId, tokenFor, IS_ASTRO, DEX_FACTORY } from 'lib/dex'
 import { getLedger, mergeLedger, scanContract } from 'lib/dex-ledger'
 import { toTrade, walletStats, type PairMeta, type Trade, type WalletStats } from 'lib/trades'
@@ -38,7 +39,7 @@ export interface TradesResponse {
 const empty = (pair: string | null, address: string | null): TradesResponse =>
   ({ pair, address, tape: [], total: 0, buys: 0, sells: 0, unpriced: 0, wallets: [], byPool: [] })
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<TradesResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<TradesResponse | { error: string }>) {
   const pair = typeof req.query.pair === 'string' && ADDR.test(req.query.pair) ? req.query.pair : null
   const address = typeof req.query.address === 'string' && ADDR.test(req.query.address) ? req.query.address : null
   if (!pair && !address) return res.status(400).json({ error: 'pair or address required' })
@@ -113,3 +114,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     unpriced, wallets, byPool,
   })
 }
+
+export default withCpu('dex-trades', handler)

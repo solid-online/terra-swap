@@ -5,6 +5,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { statsScan, wholeStats } from 'lib/poolScans'
 import { SCAN_PLAN } from 'lib/scanPlan'
 import { stale } from 'lib/sharedCache'
@@ -14,7 +15,7 @@ export const config = { maxDuration: 60 }
 
 export type { StatsResponse }
 
-export default async function handler(_req: NextApiRequest, res: NextApiResponse<StatsResponse | { error: string }>) {
+async function handler(_req: NextApiRequest, res: NextApiResponse<StatsResponse | { error: string }>) {
   const { key } = SCAN_PLAN.stats
   try {
     const body = await statsScan()
@@ -31,3 +32,5 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
     return last ? res.status(200).json(last) : res.status(502).json({ error: 'could not read the chain' })
   }
 }
+
+export default withCpu('stats', handler)

@@ -8,6 +8,7 @@
  */
 
 import Link from 'next/link'
+import { withCpuSsr } from 'lib/cpuLog'
 import type { GetServerSideProps } from 'next'
 import { SPACE, TEXT } from 'components/tokens'
 import { C, Page, Panel, row } from 'components/PageShell'
@@ -28,7 +29,7 @@ function Param({ k, v }: { k: string; v: React.ReactNode }) {
   return <div style={row}><span style={{ fontFamily: mono }}>{k}</span><span style={{ color: C.textSecondary, textAlign: 'right', maxWidth: '70%' }}>{v}</span></div>
 }
 
-export const getServerSideProps: GetServerSideProps = async ctx => {
+const serverSideProps: GetServerSideProps = async ctx => {
   const base = `https://${ctx.req.headers.host ?? 'swap.openfields.app'}`
   return {
     props: {
@@ -154,3 +155,5 @@ ${base}/api/volume?date=2026-09-20`}</Code>
     </Page>
   )
 }
+
+export const getServerSideProps = withCpuSsr('page:/developers', serverSideProps)

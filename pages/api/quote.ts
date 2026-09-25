@@ -16,6 +16,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { KNOWN_TOKENS, assetId, fromMicro, toMicro, type KnownToken } from 'lib/dex'
 import { planTrade, quoteBest, quoteExactOut, tradeText, type TradePlan } from 'lib/route'
 import { routingPools } from 'lib/routingPools'
@@ -59,7 +60,7 @@ const find = (v: unknown): KnownToken | undefined =>
 const plain = (micro: string, decimals: number) => fromMicro(micro, decimals, Math.min(decimals, 8)).replace(/,/g, '')
 const enc = encodeURIComponent
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<QuoteResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<QuoteResponse | { error: string }>) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
@@ -130,3 +131,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(503).json({ error: 'the chain did not answer, try again in a moment' })
   }
 }
+
+export default withCpu('quote', handler)

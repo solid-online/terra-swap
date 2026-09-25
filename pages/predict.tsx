@@ -9,6 +9,7 @@
  */
 
 import Head from 'next/head'
+import { withCpuSsr } from 'lib/cpuLog'
 import Link from 'next/link'
 import type { GetServerSideProps } from 'next'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -395,7 +396,7 @@ export default function PredictPage() {
   return <PredictPageInner />
 }
 
-export const getServerSideProps: GetServerSideProps = async (ctx) => {
+const serverSideProps: GetServerSideProps = async (ctx) => {
   const base = `https://${ctx.req.headers.host ?? 'localhost:3000'}`
   return ({
   props: {
@@ -410,3 +411,5 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
   },
 })
 }
+
+export const getServerSideProps = withCpuSsr('page:/predict', serverSideProps)

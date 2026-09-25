@@ -23,6 +23,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCpu } from 'lib/cpuLog'
 import { kv as vercelKv } from '@vercel/kv'
 import { verifyGithubToken, type GithubClaims } from 'lib/githubOidc'
 import { SCANS } from 'lib/poolScans'
@@ -97,7 +98,7 @@ const numbers = (m: unknown): Record<string, number> => {
   return out
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<PoolScansStatus | HandoverAnswer | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<PoolScansStatus | HandoverAnswer | { error: string }>) {
   res.setHeader('Cache-Control', 'no-store')
   if (req.method === 'GET') {
     const env = Object.fromEntries(Object.entries(PUBLIC_ENV).filter((e): e is [string, string] => !!e[1]))
@@ -151,3 +152,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   }
   return res.status(200).json(answer)
 }
+
+export default withCpu('pool-scans', handler)

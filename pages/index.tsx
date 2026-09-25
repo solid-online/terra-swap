@@ -8,6 +8,7 @@
  */
 
 import Head from 'next/head'
+import { withCpuSsr } from 'lib/cpuLog'
 import Link from 'next/link'
 import type { GetServerSideProps } from 'next'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -6239,7 +6240,7 @@ export default function SwapPage() {
  * server-rendered Head so crawlers get a Terra Swap card instead of Atrium's
  * default Crystal. With ?who=terra1… the image and copy become that person's.
  */
-export const getServerSideProps: GetServerSideProps = async (ctx) => {
+const serverSideProps: GetServerSideProps = async (ctx) => {
   const base = `https://${ctx.req.headers.host ?? 'localhost:3000'}`
   const q = ctx.query.who
   const who = typeof q === 'string' && /^terra1[0-9a-z]{38,}$/.test(q) ? q : ''
@@ -6270,3 +6271,5 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
     },
   }
 }
+
+export const getServerSideProps = withCpuSsr('page:/', serverSideProps)
