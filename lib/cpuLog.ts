@@ -13,13 +13,15 @@
 
 import type { GetServerSideProps, NextApiHandler } from 'next'
 
-let first = true
+// Each route is its own bundle with its own copy of this module, so what belongs to the process lives on globalThis.
+const g = globalThis as unknown as { __cpuInst?: string; __cpuFirst?: boolean }
+g.__cpuInst ??= Math.random().toString(36).slice(2, 8)
 
 function log(route: string, c0: NodeJS.CpuUsage, t0: number) {
   const c = process.cpuUsage(c0)
-  const init = first ? { init: Math.round((c0.user + c0.system) / 1000) } : {}
-  first = false
-  console.log(`CPU ${JSON.stringify({ r: route, ms: Math.round((c.user + c.system) / 1000), wall: Date.now() - t0, ...init })}`)
+  const init = g.__cpuFirst ? {} : { init: Math.round((c0.user + c0.system) / 1000) }
+  g.__cpuFirst = true
+  console.log(`CPU ${JSON.stringify({ r: route, ms: Math.round((c.user + c.system) / 1000), wall: Date.now() - t0, i: g.__cpuInst, up: Math.round(process.uptime()), ...init })}`)
 }
 
 export function withCpu(route: string, handler: NextApiHandler): NextApiHandler {
